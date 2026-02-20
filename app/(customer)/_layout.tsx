@@ -1,0 +1,30 @@
+import { Stack } from "expo-router";
+
+export default function CustomerLayout() {
+  return (
+   <Stack screenOptions={{ headerShown: false }}>
+
+      <Stack.Screen
+        name="home"
+        options={{
+          title: "Home",
+        }}
+      />
+
+      <Stack.Screen
+        name="services"
+        options={{
+          title: "Services Screen",
+        }}
+      />
+
+
+        <Stack.Screen
+        name="service_details"
+        options={{
+          title: "Service Details Screen",
+        }}
+      />
+    </Stack>
+  );
+}
