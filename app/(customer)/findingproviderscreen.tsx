@@ -1,0 +1,245 @@
+
+import React, { useEffect, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  Animated,
+  ScrollView,
+  Dimensions,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+
+const { height } = Dimensions.get('window');
+
+const FindingProviderScreen = () => {
+  const [spinValue] = useState(new Animated.Value(0));
+
+  useEffect(() => {
+    // Spinning animation for the searching indicator
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
+
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  return (
+    <View style={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Icon at the top */}
+        <View style={styles.iconContainer}>
+          <Image
+            source={require('../../assets/customer/finding_provider.png')}
+            style={styles.icon}
+            resizeMode="contain"
+          />
+        </View>
+
+        {/* Title */}
+        <Text style={styles.title}>Finding a Provider</Text>
+
+        {/* Subtitle */}
+        <Text style={styles.subtitle}>
+          WE'RE MATCHING YOU WITH THE BEST{'\n'}
+          AVAILABLE PROVIDER IN YOUR AREA...
+        </Text>
+
+        {/* Progress Steps */}
+        <View style={styles.stepsContainer}>
+          {/* Step 1: Request received */}
+          <View style={styles.stepCard}>
+            <View style={styles.stepIconContainerCompleted}>
+              <Ionicons name="checkmark-circle" size={24} color="#68bdee" />
+            </View>
+            <Text style={styles.stepTextCompleted}>Request received</Text>
+          </View>
+
+          {/* Step 2: Searching for providers (Active) */}
+          <View style={[styles.stepCard, styles.stepCardActive]}>
+            <Animated.View
+              style={[
+                styles.stepIconContainerActive,
+                { transform: [{ rotate: spin }] },
+              ]}
+            >
+              <Ionicons name="sync-outline" size={24} color="#3c3c3c" />
+            </Animated.View>
+            <Text style={styles.stepTextActive}>Searching for providers...</Text>
+          </View>
+
+          {/* Step 3: Assigning provider */}
+          <View style={styles.stepCard}>
+            <View style={styles.stepIconContainerInactive}>
+              <View style={styles.emptyCircle} />
+            </View>
+            <Text style={styles.stepTextInactive}>Assigning provider</Text>
+          </View>
+        </View>
+
+        {/* Did You Know Box */}
+        <View style={styles.infoBox}>
+          <Text style={styles.infoTitle}>DID YOU KNOW?</Text>
+          <Text style={styles.infoText}>
+            YHIW connects you with verified and rated service providers. Average
+            response time is under 2 minutes.
+          </Text>
+        </View>
+
+        {/* Pagination Dots */}
+        <View style={styles.paginationContainer}>
+          <View style={styles.dotInactive} />
+          <View style={styles.dotInactive} />
+          <View style={styles.dotActive} />
+          <View style={styles.dotInactive} />
+        </View>
+      </ScrollView>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f8f8f8',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    paddingTop: height * 0.08,
+    paddingHorizontal: 20,
+    paddingBottom: 30,
+  },
+  iconContainer: {
+    width: Math.min(160, height * 0.2),
+    height: Math.min(160, height * 0.2),
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: height * 0.03,
+    backgroundColor: 'transparent',
+  },
+  icon: {
+    width: '100%',
+    height: '100%',
+  },
+  title: {
+    fontSize: Math.min(24, height * 0.032),
+    fontWeight: 'bold',
+    color: '#3c3c3c',
+    marginBottom: height * 0.015,
+    letterSpacing: 0.5,
+  },
+  subtitle: {
+    fontSize: Math.min(12, height * 0.016),
+    color: '#8c8c8c',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: height * 0.04,
+    letterSpacing: 0.3,
+    paddingHorizontal: 10,
+  },
+  stepsContainer: {
+    width: '100%',
+    marginBottom: height * 0.03,
+  },
+  stepCard: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 12,
+    padding: 18,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stepCardActive: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#68bdee',
+  },
+  stepIconContainerCompleted: {
+    marginRight: 15,
+  },
+  stepIconContainerActive: {
+    marginRight: 15,
+  },
+  stepIconContainerInactive: {
+    marginRight: 15,
+  },
+  emptyCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#d0d0d0',
+    backgroundColor: 'transparent',
+  },
+  stepTextCompleted: {
+    fontSize: Math.min(14, height * 0.018),
+    color: '#68bdee',
+    fontWeight: '600',
+    flex: 1,
+  },
+  stepTextActive: {
+    fontSize: Math.min(14, height * 0.018),
+    color: '#3c3c3c',
+    fontWeight: 'bold',
+    flex: 1,
+  },
+  stepTextInactive: {
+    fontSize: Math.min(14, height * 0.018),
+    color: '#b0b0b0',
+    fontWeight: '500',
+    flex: 1,
+  },
+  infoBox: {
+    backgroundColor: '#e3f5ff',
+    borderRadius: 12,
+    borderWidth:1,
+    borderColor: '#c3c5c5',
+    padding: 18,
+    width: '100%',
+    marginBottom: height * 0.03,
+  },
+  infoTitle: {
+    fontSize: Math.min(12, height * 0.016),
+    fontWeight: 'bold',
+    color: '#3c3c3c',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  infoText: {
+    fontSize: Math.min(12, height * 0.016),
+    color: '#5c5c5c',
+    lineHeight: 18,
+  },
+  paginationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+  dotActive: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#68bdee',
+  },
+  dotInactive: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#d0d0d0',
+  },
+});
+
+export default FindingProviderScreen;
