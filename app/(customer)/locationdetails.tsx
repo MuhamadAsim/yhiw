@@ -1,6 +1,4 @@
-
-
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,23 +7,89 @@ import {
   ScrollView,
   Image,
   TextInput,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import MapView, { Marker, Region } from 'react-native-maps';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import MapView, { Marker, Region, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 
-// Type definitions
-interface SavedLocation {
-  id: number;
-  icon?: any;
-  title: string;
-  address: string;
-}
+// Mock location data for Bahrain
+const MOCK_LOCATIONS = [
+  {
+    id: '1',
+    title: 'Manama Souq',
+    address: 'Manama Souq, Manama, Bahrain',
+    latitude: 26.2285,
+    longitude: 50.5860,
+  },
+  {
+    id: '2',
+    title: 'Seef Mall',
+    address: 'Seef Mall, Seef, Bahrain',
+    latitude: 26.2350,
+    longitude: 50.5420,
+  },
+  {
+    id: '3',
+    title: 'Bahrain International Airport',
+    address: 'Bahrain International Airport, Muharraq, Bahrain',
+    latitude: 26.2708,
+    longitude: 50.6336,
+  },
+  {
+    id: '4',
+    title: 'City Centre Bahrain',
+    address: 'City Centre Bahrain, Manama, Bahrain',
+    latitude: 26.2325,
+    longitude: 50.5525,
+  },
+  {
+    id: '5',
+    title: 'Bahrain Financial Harbour',
+    address: 'Bahrain Financial Harbour, Manama, Bahrain',
+    latitude: 26.2408,
+    longitude: 50.5747,
+  },
+  {
+    id: '6',
+    title: 'The Avenues Bahrain',
+    address: 'The Avenues, Bahrain',
+    latitude: 26.2108,
+    longitude: 50.6036,
+  },
+  {
+    id: '7',
+    title: 'Bahrain Fort',
+    address: 'Qal\'at al-Bahrain, Bahrain',
+    latitude: 26.2333,
+    longitude: 50.5206,
+  },
+  {
+    id: '8',
+    title: 'Juffair',
+    address: 'Juffair, Manama, Bahrain',
+    latitude: 26.2186,
+    longitude: 50.6031,
+  },
+];
 
 const LocationDetailsScreen = () => {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const mapRef = useRef<MapView>(null);
+  
   const [pickupLocation, setPickupLocation] = useState<string>('');
   const [dropoffLocation, setDropoffLocation] = useState<string>('');
+  const [pickupCoordinates, setPickupCoordinates] = useState<{latitude: number, longitude: number} | null>(null);
+  const [dropoffCoordinates, setDropoffCoordinates] = useState<{latitude: number, longitude: number} | null>(null);
+  const [pickupSuggestions, setPickupSuggestions] = useState<typeof MOCK_LOCATIONS>([]);
+  const [dropoffSuggestions, setDropoffSuggestions] = useState<typeof MOCK_LOCATIONS>([]);
+  const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
+  const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | null>(null);
   const [region, setRegion] = useState<Region>({
     latitude: 26.2285,
     longitude: 50.5860,
@@ -33,43 +97,246 @@ const LocationDetailsScreen = () => {
     longitudeDelta: 0.05,
   });
 
-  const savedLocations: SavedLocation[] = [
+  // Get service info from params (but not displaying it)
+  const serviceInfo = {
+    name: params.serviceName || 'Quick Tow (Flatbed)',
+    price: params.servicePrice || '75 BHD',
+    category: params.serviceCategory || 'Towing',
+  };
+
+  const savedLocations = [
     {
       id: 1,
-      icon: require('../../assets/customer/home.png'), // You'll need to add this
       title: 'Home',
       address: '123 Main Street, Manama',
+      latitude: 26.2285,
+      longitude: 50.5860,
     },
     {
       id: 2,
-      icon: require('../../assets/customer/work.png'), // You'll need to add this
       title: 'Work',
       address: 'Seef Mall, Bahrain',
+      latitude: 26.2350,
+      longitude: 50.5420,
     },
   ];
 
-  const handleBack = () => {
-    router.back();
+  useEffect(() => {
+    getCurrentLocation();
+  }, []);
+
+  const getCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Please enable location services to use this feature.');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      const newRegion = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+      setRegion(newRegion);
+      mapRef.current?.animateToRegion(newRegion, 1000);
+    } catch (error) {
+      console.error('Error getting location:', error);
+    }
   };
 
-  const handleContinue = () => {
-    console.log('Continue pressed');
-    // Navigate to next step
+  const searchLocation = (query: string, type: 'pickup' | 'dropoff') => {
+    if (query.length < 2) {
+      if (type === 'pickup') {
+        setPickupSuggestions([]);
+        setShowPickupSuggestions(false);
+      } else {
+        setDropoffSuggestions([]);
+        setShowDropoffSuggestions(false);
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    
+    // Filter mock locations based on query
+    const filtered = MOCK_LOCATIONS.filter(loc => 
+      loc.title.toLowerCase().includes(query.toLowerCase()) ||
+      loc.address.toLowerCase().includes(query.toLowerCase())
+    );
+
+    setTimeout(() => {
+      if (type === 'pickup') {
+        setPickupSuggestions(filtered);
+        setShowPickupSuggestions(filtered.length > 0);
+      } else {
+        setDropoffSuggestions(filtered);
+        setShowDropoffSuggestions(filtered.length > 0);
+      }
+      setIsLoading(false);
+    }, 500); // Simulate network delay
+  };
+
+  const handlePickupChange = (text: string) => {
+    setPickupLocation(text);
+    searchLocation(text, 'pickup');
+  };
+
+  const handleDropoffChange = (text: string) => {
+    setDropoffLocation(text);
+    searchLocation(text, 'dropoff');
+  };
+
+  const handleSelectLocation = (location: typeof MOCK_LOCATIONS[0], type: 'pickup' | 'dropoff') => {
+    if (type === 'pickup') {
+      setPickupLocation(location.address);
+      setPickupCoordinates({
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+      setPickupSuggestions([]);
+      setShowPickupSuggestions(false);
+      setFocusedInput(null);
+      
+      const newRegion = {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+      setRegion(newRegion);
+      mapRef.current?.animateToRegion(newRegion, 1000);
+    } else {
+      setDropoffLocation(location.address);
+      setDropoffCoordinates({
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+      setDropoffSuggestions([]);
+      setShowDropoffSuggestions(false);
+      setFocusedInput(null);
+      
+      if (pickupCoordinates) {
+        fitMapToCoordinates(pickupCoordinates, {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        });
+      } else {
+        const newRegion = {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        };
+        setRegion(newRegion);
+        mapRef.current?.animateToRegion(newRegion, 1000);
+      }
+    }
+  };
+
+  const fitMapToCoordinates = (coord1: {latitude: number, longitude: number}, coord2: {latitude: number, longitude: number}) => {
+    const latitudes = [coord1.latitude, coord2.latitude];
+    const longitudes = [coord1.longitude, coord2.longitude];
+    
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLng = Math.min(...longitudes);
+    const maxLng = Math.max(...longitudes);
+    
+    const latDelta = (maxLat - minLat) * 1.5;
+    const lngDelta = (maxLng - minLng) * 1.5;
+    
+    const newRegion = {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max(latDelta, 0.02),
+      longitudeDelta: Math.max(lngDelta, 0.02),
+    };
+    
+    setRegion(newRegion);
+    mapRef.current?.animateToRegion(newRegion, 1000);
+  };
+
+  const handleAddSavedLocation = (location: typeof savedLocations[0]) => {
+    if (!pickupCoordinates) {
+      setPickupLocation(location.address);
+      setPickupCoordinates({
+        latitude: location.latitude!,
+        longitude: location.longitude!,
+      });
+      
+      const newRegion = {
+        latitude: location.latitude!,
+        longitude: location.longitude!,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+      setRegion(newRegion);
+      mapRef.current?.animateToRegion(newRegion, 1000);
+    } else if (!dropoffCoordinates) {
+      setDropoffLocation(location.address);
+      setDropoffCoordinates({
+        latitude: location.latitude!,
+        longitude: location.longitude!,
+      });
+      
+      fitMapToCoordinates(pickupCoordinates, {
+        latitude: location.latitude!,
+        longitude: location.longitude!,
+      });
+    } else {
+      Alert.alert('Maximum locations', 'You can only add pickup and dropoff locations. Please clear one to add another.');
+    }
   };
 
   const handleLocationPress = () => {
-    console.log('Center on user location');
+    getCurrentLocation();
   };
 
-  const handleAddLocation = (location: SavedLocation) => {
-    console.log('Add location:', location);
+  const handleContinue = () => {
+    if (!pickupCoordinates) {
+      Alert.alert('Required field', 'Please select a pickup location');
+      return;
+    }
+
+    // Navigate to next step with correct route name
+    router.push({
+      pathname: '/(customer)/additionaldetailsscreen',
+      params: {
+        pickupAddress: pickupLocation,
+        pickupLat: pickupCoordinates?.latitude,
+        pickupLng: pickupCoordinates?.longitude,
+        dropoffAddress: dropoffLocation || '',
+        dropoffLat: dropoffCoordinates?.latitude || '',
+        dropoffLng: dropoffCoordinates?.longitude || '',
+        serviceName: serviceInfo.name,
+        servicePrice: serviceInfo.price,
+        serviceCategory: serviceInfo.category,
+      }
+    });
+  };
+
+  const clearLocation = (type: 'pickup' | 'dropoff') => {
+    if (type === 'pickup') {
+      setPickupLocation('');
+      setPickupCoordinates(null);
+      setPickupSuggestions([]);
+      setShowPickupSuggestions(false);
+    } else {
+      setDropoffLocation('');
+      setDropoffCoordinates(null);
+      setDropoffSuggestions([]);
+      setShowDropoffSuggestions(false);
+    }
   };
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Image
             source={require('../../assets/customer/back_button.png')}
             style={styles.backButtonImage}
@@ -92,21 +359,40 @@ const LocationDetailsScreen = () => {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
         {/* Map View */}
         <View style={styles.mapContainer}>
           <MapView
+            ref={mapRef}
             style={styles.map}
             region={region}
-            onRegionChangeComplete={setRegion}
+            showsUserLocation={true}
+            showsMyLocationButton={false}
           >
-            <Marker
-              coordinate={{
-                latitude: region.latitude,
-                longitude: region.longitude,
-              }}
-            />
+            {pickupCoordinates && (
+              <Marker
+                coordinate={pickupCoordinates}
+                title="Pickup Location"
+                pinColor="#68bdee"
+              />
+            )}
+            {dropoffCoordinates && (
+              <Marker
+                coordinate={dropoffCoordinates}
+                title="Dropoff Location"
+                pinColor="#ff4444"
+              />
+            )}
+            {pickupCoordinates && dropoffCoordinates && (
+              <Polyline
+                coordinates={[pickupCoordinates, dropoffCoordinates]}
+                strokeColor="#68bdee"
+                strokeWidth={3}
+                lineDashPattern={[5, 5]}
+              />
+            )}
           </MapView>
           
           {/* Map View Label */}
@@ -125,42 +411,145 @@ const LocationDetailsScreen = () => {
 
         {/* Form Section */}
         <View style={styles.formSection}>
-          {/* Pickup Location */}
-          <View style={styles.inputSection}>
+          {/* Pickup Location - with higher z-index when focused */}
+          <View style={[
+            styles.inputSection, 
+            focusedInput === 'pickup' && styles.inputSectionFocused
+          ]}>
             <Text style={styles.inputLabel}>
               Pickup Location <Text style={styles.required}>*</Text>
             </Text>
             <View style={styles.inputContainer}>
-              <View style={styles.locationDot} />
+              <View style={[styles.locationDot, pickupCoordinates && styles.locationDotActive]} />
               <TextInput
                 style={styles.input}
                 placeholder="Enter pickup location"
                 placeholderTextColor="#b0b0b0"
                 value={pickupLocation}
-                onChangeText={setPickupLocation}
+                onChangeText={handlePickupChange}
+                onFocus={() => {
+                  setFocusedInput('pickup');
+                  if (pickupSuggestions.length > 0) {
+                    setShowPickupSuggestions(true);
+                  }
+                }}
+                onBlur={() => {
+                  // Delay hiding to allow for selection
+                  setTimeout(() => {
+                    setFocusedInput(null);
+                    setShowPickupSuggestions(false);
+                  }, 200);
+                }}
               />
-              <TouchableOpacity style={styles.inputIcon}>
-                <Ionicons name="navigate-outline" size={20} color="#68bdee" />
-              </TouchableOpacity>
+              {pickupLocation ? (
+                <TouchableOpacity 
+                  style={styles.inputIcon}
+                  onPress={() => clearLocation('pickup')}
+                >
+                  <Ionicons name="close-circle" size={20} color="#b0b0b0" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity 
+                  style={styles.inputIcon}
+                  onPress={() => getCurrentLocation()}
+                >
+                  <Ionicons name="navigate-outline" size={20} color="#68bdee" />
+                </TouchableOpacity>
+              )}
             </View>
+            
+            {/* Pickup Suggestions */}
+            {showPickupSuggestions && pickupSuggestions.length > 0 && (
+              <View style={styles.suggestionsContainer}>
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+                ) : (
+                  pickupSuggestions.map((suggestion) => (
+                    <TouchableOpacity
+                      key={suggestion.id}
+                      style={styles.suggestionItem}
+                      onPress={() => handleSelectLocation(suggestion, 'pickup')}
+                    >
+                      <Ionicons name="location" size={20} color="#68bdee" />
+                      <View style={styles.suggestionTextContainer}>
+                        <Text style={styles.suggestionTitle}>{suggestion.title}</Text>
+                        <Text style={styles.suggestionAddress} numberOfLines={1}>
+                          {suggestion.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            )}
           </View>
 
-          {/* Drop-off Location */}
-          <View style={styles.inputSection}>
+          {/* Drop-off Location - with higher z-index when focused */}
+          <View style={[
+            styles.inputSection,
+            focusedInput === 'dropoff' && styles.inputSectionFocused
+          ]}>
             <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
             <View style={styles.inputContainer}>
-              <View style={[styles.locationDot, styles.locationDotEmpty]} />
+              <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
               <TextInput
                 style={styles.input}
                 placeholder="Enter drop-off location (optional)"
                 placeholderTextColor="#b0b0b0"
                 value={dropoffLocation}
-                onChangeText={setDropoffLocation}
+                onChangeText={handleDropoffChange}
+                onFocus={() => {
+                  setFocusedInput('dropoff');
+                  if (dropoffSuggestions.length > 0) {
+                    setShowDropoffSuggestions(true);
+                  }
+                }}
+                onBlur={() => {
+                  // Delay hiding to allow for selection
+                  setTimeout(() => {
+                    setFocusedInput(null);
+                    setShowDropoffSuggestions(false);
+                  }, 200);
+                }}
               />
-              <TouchableOpacity style={styles.inputIcon}>
-                <Ionicons name="add" size={24} color="#b0b0b0" />
-              </TouchableOpacity>
+              {dropoffLocation ? (
+                <TouchableOpacity 
+                  style={styles.inputIcon}
+                  onPress={() => clearLocation('dropoff')}
+                >
+                  <Ionicons name="close-circle" size={20} color="#b0b0b0" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.inputIcon}>
+                  <Ionicons name="add" size={24} color="#b0b0b0" />
+                </TouchableOpacity>
+              )}
             </View>
+            
+            {/* Dropoff Suggestions */}
+            {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
+              <View style={styles.suggestionsContainer}>
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+                ) : (
+                  dropoffSuggestions.map((suggestion) => (
+                    <TouchableOpacity
+                      key={suggestion.id}
+                      style={styles.suggestionItem}
+                      onPress={() => handleSelectLocation(suggestion, 'dropoff')}
+                    >
+                      <Ionicons name="location" size={20} color="#ff4444" />
+                      <View style={styles.suggestionTextContainer}>
+                        <Text style={styles.suggestionTitle}>{suggestion.title}</Text>
+                        <Text style={styles.suggestionAddress} numberOfLines={1}>
+                          {suggestion.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            )}
           </View>
 
           {/* Add Another Stop Button */}
@@ -179,7 +568,11 @@ const LocationDetailsScreen = () => {
             </View>
 
             {savedLocations.map((location) => (
-              <View key={location.id} style={styles.savedLocationCard}>
+              <TouchableOpacity
+                key={location.id}
+                style={styles.savedLocationCard}
+                onPress={() => handleAddSavedLocation(location)}
+              >
                 <View style={styles.savedLocationIconContainer}>
                   <View style={styles.savedLocationIconCircle}>
                     {location.title === 'Home' ? (
@@ -197,13 +590,10 @@ const LocationDetailsScreen = () => {
                     {location.address}
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.addLocationButton}
-                  onPress={() => handleAddLocation(location)}
-                >
+                <View style={styles.addLocationButton}>
                   <Ionicons name="add" size={24} color="#b0b0b0" />
-                </TouchableOpacity>
-              </View>
+                </View>
+              </TouchableOpacity>
             ))}
           </View>
         </View>
@@ -212,8 +602,9 @@ const LocationDetailsScreen = () => {
       {/* Continue Button */}
       <View style={styles.bottomContainer}>
         <TouchableOpacity
-          style={styles.continueButton}
+          style={[styles.continueButton, !pickupCoordinates && styles.continueButtonDisabled]}
           onPress={handleContinue}
+          disabled={!pickupCoordinates}
           activeOpacity={0.8}
         >
           <Text style={styles.continueButtonText}>Continue</Text>
@@ -334,6 +725,11 @@ const styles = StyleSheet.create({
   },
   inputSection: {
     marginBottom: 25,
+    position: 'relative',
+    zIndex: 1,
+  },
+  inputSectionFocused: {
+    zIndex: 1000,
   },
   inputLabel: {
     fontSize: 12,
@@ -368,6 +764,10 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#b0b0b0',
   },
+  locationDotActive: {
+    borderWidth: 2,
+    borderColor: '#68bdee',
+  },
   input: {
     flex: 1,
     fontSize: 14,
@@ -376,6 +776,51 @@ const styles = StyleSheet.create({
   },
   inputIcon: {
     marginLeft: 10,
+  },
+  suggestionsContainer: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    marginTop: 4,
+    maxHeight: 200,
+    zIndex: 2000,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+  },
+  loader: {
+    padding: 20,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  suggestionTextContainer: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  suggestionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3c3c3c',
+    marginBottom: 2,
+  },
+  suggestionAddress: {
+    fontSize: 12,
+    color: '#8c8c8c',
   },
   addStopButton: {
     flexDirection: 'row',
@@ -476,6 +921,10 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
+  },
+  continueButtonDisabled: {
+    backgroundColor: '#b0b0b0',
+    opacity: 0.5,
   },
   continueButtonText: {
     fontSize: 16,

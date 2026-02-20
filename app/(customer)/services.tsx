@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 const PopularServicesScreen = () => {
   const router = useRouter();
   const [selectedFilter, setSelectedFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const services = [
     {
@@ -26,6 +27,9 @@ const PopularServicesScreen = () => {
       time: '15 min',
       price: 75,
       currency: 'BHD',
+      category: 'Towing',
+      distance: '1.5 km',
+      popularity: 98,
     },
     {
       id: 2,
@@ -37,6 +41,9 @@ const PopularServicesScreen = () => {
       time: '20 min',
       price: 120,
       currency: 'BHD',
+      category: 'Towing',
+      distance: '3.2 km',
+      popularity: 85,
     },
     {
       id: 3,
@@ -48,6 +55,9 @@ const PopularServicesScreen = () => {
       time: '12 min',
       price: 65,
       currency: 'BHD',
+      category: 'Towing',
+      distance: '0.8 km',
+      popularity: 92,
     },
     {
       id: 4,
@@ -55,31 +65,41 @@ const PopularServicesScreen = () => {
       tags: ['INSURANCE ACCEPTED'],
       description: 'RELIABLE LONG-HAUL TOWING FOR DISTANCES OVER 50KM',
       rating: 4.9,
-      distance: '1.8 km',
+      reviewCount: 156,
       time: '6 min',
       price: 150,
       currency: 'BHD',
+      category: 'Towing',
+      distance: '1.8 km',
+      popularity: 78,
     },
     {
       id: 5,
       name: 'Motorcycle Towing',
       tags: [],
-      description: 'SPECIALIZED MOTORCYCLE AND BIKES',
+      description: 'SPECIALIZED MOTORCYCLE AND BIKES TOWING SERVICE',
       rating: 4.8,
-      distance: '4.5 km',
+      reviewCount: 98,
       time: '15 min',
       price: 45,
       currency: 'BHD',
+      category: 'Motorcycle',
+      distance: '4.5 km',
+      popularity: 88,
     },
     {
       id: 6,
       name: 'Premium Towing',
-      description: 'LUXURY VEHICLE TOWING WITH EXTRA CARE',
+      tags: ['LUXURY'],
+      description: 'LUXURY VEHICLE TOWING WITH EXTRA CARE AND ATTENTION',
       rating: 5.0,
-      distance: '2.1 km',
+      reviewCount: 67,
       time: '7 min',
       price: 200,
       currency: 'BHD',
+      category: 'Premium',
+      distance: '2.1 km',
+      popularity: 95,
     },
   ];
 
@@ -87,15 +107,61 @@ const PopularServicesScreen = () => {
     router.push('/(customer)/home');
   };
 
-  const handleServicePress = (serviceId: number) => {
-    // Navigate to service detail screen
-    console.log('Service pressed:', serviceId);
+  const handleServicePress = (service: any) => {
+    router.push({
+      pathname: '/(customer)/servicedetails',
+      params: {
+        serviceId: service.id,
+        serviceName: service.name,
+        servicePrice: `${service.price} ${service.currency}`,
+        serviceRating: service.rating,
+        serviceDistance: service.distance,
+        serviceTime: service.time,
+        serviceCategory: service.category,
+        serviceDescription: service.description,
+        comingFrom: 'services'
+      }
+    });
   };
 
   const handleContactSupport = () => {
-    // Navigate to support screen
     console.log('Contact support pressed');
   };
+
+  // Filter and search logic
+  const getFilteredServices = () => {
+    let filtered = [...services];
+
+    // Apply search filter
+    if (searchQuery) {
+      filtered = filtered.filter(service => 
+        service.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        service.description.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    // Apply category filters
+    switch (selectedFilter) {
+      case 'popular':
+        filtered = filtered.sort((a, b) => b.popularity - a.popularity);
+        break;
+      case 'nearest':
+        filtered = filtered.sort((a, b) => {
+          const distA = parseFloat(a.distance) || 999;
+          const distB = parseFloat(b.distance) || 999;
+          return distA - distB;
+        });
+        break;
+      default:
+        // 'all' - keep as is but sort by id
+        filtered = filtered.sort((a, b) => a.id - b.id);
+        break;
+    }
+
+    return filtered;
+  };
+
+  const filteredServices = getFilteredServices();
 
   return (
     <View style={styles.container}>
@@ -110,7 +176,7 @@ const PopularServicesScreen = () => {
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>POPULAR SERVICES</Text>
-          <Text style={styles.headerSubtitle}>5 SERVICES AVAILABLE</Text>
+          <Text style={styles.headerSubtitle}>{filteredServices.length} SERVICES AVAILABLE</Text>
         </View>
       </View>
 
@@ -127,7 +193,14 @@ const PopularServicesScreen = () => {
               style={styles.searchInput}
               placeholder="Search services..."
               placeholderTextColor="#8c8c8c"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
             />
+            {searchQuery ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={20} color="#8c8c8c" />
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={styles.filterButtons}>
@@ -165,59 +238,78 @@ const PopularServicesScreen = () => {
 
         {/* Services List */}
         <View style={styles.servicesList}>
-          {services.map((service) => (
-            <TouchableOpacity
-              key={service.id}
-              style={styles.serviceCard}
-              onPress={() => handleServicePress(service.id)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.serviceHeader}>
-                <View style={styles.serviceTitleContainer}>
-                  <Text style={styles.serviceName}>{service.name}</Text>
+          {filteredServices.length > 0 ? (
+            filteredServices.map((service) => (
+              <TouchableOpacity
+                key={service.id}
+                style={styles.serviceCard}
+                onPress={() => handleServicePress(service)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.serviceHeader}>
+                  <View style={styles.serviceTitleContainer}>
+                    <Text style={styles.serviceName}>{service.name}</Text>
+                    {service.tags.length > 0 && (
+                      <View style={styles.tagsContainer}>
+                        {service.tags.map((tag, index) => (
+                          <View key={index} style={styles.tag}>
+                            <Text style={styles.tagText}>{tag}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#8c8c8c" />
                 </View>
-                <Ionicons name="chevron-forward" size={20} color="#8c8c8c" />
-              </View>
 
-              <Text style={styles.serviceDescription}>{service.description}</Text>
+                <Text style={styles.serviceDescription}>{service.description}</Text>
 
-              {/* Rating and Time - Above separator */}
-              <View style={styles.serviceMetrics}>
-                <View style={styles.ratingContainer}>
-                  <Ionicons name="star" size={14} color="#FFB800" />
-                  <Text style={styles.ratingText}>
-                    {service.rating} ({service.reviewCount || 0})
-                  </Text>
+                {/* Rating and Time - Above separator */}
+                <View style={styles.serviceMetrics}>
+                  <View style={styles.ratingContainer}>
+                    <Ionicons name="star" size={14} color="#FFB800" />
+                    <Text style={styles.ratingText}>
+                      {service.rating} ({service.reviewCount})
+                    </Text>
+                  </View>
+                  <View style={styles.timeContainer}>
+                    <Text style={styles.timeText}>+</Text>
+                    <Ionicons name="time-outline" size={14} color="#8c8c8c" />
+                    <Text style={styles.timeText}>{service.time}</Text>
+                  </View>
+                  <View style={styles.distanceContainer}>
+                    <Ionicons name="location-outline" size={14} color="#8c8c8c" />
+                    <Text style={styles.distanceText}>{service.distance}</Text>
+                  </View>
                 </View>
-                <View style={styles.timeContainer}>
-                  <Text style={styles.timeText}>+</Text>
-                  <Ionicons name="time-outline" size={14} color="#8c8c8c" />
-                  <Text style={styles.timeText}>{service.time}</Text>
-                </View>
-              </View>
 
-              {/* Separator Line */}
-              <View style={styles.separator} />
+                {/* Separator Line */}
+                <View style={styles.separator} />
 
-              {/* Price Section - Below separator */}
-              <View style={styles.serviceFooter}>
-                <View style={styles.priceLeftSection}>
-                  <Image
-                    source={require('../../assets/customer/dollar_icon.png')}
-                    style={styles.dollarIcon}
-                    resizeMode="contain"
-                  />
-                  <Text style={styles.startingFromText}>STARTING FROM</Text>
+                {/* Price Section - Below separator */}
+                <View style={styles.serviceFooter}>
+                  <View style={styles.priceLeftSection}>
+                    <Image
+                      source={require('../../assets/customer/dollar_icon.png')}
+                      style={styles.dollarIcon}
+                      resizeMode="contain"
+                    />
+                    <Text style={styles.startingFromText}>STARTING FROM</Text>
+                  </View>
+                  <View style={styles.priceContainer}>
+                    <Text style={styles.price}>
+                      {service.price}{' '}
+                      <Text style={styles.currencyText}>{service.currency}</Text>
+                    </Text>
+                  </View>
                 </View>
-                <View style={styles.priceContainer}>
-                  <Text style={styles.price}>
-                    {service.price}{' '}
-                    <Text style={styles.currencyText}>{service.currency}</Text>
-                  </Text>
-                </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.noResultsContainer}>
+              <Text style={styles.noResultsText}>No services found</Text>
+            </View>
+          )}
         </View>
 
         {/* Help Section */}
@@ -238,8 +330,9 @@ const PopularServicesScreen = () => {
         {/* Separator Line */}
         <View style={styles.sectionSeparator} />
 
-        {/* Pagination dots */}
+        {/* Pagination dots - Updated to 4 dots with 2 filled */}
         <View style={styles.paginationContainer}>
+          <View style={[styles.paginationDot, styles.paginationDotActive]} />
           <View style={[styles.paginationDot, styles.paginationDotActive]} />
           <View style={styles.paginationDot} />
           <View style={styles.paginationDot} />
@@ -384,6 +477,23 @@ const styles = StyleSheet.create({
     color: '#3c3c3c',
     marginBottom: 6,
   },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 4,
+  },
+  tag: {
+    backgroundColor: '#e3f5ff',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  tagText: {
+    fontSize: 9,
+    color: '#68bdee',
+    fontWeight: '600',
+  },
   serviceDescription: {
     fontSize: 11,
     color: '#8c8c8c',
@@ -395,6 +505,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     marginBottom: 12,
+    flexWrap: 'wrap',
   },
   ratingContainer: {
     flexDirection: 'row',
@@ -415,6 +526,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#8c8c8c',
   },
+  distanceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  distanceText: {
+    fontSize: 11,
+    color: '#8c8c8c',
+  },
   separator: {
     height: 1,
     backgroundColor: '#e0e0e0',
@@ -430,28 +550,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-
   dollarIcon: {
     width: 16,
     height: 16,
   },
-
   startingFromText: {
     fontSize: 11,
     color: '#8c8c8c',
     fontWeight: '500',
   },
-
   priceContainer: {
     alignItems: 'flex-end',
   },
-
   price: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#3c3c3c',
   },
-
   currencyText: {
     fontSize: 11,
     fontWeight: '500',
@@ -459,21 +574,12 @@ const styles = StyleSheet.create({
     lineHeight: 11,
     textAlignVertical: 'top',
   },
-
-priceUnit: {
-  fontSize: 10,  // Smaller size
-  fontWeight: 'normal',
-  color: '#8c8c8c',
-  lineHeight: 1,  // Tighter line height for better positioning
-},
-
   helpSection: {
     backgroundColor: '#f0fafe',
     borderRadius: 12,
     padding: 20,
     marginBottom: 20,
   },
-
   helpTitle: {
     fontSize: 12,
     fontWeight: 'bold',
@@ -515,6 +621,14 @@ priceUnit: {
   },
   paginationDotActive: {
     backgroundColor: '#68bdee',
+  },
+  noResultsContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#8c8c8c',
   },
 });
 
