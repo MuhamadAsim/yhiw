@@ -1,8 +1,6 @@
-
-
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import React, { useState, useEffect } from 'react';
 import {
   Image,
   ScrollView,
@@ -10,11 +8,92 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Alert,
 } from 'react-native';
 
 const ConfirmBookingScreen = () => {
   const router = useRouter();
+  const params = useLocalSearchParams();
   const [agreedToTerms, setAgreedToTerms] = useState<boolean>(false);
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Helper function to safely parse JSON from params
+  const getParsedArray = (param: string | string[] | undefined): any[] => {
+    const value = getStringParam(param);
+    if (!value) return [];
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
+  };
+
+  // Get all data from previous screens - NO FALLBACKS, use actual params
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const pickupLat = getStringParam(params.pickupLat);
+  const pickupLng = getStringParam(params.pickupLng);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const dropoffLat = getStringParam(params.dropoffLat);
+  const dropoffLng = getStringParam(params.dropoffLng);
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
+  
+  // Additional details data
+  const urgency = getStringParam(params.urgency);
+  const issues = getParsedArray(params.issues);
+  const description = getStringParam(params.description);
+  const photos = getParsedArray(params.photos);
+  const hasInsurance = getStringParam(params.hasInsurance) === 'true';
+  const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
+  const hasModifications = getStringParam(params.hasModifications) === 'true';
+  const needMultilingual = getStringParam(params.needMultilingual) === 'true';
+  
+  // Schedule data
+  const serviceTime = getStringParam(params.serviceTime);
+  
+  // Payment data
+  const selectedTip = parseFloat(getStringParam(params.selectedTip)) || 0;
+  const totalAmount = parseFloat(getStringParam(params.totalAmount)) || 0;
+
+  // Vehicle data from VehicleContactInfoScreen - passed through all screens
+  const vehicleType = getStringParam(params.vehicleType);
+  const makeModel = getStringParam(params.makeModel);
+  const year = getStringParam(params.year);
+  const color = getStringParam(params.color);
+  const licensePlate = getStringParam(params.licensePlate);
+  const selectedVehicle = getStringParam(params.selectedVehicle);
+  
+  // Contact data from VehicleContactInfoScreen
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
+  const email = getStringParam(params.email);
+  const emergencyContact = getStringParam(params.emergencyContact);
+
+  useEffect(() => {
+    // Log received data for debugging
+    console.log('Confirm Booking - Received data:', {
+      serviceName,
+      servicePrice,
+      pickupAddress,
+      dropoffAddress,
+      urgency,
+      serviceTime,
+      totalAmount,
+      vehicleType,
+      makeModel,
+      licensePlate,
+      fullName,
+      phoneNumber,
+      color,
+      year
+    });
+  }, []);
 
   const handleBack = () => {
     router.back();
@@ -22,21 +101,169 @@ const ConfirmBookingScreen = () => {
 
   const handleEdit = (section: string) => {
     console.log(`Edit ${section}`);
-    // Navigate to edit specific section
+    
+    // Navigate back to specific screens based on section
+    switch(section) {
+      case 'service':
+        router.back();
+        break;
+      case 'location':
+        // Navigate to location details screen
+        router.push({
+          pathname: '/(customer)/locationdetails',
+          params: {
+            pickupAddress,
+            pickupLat,
+            pickupLng,
+            dropoffAddress,
+            dropoffLat,
+            dropoffLng,
+            serviceName,
+            servicePrice,
+            urgency,
+            serviceTime,
+            vehicleType,
+            makeModel,
+            year,
+            color,
+            licensePlate,
+            fullName,
+            phoneNumber,
+            email
+          }
+        });
+        break;
+      case 'schedule':
+        // Navigate to schedule service screen
+        router.push({
+          pathname: '/(customer)/scheduleservices',
+          params: {
+            pickupAddress,
+            pickupLat,
+            pickupLng,
+            dropoffAddress,
+            dropoffLat,
+            dropoffLng,
+            serviceName,
+            servicePrice,
+            urgency,
+            serviceTime,
+            vehicleType,
+            makeModel,
+            year,
+            color,
+            licensePlate,
+            fullName,
+            phoneNumber,
+            email
+          }
+        });
+        break;
+      case 'contact':
+        // Navigate to vehicle contact info screen
+        router.push({
+          pathname: '/(customer)/vehiclecontactinfo',
+          params: {
+            pickupAddress,
+            pickupLat,
+            pickupLng,
+            dropoffAddress,
+            dropoffLat,
+            dropoffLng,
+            serviceName,
+            servicePrice,
+            urgency,
+            serviceTime,
+            vehicleType,
+            makeModel,
+            year,
+            color,
+            licensePlate,
+            fullName,
+            phoneNumber,
+            email
+          }
+        });
+        break;
+      case 'payment':
+        // Navigate back to price summary
+        router.back();
+        break;
+      default:
+        router.back();
+    }
   };
 
   const handleConfirmBooking = () => {
     if (!agreedToTerms) {
-      alert('Please agree to the Terms of Service and Privacy Policy');
+      Alert.alert(
+        'Terms Required',
+        'Please agree to the Terms of Service and Privacy Policy'
+      );
       return;
     }
+    
     console.log('Booking confirmed');
-    // Navigate to confirmation/tracking screen
+    
+    // Navigate to tracking/confirmation screen with all data
+    router.push({
+      pathname: '/(customer)/findingprovider',
+      params: {
+        // Pass all data to next screen
+        pickupAddress,
+        dropoffAddress,
+        serviceName,
+        serviceTime,
+        totalAmount: String(totalAmount),
+        vehicleType,
+        licensePlate,
+        fullName,
+        phoneNumber,
+      }
+    });
   };
 
   const handleGoBackToEdit = () => {
     router.back();
   };
+
+  // Format schedule display text
+  const getScheduleDisplay = () => {
+    if (serviceTime === 'right_now') {
+      return 'Right Now (ASAP)';
+    } else if (serviceTime === 'schedule_later') {
+      return 'Schedule Later';
+    } else {
+      return 'Not specified';
+    }
+  };
+
+  // Format vehicle display name
+  const getVehicleDisplay = () => {
+    if (makeModel) {
+      return makeModel;
+    } else if (vehicleType) {
+      // Capitalize first letter
+      return vehicleType.charAt(0).toUpperCase() + vehicleType.slice(1);
+    } else {
+      return 'Not specified';
+    }
+  };
+
+  // Parse service price for calculations
+  const parsePrice = (price: string): number => {
+    if (!price) return 0;
+    const match = price.match(/(\d+)/);
+    return match ? parseInt(match[0], 10) : 0;
+  };
+
+  const baseServiceFee = parsePrice(servicePrice);
+  const distanceFee = 20; // This would come from actual distance calculation
+  const tax = parseFloat((baseServiceFee * 0.05).toFixed(2));
+  const calculatedTotal = baseServiceFee + distanceFee + tax + selectedTip;
+
+  // Use totalAmount from params if available, otherwise calculate
+  const displayTotal = totalAmount > 0 ? totalAmount : calculatedTotal;
 
   return (
     <View style={styles.container}>
@@ -116,11 +343,13 @@ const ConfirmBookingScreen = () => {
               resizeMode="contain"
             />
             <View style={styles.serviceTextContainer}>
-              <Text style={styles.serviceName}>Roadside Towing</Text>
+              <Text style={styles.serviceName}>{serviceName || 'Roadside Towing'}</Text>
               <View style={styles.serviceTags}>
                 <Text style={styles.simpleTag}>Popular</Text>
                 <Text style={styles.plusSign}>+</Text>
-                <Text style={styles.simpleTag}>Priority Service</Text>
+                <Text style={styles.simpleTag}>
+                  {urgency === 'urgent' ? 'Priority Service' : 'Standard Service'}
+                </Text>
               </View>
             </View>
           </View>
@@ -130,12 +359,12 @@ const ConfirmBookingScreen = () => {
           <View style={styles.vehicleDetailsContainer}>
             <View style={styles.detailColumn}>
               <Text style={styles.detailLabel}>Vehicle</Text>
-              <Text style={styles.detailValue}>Sedan</Text>
+              <Text style={styles.detailValue}>{getVehicleDisplay()}</Text>
             </View>
             
             <View style={styles.licensePlateContainer}>
               <Text style={styles.detailLabel}>License Plate</Text>
-              <Text style={styles.detailValue}>VFVFV</Text>
+              <Text style={styles.detailValue}>{licensePlate || 'Not provided'}</Text>
             </View>
           </View>
         </View>
@@ -166,19 +395,21 @@ const ConfirmBookingScreen = () => {
             </View>
             <View style={styles.locationTextContainer}>
               <Text style={styles.locationLabel}>Pickup Location</Text>
-              <Text style={styles.locationAddress}>123 Main Street, Manama</Text>
+              <Text style={styles.locationAddress}>{pickupAddress || 'Not specified'}</Text>
             </View>
           </View>
 
-          <View style={styles.locationItem}>
-            <View style={styles.locationIconOutline}>
-              <View style={styles.locationDotOutline} />
+          {dropoffAddress ? (
+            <View style={styles.locationItem}>
+              <View style={styles.locationIconOutline}>
+                <View style={styles.locationDotOutline} />
+              </View>
+              <View style={styles.locationTextContainer}>
+                <Text style={styles.locationLabel}>Drop-off Location</Text>
+                <Text style={styles.locationAddress}>{dropoffAddress}</Text>
+              </View>
             </View>
-            <View style={styles.locationTextContainer}>
-              <Text style={styles.locationLabel}>Drop-off Location</Text>
-              <Text style={styles.locationAddress}>C C</Text>
-            </View>
-          </View>
+          ) : null}
 
           <View style={styles.distanceButtonFull}>
             <Ionicons name="navigate-outline" size={18} color="#8c8c8c" />
@@ -215,9 +446,13 @@ const ConfirmBookingScreen = () => {
               />
             </View>
             <View style={styles.scheduleTextContainer}>
-              <Text style={styles.scheduleTitle} numberOfLines={1}>Right Now (ASAP)</Text>
+              <Text style={styles.scheduleTitle} numberOfLines={1}>
+                {getScheduleDisplay()}
+              </Text>
               <Text style={styles.scheduleSubtitle} numberOfLines={2}>
-                Provider will arrive in 15-20 minutes
+                {serviceTime === 'right_now' 
+                  ? 'Provider will arrive in 15-20 minutes'
+                  : 'You will select date and time later'}
               </Text>
             </View>
           </View>
@@ -247,7 +482,7 @@ const ConfirmBookingScreen = () => {
             <Ionicons name="person-outline" size={20} color="#8c8c8c" />
             <View style={styles.contactTextContainer}>
               <Text style={styles.contactLabel}>Name</Text>
-              <Text style={styles.contactValue}>User</Text>
+              <Text style={styles.contactValue}>{fullName || 'Not provided'}</Text>
             </View>
           </View>
 
@@ -255,9 +490,19 @@ const ConfirmBookingScreen = () => {
             <Ionicons name="call-outline" size={20} color="#8c8c8c" />
             <View style={styles.contactTextContainer}>
               <Text style={styles.contactLabel}>Phone Number</Text>
-              <Text style={styles.contactValue}>+973 33334444</Text>
+              <Text style={styles.contactValue}>{phoneNumber || 'Not provided'}</Text>
             </View>
           </View>
+
+          {email ? (
+            <View style={styles.contactItem}>
+              <Ionicons name="mail-outline" size={20} color="#8c8c8c" />
+              <View style={styles.contactTextContainer}>
+                <Text style={styles.contactLabel}>Email</Text>
+                <Text style={styles.contactValue}>{email}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         {/* Payment Summary - Light blue background with blue border */}
@@ -288,24 +533,31 @@ const ConfirmBookingScreen = () => {
 
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>Service Fee</Text>
-            <Text style={styles.paymentValue}>75 BHD</Text>
+            <Text style={styles.paymentValue}>{baseServiceFee || 75} BHD</Text>
           </View>
 
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>Distance & Fees</Text>
-            <Text style={styles.paymentValue}>20 BHD</Text>
+            <Text style={styles.paymentValue}>{distanceFee} BHD</Text>
           </View>
 
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>Tax (5%)</Text>
-            <Text style={styles.paymentValue}>4.75 BHD</Text>
+            <Text style={styles.paymentValue}>{tax} BHD</Text>
           </View>
+
+          {selectedTip > 0 && (
+            <View style={styles.paymentRow}>
+              <Text style={styles.paymentLabel}>Tip</Text>
+              <Text style={styles.paymentValue}>{selectedTip} BHD</Text>
+            </View>
+          )}
 
           <View style={styles.bolderDivider} />
 
           <View style={styles.paymentRowTotal}>
             <Text style={styles.paymentLabelTotal}>Total Amount</Text>
-            <Text style={styles.paymentValueTotal}>99.25 BHD</Text>
+            <Text style={styles.paymentValueTotal}>{displayTotal.toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.paymentMethod}>
@@ -319,6 +571,11 @@ const ConfirmBookingScreen = () => {
             <Ionicons name="document-text-outline" size={20} color="#3c3c3c" />
             <Text style={styles.cardTitle}>ADDITIONAL NOTES</Text>
           </View>
+          {description ? (
+            <Text style={styles.notesText}>{description}</Text>
+          ) : (
+            <Text style={styles.notesPlaceholder}>No additional notes provided</Text>
+          )}
         </View>
 
         {/* Terms and Conditions */}
@@ -422,15 +679,16 @@ const ConfirmBookingScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  // ... (keep all your existing styles exactly as they are)
   container: {
     flex: 1,
-    backgroundColor: '#f8f8f8', // Light gray background like before
+    backgroundColor: '#f8f8f8',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 10,
-    paddingTop: 25,
+    paddingTop: 45,
     paddingBottom: 15,
     backgroundColor: '#FFFFFF',
   },
@@ -484,7 +742,6 @@ const styles = StyleSheet.create({
     paddingTop: 15,
     paddingHorizontal: 20,
   },
-  // Review Header with light blue background
   reviewHeader: {
     backgroundColor: '#e3f5ff',
     borderRadius: 12,
@@ -514,20 +771,17 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
-  // Card styles
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 20,
     marginBottom: 15,
   },
-  // Service card with light blue background
   serviceCard: {
     backgroundColor: '#e3f5ff',
     borderWidth: 2,
     borderColor: '#68bdee',
   },
-  // Payment card with light blue background
   paymentCard: {
     backgroundColor: '#e3f5ff',
   },
@@ -551,7 +805,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#d0d0d0',
   },
-  // Cancellation Card - NO BORDER on the whole card
   cancellationCard: {
     padding: 0,
     marginBottom: 15,
@@ -659,6 +912,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#3c3c3c',
     fontWeight: 'bold',
+  },
+  detailSubValue: {
+    fontSize: 12,
+    color: '#5c5c5c',
+    marginTop: 2,
   },
   locationItem: {
     flexDirection: 'row',
@@ -823,11 +1081,10 @@ const styles = StyleSheet.create({
     marginVertical: 15,
   },
   paymentMethod: {
-    backgroundColor: 'transparent', // No background
+    backgroundColor: 'transparent',
     paddingVertical: 8,
-    paddingHorizontal: 0, // No horizontal padding
+    paddingHorizontal: 0,
     alignSelf: 'flex-start',
-    // Removed border completely
   },
   paymentMethodLabel: {
     fontSize: 13,
@@ -835,6 +1092,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
+  },
+  notesText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    marginTop: 10,
+    lineHeight: 18,
+  },
+  notesPlaceholder: {
+    fontSize: 12,
+    color: '#b0b0b0',
+    marginTop: 10,
+    fontStyle: 'italic',
   },
   checkboxContainer: {
     flexDirection: 'row',
@@ -873,7 +1142,6 @@ const styles = StyleSheet.create({
     color: '#68bdee',
     fontWeight: '600',
   },
-  // Safety Notice with light blue background
   safetyNotice: {
     flexDirection: 'row',
     backgroundColor: '#e3f5ff',
@@ -903,7 +1171,6 @@ const styles = StyleSheet.create({
     color: '#5c5c5c',
     lineHeight: 18,
   },
-  // Cancellation Policy styles - no border on card
   policyDividerFull: {
     height: 1,
     backgroundColor: '#e0e0e0',

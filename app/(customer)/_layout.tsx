@@ -28,14 +28,14 @@ export default function CustomerLayout() {
 
 
         <Stack.Screen
-        name="locationdetailsscreen"
+        name="locationdetails"
         options={{
           title: "location details Screen",
         }}
       />
       
       <Stack.Screen
-        name="findingproviderscreen"
+        name="findingprovider"
         options={{
           title: "finding provider Screen",
         }}

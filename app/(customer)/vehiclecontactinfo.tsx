@@ -1,5 +1,4 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,8 +7,9 @@ import {
   ScrollView,
   Image,
   TextInput,
+  Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 // Type definitions
@@ -29,17 +29,46 @@ interface VehicleTypeOption {
 
 const VehicleContactInfoScreen = () => {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  
   const [selectedVehicle, setSelectedVehicle] = useState<number | null>(null);
   const [selectedVehicleType, setSelectedVehicleType] = useState<string>('');
   const [makeModel, setMakeModel] = useState<string>('');
   const [year, setYear] = useState<string>('');
   const [color, setColor] = useState<string>('');
   const [licensePlate, setLicensePlate] = useState<string>('');
-  const [fullName, setFullName] = useState<string>(''); // Changed from 'User' to empty string
-  const [phoneNumber, setPhoneNumber] = useState<string>(''); // Changed from '+973  33334444' to empty string
+  const [fullName, setFullName] = useState<string>('');
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [emergencyContact, setEmergencyContact] = useState<string>('');
   const [saveVehicle, setSaveVehicle] = useState<boolean>(false);
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Get data from previous screen
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const pickupLat = getStringParam(params.pickupLat);
+  const pickupLng = getStringParam(params.pickupLng);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const dropoffLat = getStringParam(params.dropoffLat);
+  const dropoffLng = getStringParam(params.dropoffLng);
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
+
+  useEffect(() => {
+    // Log received data for debugging
+    console.log('VehicleContactInfo - Received data:', {
+      pickupAddress,
+      dropoffAddress,
+      serviceName,
+      servicePrice
+    });
+  }, []);
 
   const savedVehicles: SavedVehicle[] = [
     {
@@ -72,16 +101,81 @@ const VehicleContactInfoScreen = () => {
   };
 
   const handleContinue = () => {
-    console.log('Continue pressed');
-    // Navigate to next step
+    // Validate required fields
+    if (!fullName.trim()) {
+      Alert.alert('Required Field', 'Please enter your full name');
+      return;
+    }
+    
+    if (!phoneNumber.trim()) {
+      Alert.alert('Required Field', 'Please enter your phone number');
+      return;
+    }
+
+    // If no saved vehicle selected, validate manual vehicle fields
+    if (!selectedVehicle) {
+      if (!selectedVehicleType) {
+        Alert.alert('Required Field', 'Please select a vehicle type');
+        return;
+      }
+    }
+
+    // Navigate to additional details screen with all collected data
+    router.push({
+      pathname: '/(customer)/additionaldetails',
+      params: {
+        // Location data from previous screen
+        pickupAddress,
+        pickupLat,
+        pickupLng,
+        dropoffAddress,
+        dropoffLat,
+        dropoffLng,
+        
+        // Service data from previous screen
+        serviceName,
+        servicePrice,
+        serviceCategory,
+        
+        // Vehicle data
+        vehicleType: selectedVehicleType,
+        makeModel,
+        year,
+        color,
+        licensePlate,
+        selectedVehicle: selectedVehicle ? String(selectedVehicle) : '',
+        
+        // Contact data
+        fullName,
+        phoneNumber,
+        email,
+        emergencyContact,
+        saveVehicle: String(saveVehicle),
+      }
+    });
   };
 
   const handleSelectVehicle = (vehicleId: number) => {
     setSelectedVehicle(vehicleId);
+    // Populate fields with selected vehicle data
+    const vehicle = savedVehicles.find(v => v.id === vehicleId);
+    if (vehicle) {
+      setSelectedVehicleType(vehicle.type.toLowerCase());
+      setMakeModel(vehicle.name.split(' ').slice(0, 2).join(' '));
+      setColor(vehicle.color);
+      setLicensePlate(vehicle.plate);
+    }
   };
 
   const handleSelectVehicleType = (typeId: string) => {
+    // Clear saved vehicle selection when manually entering
+    setSelectedVehicle(null);
     setSelectedVehicleType(typeId);
+  };
+
+  const handleManualInput = () => {
+    // Clear saved vehicle selection when user starts typing in manual fields
+    setSelectedVehicle(null);
   };
 
   return (
@@ -120,7 +214,10 @@ const VehicleContactInfoScreen = () => {
           {savedVehicles.map((vehicle) => (
             <TouchableOpacity
               key={vehicle.id}
-              style={styles.savedVehicleCard}
+              style={[
+                styles.savedVehicleCard,
+                selectedVehicle === vehicle.id && styles.savedVehicleCardSelected
+              ]}
               onPress={() => handleSelectVehicle(vehicle.id)}
               activeOpacity={0.7}
             >
@@ -187,7 +284,10 @@ const VehicleContactInfoScreen = () => {
                 placeholder="E.g., Toyota Camry"
                 placeholderTextColor="#b0b0b0"
                 value={makeModel}
-                onChangeText={setMakeModel}
+                onChangeText={(text) => {
+                  setMakeModel(text);
+                  handleManualInput();
+                }}
               />
             </View>
           </View>
@@ -202,7 +302,10 @@ const VehicleContactInfoScreen = () => {
                   placeholder="2020"
                   placeholderTextColor="#b0b0b0"
                   value={year}
-                  onChangeText={setYear}
+                  onChangeText={(text) => {
+                    setYear(text);
+                    handleManualInput();
+                  }}
                   keyboardType="numeric"
                   maxLength={4}
                 />
@@ -217,7 +320,10 @@ const VehicleContactInfoScreen = () => {
                   placeholder="White"
                   placeholderTextColor="#b0b0b0"
                   value={color}
-                  onChangeText={setColor}
+                  onChangeText={(text) => {
+                    setColor(text);
+                    handleManualInput();
+                  }}
                 />
               </View>
             </View>
@@ -232,7 +338,10 @@ const VehicleContactInfoScreen = () => {
                 placeholder="ABC 1234"
                 placeholderTextColor="#b0b0b0"
                 value={licensePlate}
-                onChangeText={setLicensePlate}
+                onChangeText={(text) => {
+                  setLicensePlate(text);
+                  handleManualInput();
+                }}
               />
             </View>
             <Text style={styles.helperText}>
@@ -381,7 +490,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 50,
+    paddingTop: 45,
     paddingBottom: 15,
     backgroundColor: '#FFFFFF',
   },
@@ -453,6 +562,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     backgroundColor: '#FFFFFF',
     gap: 15,
+  },
+  savedVehicleCardSelected: {
+    borderColor: '#68bdee',
+    backgroundColor: '#e3f5ff',
   },
   savedVehicleIcon: {
     width: 50,

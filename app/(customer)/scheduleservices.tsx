@@ -6,8 +6,9 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
+  Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 // Type definitions
@@ -20,7 +21,61 @@ interface ServiceTimeOption {
 
 const ScheduleServiceScreen = () => {
   const router = useRouter();
-  const [selectedTime, setSelectedTime] = useState<string>('schedule_later');
+  const params = useLocalSearchParams();
+  const [selectedTime, setSelectedTime] = useState<string>('right_now'); // Default to right_now
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Helper function to safely parse JSON from params
+  const getParsedArray = (param: string | string[] | undefined): any[] => {
+    const value = getStringParam(param);
+    if (!value) return [];
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
+  };
+
+  // Get all data from previous screens
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const pickupLat = getStringParam(params.pickupLat);
+  const pickupLng = getStringParam(params.pickupLng);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const dropoffLat = getStringParam(params.dropoffLat);
+  const dropoffLng = getStringParam(params.dropoffLng);
+  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
+  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
+  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  
+  // Additional details data
+  const urgency = getStringParam(params.urgency) || 'moderate';
+  const issues = getParsedArray(params.issues);
+  const description = getStringParam(params.description);
+  const photos = getParsedArray(params.photos);
+  const hasInsurance = getStringParam(params.hasInsurance) === 'true';
+  const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
+  const hasModifications = getStringParam(params.hasModifications) === 'true';
+  const needMultilingual = getStringParam(params.needMultilingual) === 'true';
+  
+  // Vehicle data from VehicleContactInfoScreen
+  const vehicleType = getStringParam(params.vehicleType);
+  const makeModel = getStringParam(params.makeModel);
+  const year = getStringParam(params.year);
+  const color = getStringParam(params.color);
+  const licensePlate = getStringParam(params.licensePlate);
+  const selectedVehicle = getStringParam(params.selectedVehicle);
+  
+  // Contact data from VehicleContactInfoScreen
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
+  const email = getStringParam(params.email);
+  const emergencyContact = getStringParam(params.emergencyContact);
+  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
 
   const serviceTimeOptions: ServiceTimeOption[] = [
     {
@@ -42,8 +97,55 @@ const ScheduleServiceScreen = () => {
   };
 
   const handleContinue = () => {
-    console.log('Continue pressed');
-    // Navigate to price summary
+    // Navigate to price summary screen with all collected data
+    router.push({
+      pathname: '/(customer)/pricesummary',
+      params: {
+        // Location data
+        pickupAddress,
+        pickupLat,
+        pickupLng,
+        dropoffAddress,
+        dropoffLat,
+        dropoffLng,
+        
+        // Service data
+        serviceName,
+        servicePrice,
+        serviceCategory,
+        
+        // Additional details
+        urgency,
+        issues: JSON.stringify(issues),
+        description,
+        photos: JSON.stringify(photos),
+        hasInsurance: String(hasInsurance),
+        needSpecificTruck: String(needSpecificTruck),
+        hasModifications: String(hasModifications),
+        needMultilingual: String(needMultilingual),
+        
+        // Vehicle data
+        vehicleType,
+        makeModel,
+        year,
+        color,
+        licensePlate,
+        selectedVehicle,
+        
+        // Contact data
+        fullName,
+        phoneNumber,
+        email,
+        emergencyContact,
+        saveVehicle: String(saveVehicle),
+        
+        // Schedule data - just pass the selected time option
+        serviceTime: selectedTime,
+        // No date/time needed here - will be collected later
+        scheduledDate: '',
+        scheduledTimeSlot: '',
+      }
+    });
   };
 
   const handleSelectTime = (timeId: string) => {
@@ -197,7 +299,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 50,
+    paddingTop: 45,
     paddingBottom: 15,
     backgroundColor: '#FFFFFF',
   },
@@ -271,7 +373,7 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     paddingHorizontal: 10,
     alignItems: 'center',
-    backgroundColor: '#e3f5ff', // Light blue background
+    backgroundColor: '#e3f5ff',
   },
   timeOptionCardSelected: {
     borderColor: '#3c3c3c',
@@ -281,19 +383,17 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 12,
-    // Removed white background - now transparent to show the card's background
-    backgroundColor: 'transparent', // Changed from '#FFFFFF' to 'transparent'
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
   timeIconContainerSelected: {
-    backgroundColor: 'transparent', // Changed from '#FFFFFF' to 'transparent'
+    backgroundColor: 'transparent',
   },
   timeIcon: {
     width: 40,
     height: 40,
-    // Removed tintColor to preserve original icon colors
   },
   timeOptionTitle: {
     fontSize: 14,

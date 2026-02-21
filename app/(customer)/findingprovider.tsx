@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -10,11 +9,30 @@ import {
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 
 const { height } = Dimensions.get('window');
 
 const FindingProviderScreen = () => {
   const [spinValue] = useState(new Animated.Value(0));
+  const params = useLocalSearchParams();
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Get data from previous screen
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const serviceName = getStringParam(params.serviceName);
+  const serviceTime = getStringParam(params.serviceTime);
+  const totalAmount = getStringParam(params.totalAmount);
+  const vehicleType = getStringParam(params.vehicleType);
+  const licensePlate = getStringParam(params.licensePlate);
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
 
   useEffect(() => {
     // Spinning animation for the searching indicator
@@ -25,12 +43,36 @@ const FindingProviderScreen = () => {
         useNativeDriver: true,
       })
     ).start();
+
+    // Log received data for debugging
+    console.log('FindingProvider - Received data:', {
+      pickupAddress,
+      dropoffAddress,
+      serviceName,
+      serviceTime,
+      totalAmount,
+      vehicleType,
+      licensePlate,
+      fullName,
+      phoneNumber,
+    });
   }, []);
 
   const spin = spinValue.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
   });
+
+  // Format schedule display text
+  const getScheduleDisplay = () => {
+    if (serviceTime === 'right_now') {
+      return 'ASAP Service';
+    } else if (serviceTime === 'schedule_later') {
+      return 'Scheduled Service';
+    } else {
+      return 'Not specified';
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -55,6 +97,67 @@ const FindingProviderScreen = () => {
           WE'RE MATCHING YOU WITH THE BEST{'\n'}
           AVAILABLE PROVIDER IN YOUR AREA...
         </Text>
+
+        {/* Booking Summary Card - NEW */}
+        <View style={styles.bookingSummaryCard}>
+          <Text style={styles.bookingSummaryTitle}>Booking Summary</Text>
+          
+          <View style={styles.bookingSummaryRow}>
+            <Text style={styles.bookingSummaryLabel}>Service:</Text>
+            <Text style={styles.bookingSummaryValue}>{serviceName || 'Roadside Assistance'}</Text>
+          </View>
+          
+          <View style={styles.bookingSummaryRow}>
+            <Text style={styles.bookingSummaryLabel}>Schedule:</Text>
+            <Text style={styles.bookingSummaryValue}>{getScheduleDisplay()}</Text>
+          </View>
+          
+          <View style={styles.bookingSummaryRow}>
+            <Text style={styles.bookingSummaryLabel}>Vehicle:</Text>
+            <Text style={styles.bookingSummaryValue}>{vehicleType || 'Not specified'}</Text>
+          </View>
+          
+          {licensePlate && (
+            <View style={styles.bookingSummaryRow}>
+              <Text style={styles.bookingSummaryLabel}>License Plate:</Text>
+              <Text style={styles.bookingSummaryValue}>{licensePlate}</Text>
+            </View>
+          )}
+          
+          <View style={styles.bookingSummaryDivider} />
+          
+          <View style={styles.bookingSummaryRow}>
+            <Text style={styles.bookingSummaryLabel}>Pickup:</Text>
+            <Text style={styles.bookingSummaryAddress} numberOfLines={2}>
+              {pickupAddress || 'Not specified'}
+            </Text>
+          </View>
+          
+          {dropoffAddress && (
+            <View style={styles.bookingSummaryRow}>
+              <Text style={styles.bookingSummaryLabel}>Dropoff:</Text>
+              <Text style={styles.bookingSummaryAddress} numberOfLines={2}>
+                {dropoffAddress}
+              </Text>
+            </View>
+          )}
+          
+          <View style={styles.bookingSummaryDivider} />
+          
+          <View style={styles.bookingSummaryTotal}>
+            <Text style={styles.bookingSummaryTotalLabel}>Total Amount:</Text>
+            <Text style={styles.bookingSummaryTotalValue}>
+              {totalAmount ? `${parseFloat(totalAmount).toFixed(2)} BHD` : 'Calculating...'}
+            </Text>
+          </View>
+          
+          <View style={styles.bookingSummaryContact}>
+            <Ionicons name="person-outline" size={14} color="#8c8c8c" />
+            <Text style={styles.bookingSummaryContactText}>
+              {fullName || 'Customer'} • {phoneNumber || 'Phone not provided'}
+            </Text>
+          </View>
+        </View>
 
         {/* Progress Steps */}
         <View style={styles.stepsContainer}>
@@ -148,6 +251,91 @@ const styles = StyleSheet.create({
     marginBottom: height * 0.04,
     letterSpacing: 0.3,
     paddingHorizontal: 10,
+  },
+  // NEW STYLES for booking summary
+  bookingSummaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    width: '100%',
+    marginBottom: height * 0.03,
+    borderWidth: 1,
+    borderColor: '#68bdee',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  bookingSummaryTitle: {
+    fontSize: Math.min(14, height * 0.018),
+    fontWeight: 'bold',
+    color: '#3c3c3c',
+    marginBottom: 12,
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  bookingSummaryRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+    alignItems: 'flex-start',
+  },
+  bookingSummaryLabel: {
+    fontSize: Math.min(12, height * 0.016),
+    color: '#8c8c8c',
+    width: 70,
+    fontWeight: '500',
+  },
+  bookingSummaryValue: {
+    fontSize: Math.min(12, height * 0.016),
+    color: '#3c3c3c',
+    flex: 1,
+    fontWeight: '600',
+  },
+  bookingSummaryAddress: {
+    fontSize: Math.min(12, height * 0.016),
+    color: '#3c3c3c',
+    flex: 1,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  bookingSummaryDivider: {
+    height: 1,
+    backgroundColor: '#e0e0e0',
+    marginVertical: 10,
+  },
+  bookingSummaryTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  bookingSummaryTotalLabel: {
+    fontSize: Math.min(13, height * 0.017),
+    color: '#3c3c3c',
+    fontWeight: 'bold',
+  },
+  bookingSummaryTotalValue: {
+    fontSize: Math.min(16, height * 0.02),
+    color: '#68bdee',
+    fontWeight: 'bold',
+  },
+  bookingSummaryContact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  bookingSummaryContactText: {
+    fontSize: Math.min(11, height * 0.015),
+    color: '#8c8c8c',
+    flex: 1,
   },
   stepsContainer: {
     width: '100%',

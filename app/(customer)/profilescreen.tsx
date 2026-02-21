@@ -518,7 +518,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f8f8',
   },
   headerGradient: {
-    paddingTop: 50,
+    paddingTop: 45,
     paddingBottom: 15,
   },
   header: {

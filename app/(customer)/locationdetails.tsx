@@ -303,7 +303,7 @@ const LocationDetailsScreen = () => {
 
     // Navigate to next step with correct route name
     router.push({
-      pathname: '/(customer)/additionaldetailsscreen',
+      pathname: '/(customer)/vehiclecontactinfo',
       params: {
         pickupAddress: pickupLocation,
         pickupLat: pickupCoordinates?.latitude,
@@ -623,7 +623,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 50,
+    paddingTop: 45,
     paddingBottom: 15,
     backgroundColor: '#FFFFFF',
   },

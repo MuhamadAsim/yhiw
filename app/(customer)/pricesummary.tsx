@@ -1,6 +1,4 @@
-
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,14 +6,74 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
+  Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 const PriceSummaryScreen = () => {
   const router = useRouter();
-  const [selectedTip, setSelectedTip] = useState<number>(0); // No Tip selected by default
+  const params = useLocalSearchParams();
+  const [selectedTip, setSelectedTip] = useState<number>(0);
   const [promoCode, setPromoCode] = useState<string>('');
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Helper function to safely parse JSON from params
+  const getParsedArray = (param: string | string[] | undefined): any[] => {
+    const value = getStringParam(param);
+    if (!value) return [];
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
+  };
+
+  // Get all data from previous screens
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const pickupLat = getStringParam(params.pickupLat);
+  const pickupLng = getStringParam(params.pickupLng);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const dropoffLat = getStringParam(params.dropoffLat);
+  const dropoffLng = getStringParam(params.dropoffLng);
+  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
+  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
+  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  
+  // Additional details data
+  const urgency = getStringParam(params.urgency) || 'moderate';
+  const issues = getParsedArray(params.issues);
+  const description = getStringParam(params.description);
+  const photos = getParsedArray(params.photos);
+  const hasInsurance = getStringParam(params.hasInsurance) === 'true';
+  const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
+  const hasModifications = getStringParam(params.hasModifications) === 'true';
+  const needMultilingual = getStringParam(params.needMultilingual) === 'true';
+  
+  // Vehicle data from VehicleContactInfoScreen
+  const vehicleType = getStringParam(params.vehicleType);
+  const makeModel = getStringParam(params.makeModel);
+  const year = getStringParam(params.year);
+  const color = getStringParam(params.color);
+  const licensePlate = getStringParam(params.licensePlate);
+  const selectedVehicle = getStringParam(params.selectedVehicle);
+  
+  // Contact data from VehicleContactInfoScreen
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
+  const email = getStringParam(params.email);
+  const emergencyContact = getStringParam(params.emergencyContact);
+  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
+  
+  // Schedule data
+  const serviceTime = getStringParam(params.serviceTime) || 'schedule_later';
+  const scheduledDate = getStringParam(params.scheduledDate);
+  const scheduledTimeSlot = getStringParam(params.scheduledTimeSlot);
 
   const tipOptions = [
     { label: 'No Tip', value: 0 },
@@ -24,20 +82,96 @@ const PriceSummaryScreen = () => {
     { label: '15 BHD', value: 15 },
   ];
 
+  useEffect(() => {
+    // Log received data for debugging
+    console.log('Price Summary - Received data:', {
+      serviceName,
+      servicePrice,
+      urgency,
+      issuesCount: issues.length,
+      serviceTime,
+      scheduledDate,
+      scheduledTimeSlot,
+      pickupAddress,
+      dropoffAddress,
+      vehicleType,
+      makeModel,
+      licensePlate,
+      fullName,
+      phoneNumber
+    });
+  }, []);
+
   const handleBack = () => {
     router.back();
   };
 
   const handleContinue = () => {
-    console.log('Continue to payment');
-    // Navigate to next screen
+    // Navigate to confirm booking screen with all collected data
+    router.push({
+      pathname: '/(customer)/confirmbooking',
+      params: {
+        // Location data
+        pickupAddress,
+        pickupLat,
+        pickupLng,
+        dropoffAddress,
+        dropoffLat,
+        dropoffLng,
+        
+        // Service data
+        serviceName,
+        servicePrice,
+        serviceCategory,
+        
+        // Additional details
+        urgency,
+        issues: JSON.stringify(issues),
+        description,
+        photos: JSON.stringify(photos),
+        hasInsurance: String(hasInsurance),
+        needSpecificTruck: String(needSpecificTruck),
+        hasModifications: String(hasModifications),
+        needMultilingual: String(needMultilingual),
+        
+        // Vehicle data
+        vehicleType,
+        makeModel,
+        year,
+        color,
+        licensePlate,
+        selectedVehicle,
+        
+        // Contact data
+        fullName,
+        phoneNumber,
+        email,
+        emergencyContact,
+        saveVehicle: String(saveVehicle),
+        
+        // Schedule data
+        serviceTime,
+        scheduledDate,
+        scheduledTimeSlot,
+        
+        // Payment data
+        selectedTip: String(selectedTip),
+        totalAmount: String(totalAmount),
+      }
+    });
   };
 
   const handleSelectTip = (value: number) => {
     setSelectedTip(value);
   };
 
-  const baseServiceFee = 120;
+  // Parse service price from string (e.g., "75 BHD" -> 75)
+  const parsePrice = (price: string): number => {
+    const match = price.match(/(\d+)/);
+    return match ? parseInt(match[0], 10) : 75;
+  };
+
+  const baseServiceFee = parsePrice(servicePrice);
   const distanceFee = 15;
   const platformServiceFee = 5;
   const taxRate = 0.05;
@@ -45,6 +179,17 @@ const PriceSummaryScreen = () => {
   const subtotal = baseServiceFee + distanceFee + platformServiceFee;
   const tax = Math.round(subtotal * taxRate);
   const totalAmount = subtotal + tax + (selectedTip || 0);
+
+  // Format schedule display text
+  const getScheduleDisplay = () => {
+    if (serviceTime === 'right_now') {
+      return 'ASAP (15-20 min)';
+    } else if (scheduledDate && scheduledTimeSlot) {
+      return `${scheduledDate} at ${scheduledTimeSlot}`;
+    } else {
+      return 'Schedule later';
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -86,23 +231,48 @@ const PriceSummaryScreen = () => {
           
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Service:</Text>
-            <Text style={styles.summaryValue}>Heavy Duty Towing</Text>
-          </View>
-          
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Vehicle:</Text>
-            <Text style={styles.summaryValue}>SUV</Text>
+            <Text style={styles.summaryValue}>{serviceName}</Text>
           </View>
           
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Pickup:</Text>
-            <Text style={styles.summaryValue}>23 Main Street, Manama</Text>
+            <Text style={styles.summaryValue} numberOfLines={2}>
+              {pickupAddress || 'Not specified'}
+            </Text>
           </View>
+          
+          {dropoffAddress ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Dropoff:</Text>
+              <Text style={styles.summaryValue} numberOfLines={2}>
+                {dropoffAddress}
+              </Text>
+            </View>
+          ) : null}
           
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Schedule:</Text>
-            <Text style={styles.summaryValue}>ASAP</Text>
+            <Text style={styles.summaryValue}>{getScheduleDisplay()}</Text>
           </View>
+
+          {urgency && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Urgency:</Text>
+              <Text style={styles.summaryValue}>
+                {urgency === 'urgent' ? 'Urgent' : 
+                 urgency === 'moderate' ? 'Moderate' : 'Not Urgent'}
+              </Text>
+            </View>
+          )}
+
+          {vehicleType && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Vehicle:</Text>
+              <Text style={styles.summaryValue}>
+                {makeModel || vehicleType}
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* Price Breakdown */}
@@ -111,34 +281,41 @@ const PriceSummaryScreen = () => {
           
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Base Service Fee</Text>
-            <Text style={styles.priceValue}>120 BHD</Text>
+            <Text style={styles.priceValue}>{baseServiceFee} BHD</Text>
           </View>
           
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Distance Fee (~5 km)</Text>
-            <Text style={styles.priceValue}>15 BHD</Text>
+            <Text style={styles.priceValue}>{distanceFee} BHD</Text>
           </View>
           
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Platform Service Fee</Text>
-            <Text style={styles.priceValue}>5 BHD</Text>
+            <Text style={styles.priceValue}>{platformServiceFee} BHD</Text>
           </View>
           
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Tax (5%)</Text>
-            <Text style={styles.priceValue}>7 BHD</Text>
+            <Text style={styles.priceValue}>{tax} BHD</Text>
           </View>
           
           <View style={styles.divider} />
           
           <View style={styles.priceRow}>
             <Text style={styles.subtotalLabel}>Subtotal</Text>
-            <Text style={styles.subtotalValue}>147.00 BHD</Text>
+            <Text style={styles.subtotalValue}>{subtotal.toFixed(2)} BHD</Text>
           </View>
+          
+          {selectedTip > 0 && (
+            <View style={styles.priceRow}>
+              <Text style={styles.priceLabel}>Tip</Text>
+              <Text style={styles.priceValue}>{selectedTip} BHD</Text>
+            </View>
+          )}
           
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total Amount</Text>
-            <Text style={styles.totalValue}>147.00 BHD</Text>
+            <Text style={styles.totalValue}>{totalAmount.toFixed(2)} BHD</Text>
           </View>
         </View>
 
@@ -338,7 +515,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 50,
+    paddingTop: 45,
     paddingBottom: 15,
     backgroundColor: '#FFFFFF',
   },
@@ -418,6 +595,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#5c5c5c',
     fontWeight: '500',
+    width: 80,
   },
   summaryValue: {
     fontSize: 13,
@@ -538,7 +716,7 @@ const styles = StyleSheet.create({
   },
   promoButtonText: {
     fontSize: 12,
-    color: '#2c2c2c', // Light black color
+    color: '#2c2c2c',
     fontWeight: '600',
     textDecorationLine: 'underline',
   },
@@ -551,7 +729,7 @@ const styles = StyleSheet.create({
     borderColor: '#3c3c3c',
   },
   mvpNotice: {
-    backgroundColor: '#FFE6E6', // Light red background
+    backgroundColor: '#FFE6E6',
     borderRadius: 8,
     padding: 15,
     marginBottom: 20,
@@ -564,12 +742,12 @@ const styles = StyleSheet.create({
   mvpNoticeTitle: {
     fontSize: 12,
     fontWeight: 'bold',
-    color: '#8B0000', // Dark red
+    color: '#8B0000',
     marginBottom: 6,
   },
   mvpNoticeText: {
     fontSize: 11,
-    color: '#FF0000', // Red
+    color: '#FF0000',
     lineHeight: 16,
   },
   paymentOption: {
@@ -679,17 +857,17 @@ const styles = StyleSheet.create({
   calculationCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
-    padding: 24, // Increased padding
+    padding: 24,
     marginBottom: 15,
   },
   calculationHeaderContainer: {
     borderWidth: 2,
     borderColor: '#3c3c3c',
     borderRadius: 8,
-    paddingVertical: 12, // Increased padding
-    paddingHorizontal: 16, // Increased padding
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     alignSelf: 'flex-start',
-    marginBottom: 16, // Increased margin
+    marginBottom: 16,
   },
   calculationTitle: {
     fontSize: 12,
@@ -700,11 +878,11 @@ const styles = StyleSheet.create({
   calculationDivider: {
     height: 1,
     backgroundColor: '#e0e0e0',
-    marginBottom: 16, // Increased margin
+    marginBottom: 16,
   },
   calculationItem: {
     flexDirection: 'row',
-    marginBottom: 14, // Increased margin
+    marginBottom: 14,
     paddingLeft: 5,
   },
   bulletPoint: {
