@@ -33,16 +33,26 @@ const ConfirmBookingScreen = () => {
     }
   };
 
-  // Get all data from previous screens - NO FALLBACKS, use actual params
+  // Get service info
+  const serviceId = getStringParam(params.serviceId);
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
+  
+  // Check service types
+  const isCarRental = serviceId === '11';
+  const isFuelDelivery = serviceId === '3';
+  const isSpareParts = serviceId === '12';
+  const isTowing = serviceId === '1';
+  const isCarWash = serviceId === '9' || serviceId === '10';
+
+  // Get all data from previous screens
   const pickupAddress = getStringParam(params.pickupAddress);
   const pickupLat = getStringParam(params.pickupLat);
   const pickupLng = getStringParam(params.pickupLng);
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  const serviceName = getStringParam(params.serviceName);
-  const servicePrice = getStringParam(params.servicePrice);
-  const serviceCategory = getStringParam(params.serviceCategory);
   
   // Additional details data
   const urgency = getStringParam(params.urgency);
@@ -56,12 +66,14 @@ const ConfirmBookingScreen = () => {
   
   // Schedule data
   const serviceTime = getStringParam(params.serviceTime);
+  const scheduledDate = getStringParam(params.scheduledDate);
+  const scheduledTimeSlot = getStringParam(params.scheduledTimeSlot);
   
   // Payment data
   const selectedTip = parseFloat(getStringParam(params.selectedTip)) || 0;
   const totalAmount = parseFloat(getStringParam(params.totalAmount)) || 0;
 
-  // Vehicle data from VehicleContactInfoScreen - passed through all screens
+  // Vehicle data from VehicleContactInfoScreen
   const vehicleType = getStringParam(params.vehicleType);
   const makeModel = getStringParam(params.makeModel);
   const year = getStringParam(params.year);
@@ -74,16 +86,29 @@ const ConfirmBookingScreen = () => {
   const phoneNumber = getStringParam(params.phoneNumber);
   const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
+  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
+  
+  // NEW FIELDS from VehicleContactInfoScreen
+  const licenseFront = getStringParam(params.licenseFront);
+  const licenseBack = getStringParam(params.licenseBack);
+  const fuelType = getStringParam(params.fuelType);
+  const partDescription = getStringParam(params.partDescription);
+  
+  // Location skipped flag
+  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
 
   useEffect(() => {
     // Log received data for debugging
     console.log('Confirm Booking - Received data:', {
       serviceName,
+      serviceId,
       servicePrice,
       pickupAddress,
       dropoffAddress,
       urgency,
       serviceTime,
+      scheduledDate,
+      scheduledTimeSlot,
       totalAmount,
       vehicleType,
       makeModel,
@@ -91,7 +116,12 @@ const ConfirmBookingScreen = () => {
       fullName,
       phoneNumber,
       color,
-      year
+      year,
+      // New fields
+      hasLicense: !!licenseFront,
+      fuelType,
+      partDescription,
+      locationSkipped
     });
   }, []);
 
@@ -108,86 +138,40 @@ const ConfirmBookingScreen = () => {
         router.back();
         break;
       case 'location':
-        // Navigate to location details screen
+        if (locationSkipped) {
+          Alert.alert('Location Not Required', 'This service does not require a location');
+          return;
+        }
         router.push({
-          pathname: '/(customer)/locationdetails',
+          pathname: '/(customer)/LocationDetails',
           params: {
-            pickupAddress,
-            pickupLat,
-            pickupLng,
-            dropoffAddress,
-            dropoffLat,
-            dropoffLng,
-            serviceName,
-            servicePrice,
-            urgency,
-            serviceTime,
-            vehicleType,
-            makeModel,
-            year,
-            color,
-            licensePlate,
-            fullName,
-            phoneNumber,
-            email
+            ...params
           }
         });
         break;
       case 'schedule':
-        // Navigate to schedule service screen
         router.push({
-          pathname: '/(customer)/scheduleservices',
+          pathname: '/(customer)/ScheduleServices',
           params: {
-            pickupAddress,
-            pickupLat,
-            pickupLng,
-            dropoffAddress,
-            dropoffLat,
-            dropoffLng,
-            serviceName,
-            servicePrice,
-            urgency,
-            serviceTime,
-            vehicleType,
-            makeModel,
-            year,
-            color,
-            licensePlate,
-            fullName,
-            phoneNumber,
-            email
+            ...params
           }
         });
         break;
       case 'contact':
-        // Navigate to vehicle contact info screen
         router.push({
-          pathname: '/(customer)/vehiclecontactinfo',
+          pathname: '/(customer)/VehicleContactInfo',
           params: {
-            pickupAddress,
-            pickupLat,
-            pickupLng,
-            dropoffAddress,
-            dropoffLat,
-            dropoffLng,
-            serviceName,
-            servicePrice,
-            urgency,
-            serviceTime,
-            vehicleType,
-            makeModel,
-            year,
-            color,
-            licensePlate,
-            fullName,
-            phoneNumber,
-            email
+            ...params
           }
         });
         break;
       case 'payment':
-        // Navigate back to price summary
-        router.back();
+        router.push({
+          pathname: '/(customer)/PriceSummary',
+          params: {
+            ...params
+          }
+        });
         break;
       default:
         router.back();
@@ -205,20 +189,14 @@ const ConfirmBookingScreen = () => {
     
     console.log('Booking confirmed');
     
-    // Navigate to tracking/confirmation screen with all data
+    // Navigate to tracking/confirmation screen with ALL data
     router.push({
-      pathname: '/(customer)/findingprovider',
+      pathname: '/(customer)/FindingProvider',
       params: {
         // Pass all data to next screen
-        pickupAddress,
-        dropoffAddress,
-        serviceName,
-        serviceTime,
-        totalAmount: String(totalAmount),
-        vehicleType,
-        licensePlate,
-        fullName,
-        phoneNumber,
+        ...params,
+        confirmed: 'true',
+        confirmationTime: new Date().toISOString(),
       }
     });
   };
@@ -232,6 +210,14 @@ const ConfirmBookingScreen = () => {
     if (serviceTime === 'right_now') {
       return 'Right Now (ASAP)';
     } else if (serviceTime === 'schedule_later') {
+      if (scheduledDate && scheduledTimeSlot) {
+        try {
+          const date = new Date(scheduledDate);
+          return `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
+        } catch {
+          return `${scheduledDate} at ${scheduledTimeSlot}`;
+        }
+      }
       return 'Schedule Later';
     } else {
       return 'Not specified';
@@ -243,11 +229,44 @@ const ConfirmBookingScreen = () => {
     if (makeModel) {
       return makeModel;
     } else if (vehicleType) {
-      // Capitalize first letter
       return vehicleType.charAt(0).toUpperCase() + vehicleType.slice(1);
     } else {
       return 'Not specified';
     }
+  };
+
+  // Get service-specific details
+  const getServiceSpecificDetails = () => {
+    if (isCarRental && licenseFront) {
+      return (
+        <View style={styles.serviceSpecificRow}>
+          <Ionicons name="card-outline" size={16} color="#4CAF50" />
+          <Text style={styles.serviceSpecificText}>License Verified ✓</Text>
+        </View>
+      );
+    }
+    if (isFuelDelivery && fuelType) {
+      return (
+        <View style={styles.serviceSpecificRow}>
+          <Ionicons name="flame-outline" size={16} color="#FF9800" />
+          <Text style={styles.serviceSpecificText}>
+            Fuel: {fuelType === 'petrol' ? 'Petrol' : 
+                  fuelType === 'diesel' ? 'Diesel' : 'Premium'}
+          </Text>
+        </View>
+      );
+    }
+    if (isSpareParts && partDescription) {
+      return (
+        <View style={styles.serviceSpecificRow}>
+          <Ionicons name="construct-outline" size={16} color="#9C27B0" />
+          <Text style={styles.serviceSpecificText} numberOfLines={1}>
+            Part: {partDescription.substring(0, 30)}...
+          </Text>
+        </View>
+      );
+    }
+    return null;
   };
 
   // Parse service price for calculations
@@ -258,7 +277,7 @@ const ConfirmBookingScreen = () => {
   };
 
   const baseServiceFee = parsePrice(servicePrice);
-  const distanceFee = 20; // This would come from actual distance calculation
+  const distanceFee = isCarRental ? 0 : 20; // No distance fee for car rental
   const tax = parseFloat((baseServiceFee * 0.05).toFixed(2));
   const calculatedTotal = baseServiceFee + distanceFee + tax + selectedTip;
 
@@ -297,7 +316,7 @@ const ConfirmBookingScreen = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Review Header - Light blue background with border */}
+        {/* Review Header */}
         <View style={styles.reviewHeader}>
           <View style={styles.checkIconContainer}>
             <Image 
@@ -312,7 +331,7 @@ const ConfirmBookingScreen = () => {
           </Text>
         </View>
 
-        {/* Service Details - Light blue background with blue border */}
+        {/* Service Details */}
         <View style={[styles.card, styles.serviceCard]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
@@ -343,14 +362,22 @@ const ConfirmBookingScreen = () => {
               resizeMode="contain"
             />
             <View style={styles.serviceTextContainer}>
-              <Text style={styles.serviceName}>{serviceName || 'Roadside Towing'}</Text>
+              <Text style={styles.serviceName}>{serviceName || 'Service'}</Text>
               <View style={styles.serviceTags}>
-                <Text style={styles.simpleTag}>Popular</Text>
-                <Text style={styles.plusSign}>+</Text>
                 <Text style={styles.simpleTag}>
-                  {urgency === 'urgent' ? 'Priority Service' : 'Standard Service'}
+                  {isCarRental ? 'Rental' : 
+                   isFuelDelivery ? 'Fuel Delivery' :
+                   isSpareParts ? 'Spare Parts' : 
+                   isCarWash ? 'Car Wash' : 'Service'}
                 </Text>
+                {urgency === 'urgent' && !isCarRental && (
+                  <>
+                    <Text style={styles.plusSign}>+</Text>
+                    <Text style={styles.simpleTag}>Priority Service</Text>
+                  </>
+                )}
               </View>
+              {getServiceSpecificDetails()}
             </View>
           </View>
 
@@ -360,6 +387,8 @@ const ConfirmBookingScreen = () => {
             <View style={styles.detailColumn}>
               <Text style={styles.detailLabel}>Vehicle</Text>
               <Text style={styles.detailValue}>{getVehicleDisplay()}</Text>
+              {year && <Text style={styles.detailSubValue}>{year}</Text>}
+              {color && <Text style={styles.detailSubValue}>{color}</Text>}
             </View>
             
             <View style={styles.licensePlateContainer}>
@@ -369,55 +398,71 @@ const ConfirmBookingScreen = () => {
           </View>
         </View>
 
-        {/* Location Details - White background with border */}
-        <View style={[styles.card, styles.locationCard]}>
-          <View style={styles.cardHeader}>
-            <View style={styles.cardHeaderLeft}>
-              <Ionicons name="location-outline" size={20} color="#3c3c3c" />
-              <Text style={styles.cardTitle}>LOCATION DETAILS</Text>
+        {/* Location Details - Only show if not skipped */}
+        {!locationSkipped && pickupAddress && pickupAddress !== 'Location not required for this service' && (
+          <View style={[styles.card, styles.locationCard]}>
+            <View style={styles.cardHeader}>
+              <View style={styles.cardHeaderLeft}>
+                <Ionicons name="location-outline" size={20} color="#3c3c3c" />
+                <Text style={styles.cardTitle}>LOCATION DETAILS</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => handleEdit('location')}
+                style={styles.editButton}
+              >
+                <Image 
+                  source={require('../../assets/customer/pen.png')}
+                  style={styles.penIcon}
+                  resizeMode="contain"
+                />
+                <Text style={[styles.editText, styles.underlineText]}>Edit</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              onPress={() => handleEdit('location')}
-              style={styles.editButton}
-            >
-              <Image 
-                source={require('../../assets/customer/pen.png')}
-                style={styles.penIcon}
-                resizeMode="contain"
-              />
-              <Text style={[styles.editText, styles.underlineText]}>Edit</Text>
-            </TouchableOpacity>
-          </View>
 
-          <View style={styles.locationItem}>
-            <View style={styles.locationIconBlue}>
-              <View style={styles.locationDot} />
-            </View>
-            <View style={styles.locationTextContainer}>
-              <Text style={styles.locationLabel}>Pickup Location</Text>
-              <Text style={styles.locationAddress}>{pickupAddress || 'Not specified'}</Text>
-            </View>
-          </View>
-
-          {dropoffAddress ? (
             <View style={styles.locationItem}>
-              <View style={styles.locationIconOutline}>
-                <View style={styles.locationDotOutline} />
+              <View style={styles.locationIconBlue}>
+                <View style={styles.locationDot} />
               </View>
               <View style={styles.locationTextContainer}>
-                <Text style={styles.locationLabel}>Drop-off Location</Text>
-                <Text style={styles.locationAddress}>{dropoffAddress}</Text>
+                <Text style={styles.locationLabel}>Pickup Location</Text>
+                <Text style={styles.locationAddress}>{pickupAddress}</Text>
               </View>
             </View>
-          ) : null}
 
-          <View style={styles.distanceButtonFull}>
-            <Ionicons name="navigate-outline" size={18} color="#8c8c8c" />
-            <Text style={styles.distanceText}>Estimated Distance: 5.2 km</Text>
+            {dropoffAddress && (
+              <View style={styles.locationItem}>
+                <View style={styles.locationIconOutline}>
+                  <View style={styles.locationDotOutline} />
+                </View>
+                <View style={styles.locationTextContainer}>
+                  <Text style={styles.locationLabel}>Drop-off Location</Text>
+                  <Text style={styles.locationAddress}>{dropoffAddress}</Text>
+                </View>
+              </View>
+            )}
+
+            {!isCarRental && (
+              <View style={styles.distanceButtonFull}>
+                <Ionicons name="navigate-outline" size={18} color="#8c8c8c" />
+                <Text style={styles.distanceText}>Estimated Distance: 5.2 km</Text>
+              </View>
+            )}
           </View>
-        </View>
+        )}
 
-        {/* Schedule - White background with border */}
+        {/* Location Skipped Banner - Show for Car Rental/Spare Parts */}
+        {locationSkipped && (
+          <View style={[styles.card, styles.locationCard]}>
+            <View style={styles.locationSkippedBanner}>
+              <Ionicons name="information-circle-outline" size={20} color="#68bdee" />
+              <Text style={styles.locationSkippedText}>
+                Location not required for this service
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Schedule */}
         <View style={[styles.card, styles.scheduleCard]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
@@ -450,15 +495,17 @@ const ConfirmBookingScreen = () => {
                 {getScheduleDisplay()}
               </Text>
               <Text style={styles.scheduleSubtitle} numberOfLines={2}>
-                {serviceTime === 'right_now' 
+                {serviceTime === 'right_now' && !isCarRental
                   ? 'Provider will arrive in 15-20 minutes'
+                  : isCarRental && scheduledDate
+                  ? 'Rental scheduled'
                   : 'You will select date and time later'}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* Contact Information - White background with border */}
+        {/* Contact Information */}
         <View style={[styles.card, styles.contactCard]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
@@ -505,7 +552,7 @@ const ConfirmBookingScreen = () => {
           ) : null}
         </View>
 
-        {/* Payment Summary - Light blue background with blue border */}
+        {/* Payment Summary */}
         <View style={[styles.card, styles.paymentCard, styles.paymentCardWithBlueBorder]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
@@ -536,10 +583,12 @@ const ConfirmBookingScreen = () => {
             <Text style={styles.paymentValue}>{baseServiceFee || 75} BHD</Text>
           </View>
 
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>Distance & Fees</Text>
-            <Text style={styles.paymentValue}>{distanceFee} BHD</Text>
-          </View>
+          {!isCarRental && (
+            <View style={styles.paymentRow}>
+              <Text style={styles.paymentLabel}>Distance & Fees</Text>
+              <Text style={styles.paymentValue}>{distanceFee} BHD</Text>
+            </View>
+          )}
 
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>Tax (5%)</Text>
@@ -565,7 +614,7 @@ const ConfirmBookingScreen = () => {
           </View>
         </View>
 
-        {/* Additional Notes - White background with border */}
+        {/* Additional Notes */}
         <View style={[styles.card, styles.notesCard]}>
           <View style={styles.cardHeaderLeft}>
             <Ionicons name="document-text-outline" size={20} color="#3c3c3c" />
@@ -573,6 +622,8 @@ const ConfirmBookingScreen = () => {
           </View>
           {description ? (
             <Text style={styles.notesText}>{description}</Text>
+          ) : isSpareParts && partDescription ? (
+            <Text style={styles.notesText}>{partDescription}</Text>
           ) : (
             <Text style={styles.notesPlaceholder}>No additional notes provided</Text>
           )}
@@ -591,11 +642,13 @@ const ConfirmBookingScreen = () => {
             I agree to the{' '}
             <Text style={styles.linkText}>Terms of Service</Text> and{' '}
             <Text style={styles.linkText}>Privacy Policy</Text>. I understand that
-            cancellation within 2 hours of scheduled time may incur a fee.
+            {isCarRental 
+              ? ' cancellation within 24 hours of scheduled time may incur a fee.'
+              : ' cancellation within 2 hours of scheduled time may incur a fee.'}
           </Text>
         </TouchableOpacity>
 
-        {/* Your Safety Matters - Light blue background */}
+        {/* Your Safety Matters */}
         <View style={styles.safetyNotice}>
           <View style={styles.safetyIconContainer}>
             <Ionicons name="shield-checkmark-outline" size={24} color="#68bdee" />
@@ -609,42 +662,61 @@ const ConfirmBookingScreen = () => {
           </View>
         </View>
 
-        {/* Cancellation Policy - White background with border on text only */}
+        {/* Cancellation Policy */}
         <View style={styles.cancellationCard}>
           <View style={[styles.card, styles.notesCard, { marginBottom: 0 }]}>
             <View style={styles.cardHeaderLeft}>
-              <Text style={styles.cardTitle}>CANCELLATION POLICY</Text>
+              <Text style={styles.cardTitle}>
+                {isCarRental ? 'RENTAL CANCELLATION POLICY' : 'CANCELLATION POLICY'}
+              </Text>
             </View>
           </View>
           
           <View style={styles.policyDividerFull} />
           
-          <View style={styles.policyItem}>
-            <View style={[styles.bulletPoint, styles.blackBullet]} />
-            <Text style={styles.policyText}>
-              Free cancellation up to 2 hours before scheduled time
-            </Text>
-          </View>
-          
-          <View style={styles.policyItem}>
-            <View style={[styles.bulletPoint, styles.blackBullet]} />
-            <Text style={styles.policyText}>
-              50% fee if cancelled within 2 hours of scheduled time
-            </Text>
-          </View>
-          
-          <View style={styles.policyItem}>
-            <View style={[styles.bulletPoint, styles.blackBullet]} />
-            <Text style={styles.policyText}>
-              Full fee if provider has already arrived
-            </Text>
-          </View>
+          {isCarRental ? (
+            <>
+              <View style={styles.policyItem}>
+                <View style={[styles.bulletPoint, styles.blackBullet]} />
+                <Text style={styles.policyText}>
+                  Free cancellation up to 24 hours before scheduled time
+                </Text>
+              </View>
+              <View style={styles.policyItem}>
+                <View style={[styles.bulletPoint, styles.blackBullet]} />
+                <Text style={styles.policyText}>
+                  50% fee if cancelled within 24 hours
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.policyItem}>
+                <View style={[styles.bulletPoint, styles.blackBullet]} />
+                <Text style={styles.policyText}>
+                  Free cancellation up to 2 hours before scheduled time
+                </Text>
+              </View>
+              <View style={styles.policyItem}>
+                <View style={[styles.bulletPoint, styles.blackBullet]} />
+                <Text style={styles.policyText}>
+                  50% fee if cancelled within 2 hours of scheduled time
+                </Text>
+              </View>
+              <View style={styles.policyItem}>
+                <View style={[styles.bulletPoint, styles.blackBullet]} />
+                <Text style={styles.policyText}>
+                  Full fee if provider has already arrived
+                </Text>
+              </View>
+            </>
+          )}
         </View>
 
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* Bottom Container with Warning and Buttons */}
+      {/* Bottom Container */}
       <View style={styles.bottomContainer}>
         <View style={styles.warningBox}>
           <Ionicons name="warning-outline" size={20} color="#F57C00" />
@@ -679,7 +751,7 @@ const ConfirmBookingScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  // ... (keep all your existing styles exactly as they are)
+  // ... (keep all your existing styles exactly as they were)
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -849,7 +921,7 @@ const styles = StyleSheet.create({
   },
   serviceInfo: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 20,
   },
   serviceIconNoContainer: {
@@ -864,12 +936,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
     color: '#3c3c3c',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   serviceTags: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 4,
   },
   simpleTag: {
     fontSize: 10,
@@ -881,6 +954,17 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#3c3c3c',
     fontWeight: '400',
+  },
+  serviceSpecificRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  serviceSpecificText: {
+    fontSize: 11,
+    color: '#4CAF50',
+    fontWeight: '500',
   },
   divider: {
     height: 1,
@@ -968,6 +1052,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#3c3c3c',
     fontWeight: 'bold',
+  },
+  locationSkippedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f5ff',
+    padding: 15,
+    borderRadius: 8,
+    gap: 10,
+  },
+  locationSkippedText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    flex: 1,
   },
   distanceButtonFull: {
     flexDirection: 'row',

@@ -5,11 +5,14 @@ export default function ProviderLayout() {
    <Stack screenOptions={{ headerShown: false }}>
 
       <Stack.Screen
-        name="home"
+        name="Home"
         options={{
           title: "Home",
         }}
       />
+
+
+      
 
     </Stack>
   );

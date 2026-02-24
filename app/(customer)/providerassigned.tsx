@@ -7,27 +7,130 @@ import {
   ScrollView,
   TouchableOpacity,
   Dimensions,
+  Alert,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 const { height, width } = Dimensions.get('window');
 
 const ProviderAssignedScreen = () => {
+  const router = useRouter();
+  const params = useLocalSearchParams();
+
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Get provider data from params
+  const providerName = getStringParam(params.providerName) || 'Ahmed Al-Khalifa';
+  const providerRating = getStringParam(params.providerRating) || '4.8';
+  const providerImage = getStringParam(params.providerImage);
+  const providerPhone = getStringParam(params.providerPhone) || '+973 3312 4567';
+  const vehicleDetails = getStringParam(params.vehicleDetails) || 'White Flatbed Truck';
+  const licensePlate = getStringParam(params.licensePlate) || 'BHR 5432';
+  const estimatedArrival = getStringParam(params.estimatedArrival) || '15';
+  
+  // Get booking data from params
+  const bookingId = getStringParam(params.bookingId);
+  const serviceName = getStringParam(params.serviceName) || 'Roadside Towing';
+  const vehicleType = getStringParam(params.vehicleType) || 'Sedan';
+  const pickupAddress = getStringParam(params.pickupAddress) || '123 Main Street, Manama';
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const totalAmount = getStringParam(params.totalAmount) || '89.25';
+  
+  // Get coordinates for map (if available)
+  const pickupLat = getStringParam(params.pickupLat);
+  const pickupLng = getStringParam(params.pickupLng);
+  const providerLat = getStringParam(params.providerLat);
+  const providerLng = getStringParam(params.providerLng);
+
+  // Check if this is a "no providers" scenario
+  const noProviders = getStringParam(params.noProviders) === 'true';
+
   const handleCall = () => {
-    console.log('Call provider');
+    if (providerPhone) {
+      Linking.openURL(`tel:${providerPhone}`);
+    } else {
+      Alert.alert('Error', 'Provider phone number not available');
+    }
   };
 
   const handleMessage = () => {
-    console.log('Message provider');
+    // Navigate to chat screen with provider
+    router.push({
+      pathname: '/(customer)/Chat',
+      params: {
+        providerName,
+        bookingId,
+      }
+    });
   };
 
   const handleTrackProvider = () => {
-    console.log('Track provider');
+    if (pickupLat && pickupLng && providerLat && providerLng) {
+      // Navigate to live tracking screen with coordinates
+      router.push({
+        pathname: '/(customer)/LiveTracking',
+        params: {
+          pickupLat,
+          pickupLng,
+          providerLat,
+          providerLng,
+          providerName,
+          estimatedArrival,
+        }
+      });
+    } else {
+      Alert.alert('Coming Soon', 'Live tracking will be available shortly');
+    }
   };
 
   const handleCancelRequest = () => {
-    console.log('Cancel request');
+    Alert.alert(
+      'Cancel Request',
+      'Are you sure you want to cancel this service request?',
+      [
+        { text: 'No', style: 'cancel' },
+        { 
+          text: 'Yes, Cancel', 
+          style: 'destructive',
+          onPress: () => {
+            // API call to cancel booking
+            console.log('Cancelling booking:', bookingId);
+            router.back();
+          }
+        }
+      ]
+    );
   };
+
+  // If no providers found, show appropriate message
+  if (noProviders) {
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.iconContainer}>
+            <Ionicons name="alert-circle-outline" size={80} color="#ff4444" />
+          </View>
+          <Text style={styles.title}>No Providers Available</Text>
+          <Text style={styles.subtitle}>
+            We couldn't find any providers in your area at this time. Please try again later.
+          </Text>
+          
+          <TouchableOpacity
+            style={[styles.trackButton, { marginTop: 30 }]}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.trackButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -55,7 +158,7 @@ const ProviderAssignedScreen = () => {
           {/* ETA Badge */}
           <View style={styles.etaBadge}>
             <Text style={styles.etaLabel}>ETA</Text>
-            <Text style={styles.etaTime}>15 minutes</Text>
+            <Text style={styles.etaTime}>{estimatedArrival} minutes</Text>
           </View>
 
           {/* Google Maps Placeholder - Replace with actual MapView */}
@@ -65,18 +168,22 @@ const ProviderAssignedScreen = () => {
             </View>
             <Text style={styles.mapLabel}>Live Tracking Map</Text>
             <Text style={styles.mapSubLabel}>
-              Provider arriving from 2.3 km away
+              Provider arriving from {getStringParam(params.distance) || '2.3'} km away
             </Text>
             
             {/* Location Markers */}
             <View style={styles.locationMarkers}>
               <View style={styles.pickupMarker}>
                 <View style={styles.markerDot} />
-                <Text style={styles.markerText}>Pickup: 123 Main St</Text>
+                <Text style={styles.markerText} numberOfLines={1}>
+                  Pickup: {pickupAddress}
+                </Text>
               </View>
               <View style={styles.providerMarker}>
                 <Ionicons name="car" size={16} color="#68bdee" />
-                <Text style={styles.markerText}>Provider is moving</Text>
+                <Text style={styles.markerText} numberOfLines={1}>
+                  {providerName} is on the way
+                </Text>
               </View>
             </View>
           </View>
@@ -87,19 +194,23 @@ const ProviderAssignedScreen = () => {
           <View style={styles.providerHeader}>
             {/* Profile Image */}
             <View style={styles.profileImageContainer}>
-              <Ionicons name="person" size={40} color="#68bdee" />
+              {providerImage ? (
+                <Image source={{ uri: providerImage }} style={styles.profileImage} />
+              ) : (
+                <Ionicons name="person" size={40} color="#68bdee" />
+              )}
             </View>
 
             {/* Provider Info */}
             <View style={styles.providerInfo}>
-              <Text style={styles.providerName}>Ahmed Al-Khalifa</Text>
+              <Text style={styles.providerName}>{providerName}</Text>
               <View style={styles.ratingContainer}>
                 <Ionicons name="star" size={16} color="#3c3c3c" />
-                <Text style={styles.ratingText}>4.8</Text>
-                <Text style={styles.reviewsText}>• 127 reviews</Text>
+                <Text style={styles.ratingText}>{providerRating}</Text>
+                <Text style={styles.reviewsText}>• {getStringParam(params.totalRatings) || '127'} reviews</Text>
               </View>
-              <Text style={styles.vehicleInfo}>White Flatbed Truck</Text>
-              <Text style={styles.plateNumber}>BHR 5432</Text>
+              <Text style={styles.vehicleInfo}>{vehicleDetails}</Text>
+              <Text style={styles.plateNumber}>{licensePlate}</Text>
             </View>
           </View>
 
@@ -128,45 +239,59 @@ const ProviderAssignedScreen = () => {
           </View>
         </View>
 
-        {/* Service Details Card - With light black border and divider */}
+        {/* Service Details Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>SERVICE DETAILS</Text>
           
-          {/* Divider line with margins */}
           <View style={styles.cardDivider} />
 
           <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Booking ID</Text>
+            <Text style={styles.detailValue}>{bookingId || 'N/A'}</Text>
+          </View>
+
+          <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Service</Text>
-            <Text style={styles.detailValue}>Roadside Towing</Text>
+            <Text style={styles.detailValue}>{serviceName}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Vehicle</Text>
-            <Text style={styles.detailValue}>Sedan</Text>
+            <Text style={styles.detailValue}>{vehicleType}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Pickup</Text>
-            <Text style={styles.detailValue}>23 Main Street, Manama</Text>
+            <Text style={styles.detailValue} numberOfLines={2}>
+              {pickupAddress}
+            </Text>
           </View>
+
+          {dropoffAddress ? (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Dropoff</Text>
+              <Text style={styles.detailValue} numberOfLines={2}>
+                {dropoffAddress}
+              </Text>
+            </View>
+          ) : null}
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Estimated Cost</Text>
-            <Text style={styles.detailValueHighlight}>89.25 BHD</Text>
+            <Text style={styles.detailValueHighlight}>{totalAmount} BHD</Text>
           </View>
         </View>
 
-        {/* Status Card - With light black border and divider */}
+        {/* Status Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>STATUS</Text>
           
-          {/* Divider line with margins */}
           <View style={styles.cardDivider} />
 
-          {/* Status Item 1 - Active (like checked checkbox) */}
+          {/* Status Item 1 - Active */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxActive}>
-              {true && <View style={styles.statusDotActive} />}
+              <View style={styles.statusDotActive} />
             </View>
             <View style={styles.statusTextContainer}>
               <Text style={styles.statusTextActive}>Provider Assigned</Text>
@@ -174,16 +299,16 @@ const ProviderAssignedScreen = () => {
             </View>
           </View>
 
-          {/* Status Item 2 - Inactive (like unchecked checkbox) */}
+          {/* Status Item 2 - Inactive (current) */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxInactive} />
             <View style={styles.statusTextContainer}>
               <Text style={styles.statusTextInactive}>Provider On the Way</Text>
-              <Text style={styles.statusTimeInactive}>ETA: 15 minutes</Text>
+              <Text style={styles.statusTimeInactive}>ETA: {estimatedArrival} minutes</Text>
             </View>
           </View>
 
-          {/* Status Item 3 - Inactive (like unchecked checkbox) */}
+          {/* Status Item 3 - Inactive */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxInactive} />
             <View style={styles.statusTextContainer}>
@@ -355,6 +480,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#3c3c3c',
     fontWeight: '500',
+    maxWidth: width * 0.6,
   },
   providerCard: {
     width: '100%',
@@ -379,6 +505,11 @@ const styles = StyleSheet.create({
     marginRight: 15,
     borderWidth: 2,
     borderColor: '#68bdee',
+    overflow: 'hidden',
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
   },
   providerInfo: {
     flex: 1,
@@ -464,7 +595,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  // New card style with border
   card: {
     width: '100%',
     backgroundColor: '#FFFFFF',
@@ -500,23 +630,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#5c5c5c',
     fontWeight: '500',
-    flex: 1,
+    flex: 0.4,
   },
   detailValue: {
     fontSize: 13,
     color: '#3c3c3c',
     fontWeight: 'bold',
-    flex: 1,
+    flex: 0.6,
     textAlign: 'right',
   },
   detailValueHighlight: {
-    fontSize: 13,
-    color: '#3c3c3c',
+    fontSize: 14,
+    color: '#68bdee',
     fontWeight: 'bold',
-    flex: 1,
+    flex: 0.6,
     textAlign: 'right',
   },
-  // Status Item Styles - Matching remember me checkbox
   statusItem: {
     flexDirection: 'row',
     alignItems: 'flex-start',

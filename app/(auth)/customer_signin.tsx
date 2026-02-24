@@ -86,7 +86,7 @@ const SignInScreen = () => {
 
   const fetchUserDataFromBackend = async (firebaseUserId: string): Promise<UserData | null> => {
     try {
-      const backendUrl = "https://render-baceknd.com";
+      const backendUrl = 'https://yhiw-backend.onrender.com';
       if (!backendUrl) {
         console.warn('Backend URL is not defined');
         return null;
@@ -183,7 +183,7 @@ const SignInScreen = () => {
       }
 
       // Navigate directly without alert (cleaner UX)
-      router.replace('/(customer)/home');
+      router.replace('/(customer)/Home');
 
     } catch (error: unknown) {
       console.error('Firebase signin error:', error);
@@ -245,7 +245,7 @@ const SignInScreen = () => {
   };
 
   const handleContinueAsGuest = () => {
-    router.push('/(customer)/home');
+    router.push('/(customer)/Home');
   };
 
   const handleForgotPassword = () => {

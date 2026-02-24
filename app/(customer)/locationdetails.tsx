@@ -89,6 +89,7 @@ const LocationDetailsScreen = () => {
   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
   const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGettingLocation, setIsGettingLocation] = useState(true);
   const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | null>(null);
   const [region, setRegion] = useState<Region>({
     latitude: 26.2285,
@@ -97,12 +98,24 @@ const LocationDetailsScreen = () => {
     longitudeDelta: 0.05,
   });
 
-  // Get service info from params (but not displaying it)
-  const serviceInfo = {
-    name: params.serviceName || 'Quick Tow (Flatbed)',
-    price: params.servicePrice || '75 BHD',
-    category: params.serviceCategory || 'Towing',
+  // Helper function to safely get string from params
+  const getStringParam = (param: string | string[] | undefined): string => {
+    if (!param) return '';
+    return Array.isArray(param) ? param[0] : param;
   };
+
+  // Get all service info from params
+  const serviceId = getStringParam(params.serviceId);
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
+  
+  // Get service-specific requirements
+  const requiresDestination = getStringParam(params.requiresDestination);
+  const requiresFuelType = getStringParam(params.requiresFuelType);
+  const requiresLicense = getStringParam(params.requiresLicense);
+  const hasBooking = getStringParam(params.hasBooking);
+  const requiresTextDescription = getStringParam(params.requiresTextDescription);
 
   const savedLocations = [
     {
@@ -122,28 +135,110 @@ const LocationDetailsScreen = () => {
   ];
 
   useEffect(() => {
-    getCurrentLocation();
+    getCurrentLocationAndSetDefault();
   }, []);
 
+  const getCurrentLocationAndSetDefault = async () => {
+    setIsGettingLocation(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission denied', 
+          'Please enable location services to automatically set your current location. You can manually enter a location instead.'
+        );
+        setIsGettingLocation(false);
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      
+      // Get address from coordinates (reverse geocoding)
+      const [address] = await Location.reverseGeocodeAsync({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+
+      // Format the address
+      const formattedAddress = address ? 
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '') 
+        : 'Current Location';
+
+      // Set pickup location to current location
+      setPickupLocation(formattedAddress || 'Current Location');
+      setPickupCoordinates({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+
+      // Update map region
+      const newRegion = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+      setRegion(newRegion);
+      mapRef.current?.animateToRegion(newRegion, 1000);
+
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert(
+        'Error', 
+        'Failed to get your current location. Please enter your pickup location manually.'
+      );
+    } finally {
+      setIsGettingLocation(false);
+    }
+  };
+
   const getCurrentLocation = async () => {
+    setIsGettingLocation(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission denied', 'Please enable location services to use this feature.');
+        setIsGettingLocation(false);
         return;
       }
 
       const location = await Location.getCurrentPositionAsync({});
+      
+      // Get address from coordinates
+      const [address] = await Location.reverseGeocodeAsync({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+
+      const formattedAddress = address ? 
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '') 
+        : 'Current Location';
+
+      // Update pickup location if it's empty, otherwise just update the map
+      if (!pickupCoordinates) {
+        setPickupLocation(formattedAddress || 'Current Location');
+        setPickupCoordinates({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        });
+      }
+
       const newRegion = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
       };
       setRegion(newRegion);
       mapRef.current?.animateToRegion(newRegion, 1000);
+      
     } catch (error) {
       console.error('Error getting location:', error);
+      Alert.alert('Error', 'Failed to get your current location. Please try again.');
+    } finally {
+      setIsGettingLocation(false);
     }
   };
 
@@ -176,7 +271,7 @@ const LocationDetailsScreen = () => {
         setShowDropoffSuggestions(filtered.length > 0);
       }
       setIsLoading(false);
-    }, 500); // Simulate network delay
+    }, 500);
   };
 
   const handlePickupChange = (text: string) => {
@@ -301,19 +396,33 @@ const LocationDetailsScreen = () => {
       return;
     }
 
-    // Navigate to next step with correct route name
+    // Navigate to next step with ALL params from previous screen
     router.push({
-      pathname: '/(customer)/vehiclecontactinfo',
+      pathname: '/(customer)/VehicleContactInfo',
       params: {
+        // Location data
         pickupAddress: pickupLocation,
-        pickupLat: pickupCoordinates?.latitude,
-        pickupLng: pickupCoordinates?.longitude,
+        pickupLat: pickupCoordinates?.latitude?.toString() || '',
+        pickupLng: pickupCoordinates?.longitude?.toString() || '',
         dropoffAddress: dropoffLocation || '',
-        dropoffLat: dropoffCoordinates?.latitude || '',
-        dropoffLng: dropoffCoordinates?.longitude || '',
-        serviceName: serviceInfo.name,
-        servicePrice: serviceInfo.price,
-        serviceCategory: serviceInfo.category,
+        dropoffLat: dropoffCoordinates?.latitude?.toString() || '',
+        dropoffLng: dropoffCoordinates?.longitude?.toString() || '',
+        
+        // Service data (passed from ServiceDetails)
+        serviceId: serviceId,
+        serviceName: serviceName,
+        servicePrice: servicePrice,
+        serviceCategory: serviceCategory,
+        
+        // IMPORTANT: Pass all service-specific requirements
+        requiresDestination: requiresDestination || 'false',
+        requiresFuelType: requiresFuelType || 'false',
+        requiresLicense: requiresLicense || 'false',
+        hasBooking: hasBooking || 'false',
+        requiresTextDescription: requiresTextDescription || 'false',
+        
+        // Flag for location (not skipped in this case)
+        locationSkipped: 'false'
       }
     });
   };
@@ -347,6 +456,9 @@ const LocationDetailsScreen = () => {
           <Text style={styles.headerTitle}>Location Details</Text>
           <Text style={styles.headerSubtitle}>Step 1 of 7</Text>
         </View>
+        {isGettingLocation && (
+          <ActivityIndicator size="small" color="#68bdee" />
+        )}
       </View>
 
       {/* Progress Bar */}
@@ -364,6 +476,12 @@ const LocationDetailsScreen = () => {
       >
         {/* Map View */}
         <View style={styles.mapContainer}>
+          {isGettingLocation && (
+            <View style={styles.mapLoader}>
+              <ActivityIndicator size="large" color="#68bdee" />
+              <Text style={styles.mapLoaderText}>Getting your location...</Text>
+            </View>
+          )}
           <MapView
             ref={mapRef}
             style={styles.map}
@@ -375,6 +493,7 @@ const LocationDetailsScreen = () => {
               <Marker
                 coordinate={pickupCoordinates}
                 title="Pickup Location"
+                description={pickupLocation}
                 pinColor="#68bdee"
               />
             )}
@@ -382,6 +501,7 @@ const LocationDetailsScreen = () => {
               <Marker
                 coordinate={dropoffCoordinates}
                 title="Dropoff Location"
+                description={dropoffLocation}
                 pinColor="#ff4444"
               />
             )}
@@ -404,10 +524,25 @@ const LocationDetailsScreen = () => {
           <TouchableOpacity
             style={styles.locationButton}
             onPress={handleLocationPress}
+            disabled={isGettingLocation}
           >
-            <Ionicons name="navigate" size={24} color="#3c3c3c" />
+            <Ionicons 
+              name="navigate" 
+              size={24} 
+              color={isGettingLocation ? "#b0b0b0" : "#3c3c3c"} 
+            />
           </TouchableOpacity>
         </View>
+
+        {/* Current Location Indicator */}
+        {pickupCoordinates && !isGettingLocation && (
+          <View style={styles.currentLocationIndicator}>
+            <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+            <Text style={styles.currentLocationText}>
+              Pickup location set to your current location
+            </Text>
+          </View>
+        )}
 
         {/* Form Section */}
         <View style={styles.formSection}>
@@ -434,12 +569,12 @@ const LocationDetailsScreen = () => {
                   }
                 }}
                 onBlur={() => {
-                  // Delay hiding to allow for selection
                   setTimeout(() => {
                     setFocusedInput(null);
                     setShowPickupSuggestions(false);
                   }, 200);
                 }}
+                editable={!isGettingLocation}
               />
               {pickupLocation ? (
                 <TouchableOpacity 
@@ -452,8 +587,13 @@ const LocationDetailsScreen = () => {
                 <TouchableOpacity 
                   style={styles.inputIcon}
                   onPress={() => getCurrentLocation()}
+                  disabled={isGettingLocation}
                 >
-                  <Ionicons name="navigate-outline" size={20} color="#68bdee" />
+                  <Ionicons 
+                    name="navigate-outline" 
+                    size={20} 
+                    color={isGettingLocation ? "#b0b0b0" : "#68bdee"} 
+                  />
                 </TouchableOpacity>
               )}
             </View>
@@ -505,7 +645,6 @@ const LocationDetailsScreen = () => {
                   }
                 }}
                 onBlur={() => {
-                  // Delay hiding to allow for selection
                   setTimeout(() => {
                     setFocusedInput(null);
                     setShowDropoffSuggestions(false);
@@ -602,12 +741,16 @@ const LocationDetailsScreen = () => {
       {/* Continue Button */}
       <View style={styles.bottomContainer}>
         <TouchableOpacity
-          style={[styles.continueButton, !pickupCoordinates && styles.continueButtonDisabled]}
+          style={[styles.continueButton, (!pickupCoordinates || isGettingLocation) && styles.continueButtonDisabled]}
           onPress={handleContinue}
-          disabled={!pickupCoordinates}
+          disabled={!pickupCoordinates || isGettingLocation}
           activeOpacity={0.8}
         >
-          <Text style={styles.continueButtonText}>Continue</Text>
+          {isGettingLocation ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.continueButtonText}>Continue</Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -682,6 +825,22 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  mapLoader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  mapLoaderText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#3c3c3c',
+  },
   mapLabel: {
     position: 'absolute',
     top: '50%',
@@ -716,6 +875,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,
+  },
+  currentLocationIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginTop: 1,
+  },
+  currentLocationText: {
+    fontSize: 12,
+    color: '#2E7D32',
+    marginLeft: 8,
+    flex: 1,
   },
   formSection: {
     backgroundColor: '#FFFFFF',

@@ -1,4 +1,9 @@
 
+
+
+
+
+
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useEffect } from 'react';
@@ -81,7 +86,7 @@ const SignInScreen = () => {
 
   const fetchUserDataFromBackend = async (firebaseUserId: string): Promise<UserData | null> => {
     try {
-      const backendUrl = "https://render-baceknd.com";
+      const backendUrl = 'https://yhiw-backend.onrender.com';
       if (!backendUrl) {
         console.warn('Backend URL is not defined');
         return null;
@@ -148,7 +153,7 @@ const SignInScreen = () => {
 
         Alert.alert(
           'Access Denied',
-          'This account is registered as a customer, not a provider. Please use the provider app to sign in.',
+          'This account is registered as a customer, not a provider. Please use the customer to sign in.',
           [{ text: 'OK' }]
         );
         setIsLoading(false);
@@ -178,7 +183,7 @@ const SignInScreen = () => {
       }
 
       // Navigate directly without alert (cleaner UX)
-      router.replace('/(provider)/home');
+      router.replace('/(provider)/Home');
 
     } catch (error: unknown) {
       console.error('Firebase signin error:', error);
@@ -236,11 +241,11 @@ const SignInScreen = () => {
   };
 
   const handleSignUpNavigation = () => {
-    router.push('/(auth)/provider_signup' as any);
+    router.push('/provider_signup');  
   };
 
   const handleContinueAsGuest = () => {
-    router.push('/(provider)/home');
+    router.push('/(provider)/Home');
   };
 
   const handleForgotPassword = () => {
@@ -400,20 +405,20 @@ const SignInScreen = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Guest Button */}
+        {/* 
         <TouchableOpacity
           style={[styles.guestButton, isLoading && styles.disabledButton]}
           onPress={handleContinueAsGuest}
           disabled={isLoading}
         >
           <Text style={styles.guestButtonText}>CONTINUE AS A GUEST</Text>
-        </TouchableOpacity>
+        </TouchableOpacity> */}
 
         {/* Sign Up Link with Underline */}
         <View style={styles.signUpContainer}>
           <Text style={styles.signUpText}>DON'T HAVE AN ACCOUNT? </Text>
           <TouchableOpacity onPress={handleSignUpNavigation} disabled={isLoading}>
-            <Text style={styles.signUpLink}>SIGN UP</Text>
+            <Text style={styles.signUpLink}>APPLY Now</Text>
           </TouchableOpacity>
         </View>
       </View>

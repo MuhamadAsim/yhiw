@@ -5,14 +5,14 @@ export default function CustomerLayout() {
    <Stack screenOptions={{ headerShown: false }}>
 
       <Stack.Screen
-        name="home"
+        name="Home"
         options={{
           title: "Home",
         }}
       />
 
       <Stack.Screen
-        name="services"
+        name="Services"
         options={{
           title: "Services Screen",
         }}
@@ -20,7 +20,7 @@ export default function CustomerLayout() {
 
 
         <Stack.Screen
-        name="servicedetails"
+        name="ServiceDetails"
         options={{
           title: "Service Details Screen",
         }}
@@ -28,14 +28,14 @@ export default function CustomerLayout() {
 
 
         <Stack.Screen
-        name="locationdetails"
+        name="LocationDetails"
         options={{
           title: "location details Screen",
         }}
       />
       
       <Stack.Screen
-        name="findingprovider"
+        name="FindingProvider"
         options={{
           title: "finding provider Screen",
         }}

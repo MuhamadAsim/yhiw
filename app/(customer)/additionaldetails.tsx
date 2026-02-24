@@ -47,16 +47,17 @@ const AdditionalDetailsScreen = () => {
     return Array.isArray(param) ? param[0] : param;
   };
 
-  // Get data from previous screens (LocationDetails + VehicleContactInfo)
+  // Get data from previous screens
   const pickupAddress = getStringParam(params.pickupAddress);
   const pickupLat = getStringParam(params.pickupLat);
   const pickupLng = getStringParam(params.pickupLng);
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
-  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
-  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
+  const serviceId = getStringParam(params.serviceId);
   
   // Vehicle data from VehicleContactInfoScreen
   const vehicleType = getStringParam(params.vehicleType);
@@ -72,6 +73,22 @@ const AdditionalDetailsScreen = () => {
   const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
   const saveVehicle = getStringParam(params.saveVehicle) === 'true';
+  
+  // NEW FIELDS from VehicleContactInfoScreen
+  const licenseFront = getStringParam(params.licenseFront);
+  const licenseBack = getStringParam(params.licenseBack);
+  const fuelType = getStringParam(params.fuelType);
+  const partDescription = getStringParam(params.partDescription);
+  
+  // Flag for location skipped
+  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
+
+  // Check service types
+  const isCarRental = serviceId === '11';
+  const isFuelDelivery = serviceId === '3';
+  const isSpareParts = serviceId === '12';
+  const isTowing = serviceId === '1';
+  const isCarWash = serviceId === '9' || serviceId === '10';
 
   useEffect(() => {
     // Log received data for debugging
@@ -79,11 +96,17 @@ const AdditionalDetailsScreen = () => {
       pickupAddress,
       dropoffAddress,
       serviceName,
+      serviceId,
       vehicleType,
       makeModel,
       licensePlate,
       fullName,
-      phoneNumber
+      phoneNumber,
+      // New fields
+      hasLicense: !!licenseFront,
+      fuelType,
+      partDescription,
+      locationSkipped
     });
   }, []);
 
@@ -165,94 +188,119 @@ const AdditionalDetailsScreen = () => {
       return;
     }
 
-    // Navigate to schedule service screen with all collected data
+    // Build params object with ALL data including new fields
+    const paramsToSend: any = {
+      // Location data
+      pickupAddress,
+      pickupLat,
+      pickupLng,
+      dropoffAddress,
+      dropoffLat,
+      dropoffLng,
+      
+      // Service data
+      serviceName,
+      servicePrice,
+      serviceCategory,
+      serviceId,
+      
+      // Vehicle data
+      vehicleType,
+      makeModel,
+      year,
+      color,
+      licensePlate,
+      selectedVehicle,
+      
+      // Contact data
+      fullName,
+      phoneNumber,
+      email,
+      emergencyContact,
+      saveVehicle: String(saveVehicle),
+      
+      // NEW FIELDS - Pass through from VehicleContactInfo
+      licenseFront,
+      licenseBack,
+      fuelType,
+      partDescription,
+      
+      // Location skipped flag
+      locationSkipped: String(locationSkipped),
+      
+      // Additional details from this screen
+      urgency: selectedUrgency,
+      issues: JSON.stringify(selectedIssues),
+      description,
+      photos: JSON.stringify(photos),
+      hasInsurance: String(hasInsurance),
+      needSpecificTruck: String(needSpecificTruck),
+      hasModifications: String(hasModifications),
+      needMultilingual: String(needMultilingual),
+    };
+
+    // Navigate to schedule service screen
     router.push({
-      pathname: '/(customer)/scheduleservices',
-      params: {
-        // Location data from LocationDetailsScreen
-        pickupAddress,
-        pickupLat,
-        pickupLng,
-        dropoffAddress,
-        dropoffLat,
-        dropoffLng,
-        
-        // Service data from LocationDetailsScreen
-        serviceName,
-        servicePrice,
-        serviceCategory,
-        
-        // Vehicle data from VehicleContactInfoScreen
-        vehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-        selectedVehicle,
-        
-        // Contact data from VehicleContactInfoScreen
-        fullName,
-        phoneNumber,
-        email,
-        emergencyContact,
-        saveVehicle: String(saveVehicle),
-        
-        // Additional details from this screen
-        urgency: selectedUrgency,
-        issues: JSON.stringify(selectedIssues),
-        description,
-        photos: JSON.stringify(photos),
-        hasInsurance: String(hasInsurance),
-        needSpecificTruck: String(needSpecificTruck),
-        hasModifications: String(hasModifications),
-        needMultilingual: String(needMultilingual),
-      }
+      pathname: '/(customer)/ScheduleServices',
+      params: paramsToSend
     });
   };
 
   const handleSkip = () => {
-    // Navigate to schedule service screen with minimal data
+    // Build params object with minimal data but include all required fields
+    const paramsToSend: any = {
+      // Location data
+      pickupAddress,
+      pickupLat,
+      pickupLng,
+      dropoffAddress,
+      dropoffLat,
+      dropoffLng,
+      
+      // Service data
+      serviceName,
+      servicePrice,
+      serviceCategory,
+      serviceId,
+      
+      // Vehicle data
+      vehicleType,
+      makeModel,
+      year,
+      color,
+      licensePlate,
+      selectedVehicle,
+      
+      // Contact data
+      fullName,
+      phoneNumber,
+      email,
+      emergencyContact,
+      saveVehicle: String(saveVehicle),
+      
+      // NEW FIELDS - Pass through from VehicleContactInfo
+      licenseFront,
+      licenseBack,
+      fuelType,
+      partDescription,
+      
+      // Location skipped flag
+      locationSkipped: String(locationSkipped),
+      
+      // Default values for skipped step
+      urgency: 'moderate',
+      issues: JSON.stringify([]),
+      description: '',
+      photos: JSON.stringify([]),
+      hasInsurance: 'false',
+      needSpecificTruck: 'false',
+      hasModifications: 'false',
+      needMultilingual: 'false',
+    };
+
     router.push({
-      pathname: '/(customer)/scheduleservices',
-      params: {
-        // Location data
-        pickupAddress,
-        pickupLat,
-        pickupLng,
-        dropoffAddress,
-        dropoffLat,
-        dropoffLng,
-        
-        // Service data
-        serviceName,
-        servicePrice,
-        serviceCategory,
-        
-        // Vehicle data from VehicleContactInfoScreen
-        vehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-        selectedVehicle,
-        
-        // Contact data from VehicleContactInfoScreen
-        fullName,
-        phoneNumber,
-        email,
-        emergencyContact,
-        saveVehicle: String(saveVehicle),
-        
-        // Default values for skipped step
-        urgency: 'moderate',
-        issues: JSON.stringify([]),
-        description: '',
-        photos: JSON.stringify([]),
-        hasInsurance: 'false',
-        needSpecificTruck: 'false',
-        hasModifications: 'false',
-        needMultilingual: 'false',
-      }
+      pathname: '/(customer)/ScheduleServices',
+      params: paramsToSend
     });
   };
 
@@ -296,6 +344,29 @@ const AdditionalDetailsScreen = () => {
     setPhotos(photos.filter((_, i) => i !== index));
   };
 
+  // Get step number based on service
+  const getStepNumber = () => {
+    if (isCarRental) return 4; // Location (1) → Vehicle+License (2) → Additional (3) → Schedule (4)
+    if (isFuelDelivery) return 4;
+    if (isSpareParts) return 4;
+    return 3; // Normal flow: Location (1) → Vehicle (2) → Additional (3)
+  };
+
+  // Get total steps based on service
+  const getTotalSteps = () => {
+    if (isCarRental) return 7;
+    if (isFuelDelivery) return 7;
+    if (isSpareParts) return 7;
+    return 7;
+  };
+
+  // Calculate progress percentage
+  const getProgressPercentage = () => {
+    const step = getStepNumber();
+    const total = getTotalSteps();
+    return `${(step / total) * 100}%`;
+  };
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -309,16 +380,29 @@ const AdditionalDetailsScreen = () => {
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>Additional Details</Text>
-          <Text style={styles.headerSubtitle}>Step 3 of 10</Text>
+          <Text style={styles.headerSubtitle}>Step {getStepNumber()} of {getTotalSteps()}</Text>
         </View>
       </View>
 
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: '30%' }]} />
+          <View style={[styles.progressFill, { width: getProgressPercentage()  as any}]} />
         </View>
       </View>
+
+      {/* Summary of previous selections (optional) */}
+      {(isCarRental || isFuelDelivery || isSpareParts) && (
+        <View style={styles.summaryBanner}>
+          <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+          <Text style={styles.summaryText}>
+            {isCarRental && 'License uploaded • '}
+            {isFuelDelivery && `Fuel: ${fuelType === 'petrol' ? 'Petrol' : fuelType === 'diesel' ? 'Diesel' : 'Premium'} • `}
+            {isSpareParts && 'Part details provided • '}
+            Ready for additional info
+          </Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scrollView}
@@ -373,176 +457,186 @@ const AdditionalDetailsScreen = () => {
           </View>
         </View>
 
-        {/* Issues Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>
-            What's the issue? (Select all that apply)
-          </Text>
-
-          <View style={styles.issuesGrid}>
-            {issueOptions.map((issue) => (
-              <TouchableOpacity
-                key={issue.id}
-                style={[
-                  styles.issueCard,
-                  selectedIssues.includes(issue.id) && styles.issueCardSelected,
-                ]}
-                onPress={() => handleToggleIssue(issue.id)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.issueContentRow}>
-                  <View style={styles.issueCheckbox}>
-                    {selectedIssues.includes(issue.id) && (
-                      <Ionicons name="checkmark" size={16} color="#3c3c3c" />
-                    )}
-                  </View>
-                  <Image
-                    source={issue.icon}
-                    style={styles.issueIcon}
-                    resizeMode="contain"
-                  />
-                </View>
-                <Text style={styles.issueLabel}>{issue.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* Description Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Describe the situation (Optional)</Text>
-          <View style={styles.textAreaContainer}>
-            <TextInput
-              style={styles.textArea}
-              placeholder="Please provide any additional details that might help the provider prepare better. For example: location details, specific symptoms, what you've already tried, etc."
-              placeholderTextColor="#b0b0b0"
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              maxLength={500}
-              textAlignVertical="top"
-            />
-          </View>
-          <View style={styles.textAreaFooter}>
-            <Text style={styles.textAreaHelper}>
-              Be as detailed as possible for better service
+        {/* Issues Section - Hide for certain services */}
+        {!isCarWash && !isCarRental && !isFuelDelivery && !isSpareParts && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>
+              What's the issue? (Select all that apply)
             </Text>
-            <Text style={styles.characterCount}>
-              {description.length} / 500
-            </Text>
-          </View>
-        </View>
 
-        {/* Photos Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Add photos (Optional)</Text>
-
-          <View style={styles.photosContainer}>
-            {photos.map((photo, index) => (
-              <View key={index} style={styles.photoItem}>
-                <Image source={{ uri: photo }} style={styles.photoImage} />
+            <View style={styles.issuesGrid}>
+              {issueOptions.map((issue) => (
                 <TouchableOpacity
-                  style={styles.removePhotoButton}
-                  onPress={() => handleRemovePhoto(index)}
+                  key={issue.id}
+                  style={[
+                    styles.issueCard,
+                    selectedIssues.includes(issue.id) && styles.issueCardSelected,
+                  ]}
+                  onPress={() => handleToggleIssue(issue.id)}
+                  activeOpacity={0.7}
                 >
-                  <Ionicons name="close-circle" size={24} color="#F44336" />
+                  <View style={styles.issueContentRow}>
+                    <View style={styles.issueCheckbox}>
+                      {selectedIssues.includes(issue.id) && (
+                        <Ionicons name="checkmark" size={16} color="#3c3c3c" />
+                      )}
+                    </View>
+                    <Image
+                      source={issue.icon}
+                      style={styles.issueIcon}
+                      resizeMode="contain"
+                    />
+                  </View>
+                  <Text style={styles.issueLabel}>{issue.label}</Text>
                 </TouchableOpacity>
-              </View>
-            ))}
-
-            {photos.length < 3 && (
-              <TouchableOpacity
-                style={styles.addPhotoButton}
-                onPress={handleAddPhoto}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="camera-outline" size={32} color="#b0b0b0" />
-                <Text style={styles.addPhotoText}>Add Photo</Text>
-              </TouchableOpacity>
-            )}
+              ))}
+            </View>
           </View>
+        )}
 
-          <Text style={styles.photoHelper}>
-            Upload up to 3 photos of the issue
-          </Text>
-        </View>
-
-        {/* Insurance Coverage */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Insurance Coverage</Text>
-
-          <TouchableOpacity
-            style={styles.insuranceCard}
-            onPress={() => setHasInsurance(!hasInsurance)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.checkbox}>
-              {hasInsurance && (
-                <Ionicons name="checkmark" size={18} color="#3c3c3c" />
-              )}
+        {/* Description Section - Show for all except maybe some services */}
+        {!isCarRental && !isFuelDelivery && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Describe the situation (Optional)</Text>
+            <View style={styles.textAreaContainer}>
+              <TextInput
+                style={styles.textArea}
+                placeholder="Please provide any additional details that might help the provider prepare better. For example: location details, specific symptoms, what you've already tried, etc."
+                placeholderTextColor="#b0b0b0"
+                value={description}
+                onChangeText={setDescription}
+                multiline
+                maxLength={500}
+                textAlignVertical="top"
+              />
             </View>
-            <View style={styles.insuranceTextContainer}>
-              <Text style={styles.insuranceTitle}>
-                I have roadside assistance insurance
+            <View style={styles.textAreaFooter}>
+              <Text style={styles.textAreaHelper}>
+                Be as detailed as possible for better service
               </Text>
-              <Text style={styles.insuranceDescription}>
-                Check if your insurance covers this service
+              <Text style={styles.characterCount}>
+                {description.length} / 500
               </Text>
             </View>
-          </TouchableOpacity>
-        </View>
+          </View>
+        )}
 
-        {/* Special Requirements */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Special Requirements (Optional)</Text>
+        {/* Photos Section - Show for all except maybe some services */}
+        {!isCarRental && !isFuelDelivery && !isSpareParts && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Add photos (Optional)</Text>
 
-          <TouchableOpacity
-            style={styles.requirementItem}
-            onPress={() => setNeedSpecificTruck(!needSpecificTruck)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.checkbox}>
-              {needSpecificTruck && (
-                <Ionicons name="checkmark" size={18} color="#3c3c3c" />
+            <View style={styles.photosContainer}>
+              {photos.map((photo, index) => (
+                <View key={index} style={styles.photoItem}>
+                  <Image source={{ uri: photo }} style={styles.photoImage} />
+                  <TouchableOpacity
+                    style={styles.removePhotoButton}
+                    onPress={() => handleRemovePhoto(index)}
+                  >
+                    <Ionicons name="close-circle" size={24} color="#F44336" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+
+              {photos.length < 3 && (
+                <TouchableOpacity
+                  style={styles.addPhotoButton}
+                  onPress={handleAddPhoto}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="camera-outline" size={32} color="#b0b0b0" />
+                  <Text style={styles.addPhotoText}>Add Photo</Text>
+                </TouchableOpacity>
               )}
             </View>
-            <Text style={styles.requirementText}>
-              Need a specific type of tow truck
-            </Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.requirementItem}
-            onPress={() => setHasModifications(!hasModifications)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.checkbox}>
-              {hasModifications && (
-                <Ionicons name="checkmark" size={18} color="#3c3c3c" />
-              )}
-            </View>
-            <Text style={styles.requirementText}>
-              Vehicle has modifications
+            <Text style={styles.photoHelper}>
+              Upload up to 3 photos of the issue
             </Text>
-          </TouchableOpacity>
+          </View>
+        )}
 
-          <TouchableOpacity
-            style={styles.requirementItem}
-            onPress={() => setNeedMultilingual(!needMultilingual)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.checkbox}>
-              {needMultilingual && (
-                <Ionicons name="checkmark" size={18} color="#3c3c3c" />
-              )}
-            </View>
-            <Text style={styles.requirementText}>
-              Require multilingual provider
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* Insurance Coverage - Show for relevant services */}
+        {isCarRental && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Insurance Coverage</Text>
 
-        {/* Info Box - White background wrapper */}
+            <TouchableOpacity
+              style={styles.insuranceCard}
+              onPress={() => setHasInsurance(!hasInsurance)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.checkbox}>
+                {hasInsurance && (
+                  <Ionicons name="checkmark" size={18} color="#3c3c3c" />
+                )}
+              </View>
+              <View style={styles.insuranceTextContainer}>
+                <Text style={styles.insuranceTitle}>
+                  I have rental insurance
+                </Text>
+                <Text style={styles.insuranceDescription}>
+                  Check if you have insurance coverage
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Special Requirements - Show for towing and other relevant services */}
+        {isTowing && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Special Requirements (Optional)</Text>
+
+            <TouchableOpacity
+              style={styles.requirementItem}
+              onPress={() => setNeedSpecificTruck(!needSpecificTruck)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.checkbox}>
+                {needSpecificTruck && (
+                  <Ionicons name="checkmark" size={18} color="#3c3c3c" />
+                )}
+              </View>
+              <Text style={styles.requirementText}>
+                Need a specific type of tow truck
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.requirementItem}
+              onPress={() => setHasModifications(!hasModifications)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.checkbox}>
+                {hasModifications && (
+                  <Ionicons name="checkmark" size={18} color="#3c3c3c" />
+                )}
+              </View>
+              <Text style={styles.requirementText}>
+                Vehicle has modifications
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.requirementItem}
+              onPress={() => setNeedMultilingual(!needMultilingual)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.checkbox}>
+                {needMultilingual && (
+                  <Ionicons name="checkmark" size={18} color="#3c3c3c" />
+                )}
+              </View>
+              <Text style={styles.requirementText}>
+                Require multilingual provider
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Info Box */}
         <View style={styles.infoBoxWrapper}>
           <View style={styles.infoBox}>
             <Ionicons name="document-text-outline" size={20} color="#5c5c5c" />
@@ -633,6 +727,20 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
+  },
+  summaryBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 1,
+    gap: 10,
+  },
+  summaryText: {
+    fontSize: 12,
+    color: '#2E7D32',
+    flex: 1,
   },
   scrollView: {
     flex: 1,

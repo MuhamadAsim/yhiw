@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,9 +7,11 @@ import {
   ScrollView,
   Image,
   Alert,
+  Modal,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 // Type definitions
 interface ServiceTimeOption {
@@ -19,10 +21,20 @@ interface ServiceTimeOption {
   description: string;
 }
 
+interface TimeSlot {
+  id: string;
+  time: string;
+  available: boolean;
+}
+
 const ScheduleServiceScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const [selectedTime, setSelectedTime] = useState<string>('right_now'); // Default to right_now
+  const [selectedTime, setSelectedTime] = useState<string>('right_now');
+  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('');
+  const [showTimeSlots, setShowTimeSlots] = useState<boolean>(false);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -41,6 +53,15 @@ const ScheduleServiceScreen = () => {
     }
   };
 
+  // Get service info
+  const serviceId = getStringParam(params.serviceId);
+  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
+  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
+  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  
+  // Check if this is Car Rental
+  const isCarRental = serviceId === '11';
+
   // Get all data from previous screens
   const pickupAddress = getStringParam(params.pickupAddress);
   const pickupLat = getStringParam(params.pickupLat);
@@ -48,9 +69,27 @@ const ScheduleServiceScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
-  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
-  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  
+  // Vehicle data
+  const vehicleType = getStringParam(params.vehicleType);
+  const makeModel = getStringParam(params.makeModel);
+  const year = getStringParam(params.year);
+  const color = getStringParam(params.color);
+  const licensePlate = getStringParam(params.licensePlate);
+  const selectedVehicle = getStringParam(params.selectedVehicle);
+  
+  // Contact data
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
+  const email = getStringParam(params.email);
+  const emergencyContact = getStringParam(params.emergencyContact);
+  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
+  
+  // NEW FIELDS from VehicleContactInfo
+  const licenseFront = getStringParam(params.licenseFront);
+  const licenseBack = getStringParam(params.licenseBack);
+  const fuelType = getStringParam(params.fuelType);
+  const partDescription = getStringParam(params.partDescription);
   
   // Additional details data
   const urgency = getStringParam(params.urgency) || 'moderate';
@@ -62,20 +101,38 @@ const ScheduleServiceScreen = () => {
   const hasModifications = getStringParam(params.hasModifications) === 'true';
   const needMultilingual = getStringParam(params.needMultilingual) === 'true';
   
-  // Vehicle data from VehicleContactInfoScreen
-  const vehicleType = getStringParam(params.vehicleType);
-  const makeModel = getStringParam(params.makeModel);
-  const year = getStringParam(params.year);
-  const color = getStringParam(params.color);
-  const licensePlate = getStringParam(params.licensePlate);
-  const selectedVehicle = getStringParam(params.selectedVehicle);
-  
-  // Contact data from VehicleContactInfoScreen
-  const fullName = getStringParam(params.fullName);
-  const phoneNumber = getStringParam(params.phoneNumber);
-  const email = getStringParam(params.email);
-  const emergencyContact = getStringParam(params.emergencyContact);
-  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
+  // Location skipped flag
+  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
+
+  // Mock time slots for the next 7 days
+  const generateTimeSlots = (date: Date): TimeSlot[] => {
+    const slots = [];
+    const startHour = 9; // 9 AM
+    const endHour = 21; // 9 PM
+    
+    for (let hour = startHour; hour <= endHour; hour += 2) {
+      const timeString = `${hour.toString().padStart(2, '0')}:00`;
+      // Random availability for demo
+      const available = Math.random() > 0.3;
+      slots.push({
+        id: `${date.toDateString()}-${timeString}`,
+        time: timeString,
+        available,
+      });
+    }
+    return slots;
+  };
+
+  const [availableTimeSlots, setAvailableTimeSlots] = useState<TimeSlot[]>(
+    generateTimeSlots(new Date())
+  );
+
+  useEffect(() => {
+    // For Car Rental, force "Schedule Later" selection
+    if (isCarRental) {
+      setSelectedTime('schedule_later');
+    }
+  }, [isCarRental]);
 
   const serviceTimeOptions: ServiceTimeOption[] = [
     {
@@ -97,9 +154,21 @@ const ScheduleServiceScreen = () => {
   };
 
   const handleContinue = () => {
-    // Navigate to price summary screen with all collected data
+    // Validate for Car Rental
+    if (isCarRental) {
+      if (!selectedDate) {
+        Alert.alert('Required', 'Please select a date for your rental');
+        return;
+      }
+      if (!selectedTimeSlot) {
+        Alert.alert('Required', 'Please select a time slot');
+        return;
+      }
+    }
+
+    // Navigate to price summary screen with ALL collected data
     router.push({
-      pathname: '/(customer)/pricesummary',
+      pathname: '/(customer)/PriceSummary',
       params: {
         // Location data
         pickupAddress,
@@ -110,19 +179,10 @@ const ScheduleServiceScreen = () => {
         dropoffLng,
         
         // Service data
+        serviceId,
         serviceName,
         servicePrice,
         serviceCategory,
-        
-        // Additional details
-        urgency,
-        issues: JSON.stringify(issues),
-        description,
-        photos: JSON.stringify(photos),
-        hasInsurance: String(hasInsurance),
-        needSpecificTruck: String(needSpecificTruck),
-        hasModifications: String(hasModifications),
-        needMultilingual: String(needMultilingual),
         
         // Vehicle data
         vehicleType,
@@ -139,17 +199,92 @@ const ScheduleServiceScreen = () => {
         emergencyContact,
         saveVehicle: String(saveVehicle),
         
-        // Schedule data - just pass the selected time option
+        // NEW FIELDS from VehicleContactInfo
+        licenseFront,
+        licenseBack,
+        fuelType,
+        partDescription,
+        
+        // Additional details
+        urgency,
+        issues: JSON.stringify(issues),
+        description,
+        photos: JSON.stringify(photos),
+        hasInsurance: String(hasInsurance),
+        needSpecificTruck: String(needSpecificTruck),
+        hasModifications: String(hasModifications),
+        needMultilingual: String(needMultilingual),
+        
+        // Location skipped flag
+        locationSkipped: String(locationSkipped),
+        
+        // Schedule data
         serviceTime: selectedTime,
-        // No date/time needed here - will be collected later
-        scheduledDate: '',
-        scheduledTimeSlot: '',
+        scheduledDate: isCarRental ? selectedDate.toISOString() : '',
+        scheduledTimeSlot: isCarRental ? selectedTimeSlot : '',
       }
     });
   };
 
   const handleSelectTime = (timeId: string) => {
+    // For Car Rental, prevent selecting "Right Now"
+    if (isCarRental && timeId === 'right_now') {
+      Alert.alert(
+        'Not Available', 
+        'Car rental requires advance scheduling. Please select a date and time.'
+      );
+      return;
+    }
     setSelectedTime(timeId);
+    if (timeId === 'schedule_later') {
+      setShowDatePicker(true);
+    }
+  };
+
+  const handleDateChange = (event: any, date?: Date) => {
+    setShowDatePicker(false);
+    if (date) {
+      setSelectedDate(date);
+      setAvailableTimeSlots(generateTimeSlots(date));
+      setShowTimeSlots(true);
+    }
+  };
+
+  const handleSelectTimeSlot = (slot: TimeSlot) => {
+    if (slot.available) {
+      setSelectedTimeSlot(slot.time);
+      setShowTimeSlots(false);
+    } else {
+      Alert.alert('Not Available', 'This time slot is not available. Please select another.');
+    }
+  };
+
+  // Format date for display
+  const formatDate = (date: Date): string => {
+    return date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  // Get step number based on service
+  const getStepNumber = () => {
+    if (isCarRental) return 5; // Location (1) → Vehicle+License (2) → Additional (3) → Schedule (4) → Price Summary (5)
+    return 4; // Normal flow: Location (1) → Vehicle (2) → Additional (3) → Schedule (4)
+  };
+
+  // Get total steps
+  const getTotalSteps = () => {
+    return 7;
+  };
+
+  // Calculate progress percentage
+  const getProgressPercentage = () => {
+    const step = getStepNumber();
+    const total = getTotalSteps();
+    return `${(step / total) * 100}%`;
   };
 
   return (
@@ -165,16 +300,26 @@ const ScheduleServiceScreen = () => {
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>Schedule Service</Text>
-          <Text style={styles.headerSubtitle}>Step 7 of 10</Text>
+          <Text style={styles.headerSubtitle}>Step {getStepNumber()} of {getTotalSteps()}</Text>
         </View>
       </View>
 
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: '70%' }]} />
+          <View style={[styles.progressFill, { width: getProgressPercentage() as any}]} />
         </View>
       </View>
+
+      {/* Service Banner for Car Rental */}
+      {isCarRental && (
+        <View style={styles.serviceBanner}>
+          <Ionicons name="car" size={20} color="#FFFFFF" />
+          <Text style={styles.serviceBannerText}>
+            Car Rental requires advance scheduling. Please select a date and time.
+          </Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scrollView}
@@ -192,9 +337,11 @@ const ScheduleServiceScreen = () => {
                 style={[
                   styles.timeOptionCard,
                   selectedTime === option.id && styles.timeOptionCardSelected,
+                  (isCarRental && option.id === 'right_now') && styles.timeOptionCardDisabled,
                 ]}
                 onPress={() => handleSelectTime(option.id)}
                 activeOpacity={0.7}
+                disabled={isCarRental && option.id === 'right_now'}
               >
                 <View
                   style={[
@@ -208,8 +355,16 @@ const ScheduleServiceScreen = () => {
                     resizeMode="contain"
                   />
                 </View>
-                <Text style={styles.timeOptionTitle}>{option.title}</Text>
-                <Text style={styles.timeOptionDescription}>
+                <Text style={[
+                  styles.timeOptionTitle,
+                  (isCarRental && option.id === 'right_now') && styles.textDisabled
+                ]}>
+                  {option.title}
+                </Text>
+                <Text style={[
+                  styles.timeOptionDescription,
+                  (isCarRental && option.id === 'right_now') && styles.textDisabled
+                ]}>
                   {option.description}
                 </Text>
               </TouchableOpacity>
@@ -217,24 +372,87 @@ const ScheduleServiceScreen = () => {
           </View>
         </View>
 
-        {/* Estimated Arrival Time */}
-        <View style={styles.estimatedTimeBox}>
-          <View style={styles.estimatedTimeHeader}>
-            <Ionicons name="time-outline" size={24} color="#68bdee" />
-            <Text style={styles.estimatedTimeTitle}>
-              Estimated Arrival Time
+        {/* Date Selection - Show when Schedule Later is selected */}
+        {selectedTime === 'schedule_later' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>
+              {isCarRental ? 'Select Rental Date & Time' : 'Select Date & Time'}
             </Text>
+
+            {/* Selected Date Display */}
+            <TouchableOpacity
+              style={styles.dateSelector}
+              onPress={() => setShowDatePicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={24} color="#68bdee" />
+              <Text style={styles.dateSelectorText}>
+                {selectedDate ? formatDate(selectedDate) : 'Select a date'}
+              </Text>
+              <Ionicons name="chevron-forward" size={20} color="#8c8c8c" />
+            </TouchableOpacity>
+
+            {/* Time Slots */}
+            {selectedDate && (
+              <View style={styles.timeSlotsContainer}>
+                <Text style={styles.timeSlotsTitle}>Available Time Slots</Text>
+                <View style={styles.timeSlotsGrid}>
+                  {availableTimeSlots.map((slot) => (
+                    <TouchableOpacity
+                      key={slot.id}
+                      style={[
+                        styles.timeSlotButton,
+                        selectedTimeSlot === slot.time && styles.timeSlotButtonSelected,
+                        !slot.available && styles.timeSlotButtonDisabled,
+                      ]}
+                      onPress={() => handleSelectTimeSlot(slot)}
+                      disabled={!slot.available}
+                    >
+                      <Text style={[
+                        styles.timeSlotText,
+                        selectedTimeSlot === slot.time && styles.timeSlotTextSelected,
+                        !slot.available && styles.timeSlotTextDisabled,
+                      ]}>
+                        {slot.time}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
           </View>
-          <Text style={styles.estimatedTimeDescription}>
-            Based on current availability and your location
-          </Text>
-          <View style={styles.waitTimeContainer}>
-            <View style={styles.waitTimeBadge}>
-              <Text style={styles.waitTimeNumber}>15</Text>
+        )}
+
+        {/* Date Picker Modal */}
+        {showDatePicker && (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display="default"
+            onChange={handleDateChange}
+            minimumDate={new Date()}
+          />
+        )}
+
+        {/* Estimated Arrival Time - Hide for Car Rental */}
+        {!isCarRental && (
+          <View style={styles.estimatedTimeBox}>
+            <View style={styles.estimatedTimeHeader}>
+              <Ionicons name="time-outline" size={24} color="#68bdee" />
+              <Text style={styles.estimatedTimeTitle}>
+                Estimated Arrival Time
+              </Text>
             </View>
-            <Text style={styles.waitTimeText}>minutes average wait time</Text>
+            <Text style={styles.estimatedTimeDescription}>
+              Based on current availability and your location
+            </Text>
+            <View style={styles.waitTimeContainer}>
+              <View style={styles.waitTimeBadge}>
+                <Text style={styles.waitTimeNumber}>15</Text>
+              </View>
+              <Text style={styles.waitTimeText}>minutes average wait time</Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Service Hours */}
         <View style={styles.serviceHoursCard}>
@@ -255,19 +473,26 @@ const ScheduleServiceScreen = () => {
             <Text style={styles.closedText}>Closed</Text>
           </View>
 
-          <View style={styles.divider} />
-
-          <Text style={styles.emergencyNote}>
-            Emergency services available 24/7 with additional fees
-          </Text>
+          {!isCarRental && (
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.emergencyNote}>
+                Emergency services available 24/7 with additional fees
+              </Text>
+            </>
+          )}
         </View>
 
         {/* Rescheduling Policy */}
         <View style={styles.policyBox}>
-          <Text style={styles.policyTitle}>Rescheduling Policy</Text>
+          <Text style={styles.policyTitle}>
+            {isCarRental ? 'Rental Cancellation Policy' : 'Rescheduling Policy'}
+          </Text>
           <Text style={styles.policyText}>
-            You can reschedule or cancel your appointment free of charge up to 2
-            hours before the scheduled time. Late cancellations may incur a fee.
+            {isCarRental 
+              ? 'You can cancel your rental up to 24 hours before the scheduled time for a full refund. Cancellations within 24 hours may incur a fee.'
+              : 'You can reschedule or cancel your appointment free of charge up to 2 hours before the scheduled time. Late cancellations may incur a fee.'
+            }
           </Text>
         </View>
 
@@ -341,6 +566,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#68bdee',
     borderRadius: 3,
   },
+  serviceBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  serviceBannerText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    flex: 1,
+    fontWeight: '500',
+  },
   scrollView: {
     flex: 1,
   },
@@ -379,6 +618,10 @@ const styles = StyleSheet.create({
     borderColor: '#3c3c3c',
     borderWidth: 3,
   },
+  timeOptionCardDisabled: {
+    opacity: 0.5,
+    backgroundColor: '#f0f0f0',
+  },
   timeIconContainer: {
     width: 60,
     height: 60,
@@ -407,6 +650,70 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  textDisabled: {
+    color: '#b0b0b0',
+  },
+  dateSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    backgroundColor: '#FFFFFF',
+    gap: 10,
+  },
+  dateSelectorText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#3c3c3c',
+  },
+  timeSlotsContainer: {
+    marginTop: 20,
+  },
+  timeSlotsTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3c3c3c',
+    marginBottom: 15,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  timeSlotsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  timeSlotButton: {
+    width: '23%',
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  timeSlotButtonSelected: {
+    borderColor: '#68bdee',
+    backgroundColor: '#e3f5ff',
+  },
+  timeSlotButtonDisabled: {
+    backgroundColor: '#f0f0f0',
+    borderColor: '#d0d0d0',
+  },
+  timeSlotText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    fontWeight: '500',
+  },
+  timeSlotTextSelected: {
+    color: '#68bdee',
+    fontWeight: 'bold',
+  },
+  timeSlotTextDisabled: {
+    color: '#b0b0b0',
   },
   estimatedTimeBox: {
     backgroundColor: '#e3f5ff',

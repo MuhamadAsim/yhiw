@@ -105,7 +105,7 @@ const SignUpScreen = () => {
         phoneNumber: formatPhoneNumber(phoneNumber),
       };
 
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || "https://your-backend-url.com";
+      const backendUrl = 'https://yhiw-backend.onrender.com';
       
       const response = await fetch(`${backendUrl}/api/users`, {
         method: 'POST',
@@ -256,7 +256,7 @@ const SignUpScreen = () => {
         'Your account has been created successfully!',
         [{ 
           text: 'Continue', 
-          onPress: () => router.replace('/(provider)/home' as any) 
+          onPress: () => router.replace('/(provider)/Home' as any) 
         }]
       );
     } catch (error: any) {

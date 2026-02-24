@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 
 // Type definitions
 interface SavedVehicle {
@@ -22,6 +23,12 @@ interface SavedVehicle {
 }
 
 interface VehicleTypeOption {
+  id: string;
+  label: string;
+  icon: string;
+}
+
+interface FuelTypeOption {
   id: string;
   label: string;
   icon: string;
@@ -42,6 +49,17 @@ const VehicleContactInfoScreen = () => {
   const [email, setEmail] = useState<string>('');
   const [emergencyContact, setEmergencyContact] = useState<string>('');
   const [saveVehicle, setSaveVehicle] = useState<boolean>(false);
+  const [locationSkipped, setLocationSkipped] = useState<boolean>(false);
+  
+  // License upload for Car Rental only
+  const [licenseFront, setLicenseFront] = useState<string>('');
+  const [licenseBack, setLicenseBack] = useState<string>('');
+  
+  // Fuel Delivery specific
+  const [fuelType, setFuelType] = useState<string>('');
+  
+  // Spare Parts specific
+  const [partDescription, setPartDescription] = useState<string>('');
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -59,14 +77,39 @@ const VehicleContactInfoScreen = () => {
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
+  const serviceId = getStringParam(params.serviceId);
+  const locationSkippedParam = getStringParam(params.locationSkipped);
+  
+  // Get service-specific requirements
+  const requiresFuelType = getStringParam(params.requiresFuelType) === 'true';
+  const requiresLicense = getStringParam(params.requiresLicense) === 'true';
+  const requiresTextDescription = getStringParam(params.requiresTextDescription) === 'true';
+
+  // Check service types
+  const isCarRental = serviceId === '11';
+  const isFuelDelivery = serviceId === '3';
+  const isSpareParts = serviceId === '12';
 
   useEffect(() => {
+    // Check if location was skipped
+    if (locationSkippedParam === 'true') {
+      setLocationSkipped(true);
+    }
+
     // Log received data for debugging
     console.log('VehicleContactInfo - Received data:', {
       pickupAddress,
       dropoffAddress,
       serviceName,
-      servicePrice
+      servicePrice,
+      serviceId,
+      isCarRental,
+      isFuelDelivery,
+      isSpareParts,
+      requiresFuelType,
+      requiresLicense,
+      requiresTextDescription,
+      locationSkipped: locationSkippedParam
     });
   }, []);
 
@@ -96,8 +139,37 @@ const VehicleContactInfoScreen = () => {
     { id: 'other', label: 'Other', icon: '🚘' },
   ];
 
+  const fuelTypes: FuelTypeOption[] = [
+    { id: 'petrol', label: 'Petrol', icon: '⛽' },
+    { id: 'diesel', label: 'Diesel', icon: '⛽' },
+    { id: 'premium', label: 'Premium', icon: '⭐' },
+  ];
+
   const handleBack = () => {
     router.back();
+  };
+
+  const handleLicenseUpload = async (type: 'front' | 'back') => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    
+    if (!permissionResult.granted) {
+      Alert.alert('Permission Required', 'Please grant access to your photo library to upload images.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      if (type === 'front') {
+        setLicenseFront(result.assets[0].uri);
+      } else {
+        setLicenseBack(result.assets[0].uri);
+      }
+    }
   };
 
   const handleContinue = () => {
@@ -120,11 +192,35 @@ const VehicleContactInfoScreen = () => {
       }
     }
 
+    // For Car Rental, validate license upload
+    if (isCarRental || requiresLicense) {
+      if (!licenseFront || !licenseBack) {
+        Alert.alert('Required', 'Please upload both front and back of your driver\'s license');
+        return;
+      }
+    }
+
+    // For Fuel Delivery, validate fuel type
+    if (isFuelDelivery || requiresFuelType) {
+      if (!fuelType) {
+        Alert.alert('Required Field', 'Please select fuel type');
+        return;
+      }
+    }
+
+    // For Spare Parts, validate part description
+    if (isSpareParts || requiresTextDescription) {
+      if (!partDescription.trim()) {
+        Alert.alert('Required Field', 'Please describe the spare part you need');
+        return;
+      }
+    }
+
     // Navigate to additional details screen with all collected data
     router.push({
-      pathname: '/(customer)/additionaldetails',
+      pathname: '/(customer)/AdditionalDetails',
       params: {
-        // Location data from previous screen
+        // Location data from previous screen (or placeholder if skipped)
         pickupAddress,
         pickupLat,
         pickupLng,
@@ -136,6 +232,7 @@ const VehicleContactInfoScreen = () => {
         serviceName,
         servicePrice,
         serviceCategory,
+        serviceId,
         
         // Vehicle data
         vehicleType: selectedVehicleType,
@@ -151,6 +248,19 @@ const VehicleContactInfoScreen = () => {
         email,
         emergencyContact,
         saveVehicle: String(saveVehicle),
+        
+        // License data for Car Rental
+        licenseFront,
+        licenseBack,
+        
+        // Fuel type for Fuel Delivery
+        fuelType,
+        
+        // Part description for Spare Parts
+        partDescription,
+        
+        // Flag for location skipped
+        locationSkipped: locationSkipped ? 'true' : 'false',
       }
     });
   };
@@ -178,6 +288,25 @@ const VehicleContactInfoScreen = () => {
     setSelectedVehicle(null);
   };
 
+  // Get service-specific helper text
+  const getServiceHelperText = () => {
+    if (serviceId === '11') { // Car Rental
+      return "Driver's license upload required";
+    } else if (serviceId === '12') { // Spare Parts
+      return "Please describe the part you need";
+    } else if (serviceId === '3') { // Fuel Delivery
+      return "Select fuel type";
+    } else if (serviceId === '9' || serviceId === '10') { // Car Wash/Detailing
+      return "This helps us identify your vehicle for the appointment";
+    }
+    return "This helps the provider identify your vehicle";
+  };
+
+  // Get button text based on service
+  const getButtonText = () => {
+    return 'Continue to Additional Details';
+  };
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -201,6 +330,7 @@ const VehicleContactInfoScreen = () => {
           <View style={[styles.progressFill, { width: '28.6%' }]} />
         </View>
       </View>
+
 
       <ScrollView
         style={styles.scrollView}
@@ -345,9 +475,130 @@ const VehicleContactInfoScreen = () => {
               />
             </View>
             <Text style={styles.helperText}>
-              This helps the provider identify your vehicle
+              {getServiceHelperText()}
             </Text>
           </View>
+
+          {/* LICENSE UPLOAD - ONLY FOR CAR RENTAL - NOW BELOW LICENSE PLATE */}
+          {(isCarRental || requiresLicense) && (
+            <View style={styles.specialSection}>
+              <Text style={styles.specialSectionLabel}>
+                Driver's License <Text style={styles.required}>*</Text>
+              </Text>
+              
+              <View style={styles.licenseContainer}>
+                {/* Front License */}
+                <View style={styles.licenseItem}>
+                  <Text style={styles.licenseLabel}>Front</Text>
+                  {licenseFront ? (
+                    <View style={styles.licenseImageContainer}>
+                      <Image source={{ uri: licenseFront }} style={styles.licenseImage} />
+                      <TouchableOpacity 
+                        style={styles.licenseRemoveButton}
+                        onPress={() => setLicenseFront('')}
+                      >
+                        <Ionicons name="close-circle" size={24} color="#F44336" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity 
+                      style={styles.licenseUploadButton}
+                      onPress={() => handleLicenseUpload('front')}
+                    >
+                      <Ionicons name="camera-outline" size={32} color="#b0b0b0" />
+                      <Text style={styles.licenseUploadText}>Upload Front</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Back License */}
+                <View style={styles.licenseItem}>
+                  <Text style={styles.licenseLabel}>Back</Text>
+                  {licenseBack ? (
+                    <View style={styles.licenseImageContainer}>
+                      <Image source={{ uri: licenseBack }} style={styles.licenseImage} />
+                      <TouchableOpacity 
+                        style={styles.licenseRemoveButton}
+                        onPress={() => setLicenseBack('')}
+                      >
+                        <Ionicons name="close-circle" size={24} color="#F44336" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity 
+                      style={styles.licenseUploadButton}
+                      onPress={() => handleLicenseUpload('back')}
+                    >
+                      <Ionicons name="camera-outline" size={32} color="#b0b0b0" />
+                      <Text style={styles.licenseUploadText}>Upload Back</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+              <Text style={styles.helperText}>
+                Upload clear images of your driver's license (front and back)
+              </Text>
+            </View>
+          )}
+
+          {/* FUEL TYPE - ONLY FOR FUEL DELIVERY - NOW BELOW LICENSE PLATE */}
+          {(isFuelDelivery || requiresFuelType) && (
+            <View style={styles.specialSection}>
+              <Text style={styles.specialSectionLabel}>
+                Fuel Type <Text style={styles.required}>*</Text>
+              </Text>
+              
+              <View style={styles.fuelTypeContainer}>
+                {fuelTypes.map((type) => (
+                  <TouchableOpacity
+                    key={type.id}
+                    style={[
+                      styles.fuelTypeCard,
+                      fuelType === type.id && styles.fuelTypeCardActive,
+                    ]}
+                    onPress={() => setFuelType(type.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.fuelTypeEmoji}>{type.icon}</Text>
+                    <Text style={styles.fuelTypeLabel}>{type.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={styles.helperText}>
+                Select the type of fuel you need
+              </Text>
+            </View>
+          )}
+
+          {/* SPARE PARTS DESCRIPTION - ONLY FOR SPARE PARTS - NOW BELOW LICENSE PLATE */}
+          {(isSpareParts || requiresTextDescription) && (
+            <View style={styles.specialSection}>
+              <Text style={styles.specialSectionLabel}>
+                Part Description <Text style={styles.required}>*</Text>
+              </Text>
+              
+              <View style={styles.textAreaContainer}>
+                <TextInput
+                  style={styles.textArea}
+                  placeholder="Describe the spare part you need. Include part number if available, make, model, and year of your vehicle."
+                  placeholderTextColor="#b0b0b0"
+                  value={partDescription}
+                  onChangeText={setPartDescription}
+                  multiline
+                  maxLength={300}
+                  textAlignVertical="top"
+                />
+              </View>
+              <View style={styles.textAreaFooter}>
+                <Text style={styles.helperText}>
+                  Include part number, make, model, and year if possible
+                </Text>
+                <Text style={styles.characterCount}>
+                  {partDescription.length}/300
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
 
         {/* Contact Information */}
@@ -470,7 +721,7 @@ const VehicleContactInfoScreen = () => {
           activeOpacity={0.8}
         >
           <Text style={styles.continueButtonText}>
-            Continue to Additional Details
+            {getButtonText()}
           </Text>
         </TouchableOpacity>
         <Text style={styles.requiredNote}>
@@ -532,6 +783,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#68bdee',
     borderRadius: 3,
   },
+  locationSkippedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f5ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    marginBottom: 1,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#68bdee',
+  },
+  locationSkippedText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    flex: 1,
+    fontWeight: '500',
+  },
   scrollView: {
     flex: 1,
   },
@@ -551,6 +819,116 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  specialSection: {
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  specialSectionLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3c3c3c',
+    marginBottom: 15,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  // License upload styles
+  licenseContainer: {
+    flexDirection: 'row',
+    gap: 15,
+    marginBottom: 10,
+  },
+  licenseItem: {
+    flex: 1,
+  },
+  licenseLabel: {
+    fontSize: 11,
+    color: '#8c8c8c',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  licenseUploadButton: {
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    height: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  licenseUploadText: {
+    fontSize: 11,
+    color: '#b0b0b0',
+    marginTop: 8,
+  },
+  licenseImageContainer: {
+    position: 'relative',
+    height: 120,
+  },
+  licenseImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 12,
+  },
+  licenseRemoveButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+  },
+  // Fuel type styles
+  fuelTypeContainer: {
+    flexDirection: 'row',
+    gap: 15,
+  },
+  fuelTypeCard: {
+    flex: 1,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    padding: 15,
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  fuelTypeCardActive: {
+    borderColor: '#68bdee',
+    backgroundColor: '#e3f5ff',
+  },
+  fuelTypeEmoji: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  fuelTypeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3c3c3c',
+  },
+  // Text area styles
+  textAreaContainer: {
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    minHeight: 100,
+  },
+  textArea: {
+    padding: 15,
+    fontSize: 12,
+    color: '#3c3c3c',
+    lineHeight: 18,
+  },
+  textAreaFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  characterCount: {
+    fontSize: 10,
+    color: '#8c8c8c',
   },
   savedVehicleCard: {
     flexDirection: 'row',

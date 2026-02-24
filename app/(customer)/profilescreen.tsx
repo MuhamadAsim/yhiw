@@ -84,7 +84,7 @@ const ProfileScreen = () => {
             if (newRole === 'provider') {
               router.push('/(provider)/home');
             } else {
-              router.push('/(customer)/home');
+              router.push('/(customer)/Home');
             }
           },
         },

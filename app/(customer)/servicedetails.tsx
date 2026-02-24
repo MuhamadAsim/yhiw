@@ -15,53 +15,255 @@ const ServiceDetailsScreen = () => {
   const params = useLocalSearchParams();
   const [isSaved, setIsSaved] = useState(false);
 
-  // Get the passed parameters
+  // Get all passed parameters
   const {
     serviceId,
     serviceName,
+    serviceDescription,
     servicePrice,
     serviceRating,
     serviceDistance,
     serviceTime,
-    serviceCategory,
-    serviceDescription,
+    requiresDestination,
+    requiresFuelType,
+    requiresLicense,
+    hasBooking,
+    requiresTextDescription,
     comingFrom
   } = params;
 
-  // Dynamic service details based on passed params
-  const serviceDetails = {
-    name: serviceName || 'Quick Tow (Flatbed)',
-    rating: parseFloat(serviceRating as string) || 4.8,
-    distance: serviceDistance || '1.5 km away',
-    price: servicePrice ? parseFloat(servicePrice as string) : 75,
-    currency: 'BHD',
-    icon: require('../../assets/customer/service.png'),
-    category: serviceCategory || 'Towing',
-    description: serviceDescription || 'Professional flatbed towing service for your vehicle. Our experienced drivers ensure safe transport with modern equipment.',
+  // Service icons mapping based on service ID or name
+  const getServiceIcon = (id: string, name: string) => {
+    const serviceIcons: { [key: string]: any } = {
+      '1': require('../../assets/customer/towing.png'),
+      '2': require('../../assets/customer/repair.png'),
+      '3': require('../../assets/customer/fuel.png'),
+      '4': require('../../assets/customer/battery.png'),
+      '5': require('../../assets/customer/home/ac.png'),
+      '6': require('../../assets/customer/home/tire.png'),
+      '7': require('../../assets/customer/oil.png'),
+      '8': require('../../assets/customer/inspection.png'),
+      '9': require('../../assets/customer/home/carwash.png'),
+      '10': require('../../assets/customer/home/detailing.png'),
+      '11': require('../../assets/customer/home/rent.png'),
+      '12': require('../../assets/customer/home/spareparts.png'),
+    };
+    
+    // Try to get by ID first, fallback to a default icon
+    return serviceIcons[serviceId as string] || require('../../assets/customer/service.png');
   };
 
-  const keyFeatures = [
-    { id: 1, title: 'Professional certified drivers', icon: 'checkmark-circle' },
-    { id: 2, title: '24/7 availability', icon: 'checkmark-circle' },
-    { id: 3, title: 'Modern flatbed equipment', icon: 'checkmark-circle' },
-    { id: 4, title: 'Insurance covered', icon: 'checkmark-circle' },
-    { id: 5, title: 'Real-time GPS tracking', icon: 'checkmark-circle' },
-    { id: 6, title: 'No hidden fees', icon: 'checkmark-circle' },
-  ];
+  // Service-specific key features
+  const getKeyFeatures = (id: string) => {
+    const features: { [key: string]: Array<{ id: number; title: string }> } = {
+      '1': [ // Towing
+        { id: 1, title: 'Professional certified drivers' },
+        { id: 2, title: '24/7 availability' },
+        { id: 3, title: 'Modern flatbed equipment' },
+        { id: 4, title: 'Insurance covered' },
+        { id: 5, title: 'Real-time GPS tracking' },
+        { id: 6, title: 'No hidden fees' },
+      ],
+      '2': [ // Roadside Assistance
+        { id: 1, title: '24/7 emergency response' },
+        { id: 2, title: 'Certified mechanics' },
+        { id: 3, title: 'Jump start service' },
+        { id: 5, title: 'Lockout assistance' },
+        { id: 6, title: 'Fuel delivery' },
+      ],
+      '3': [ // Fuel Delivery
+        { id: 1, title: 'All fuel types available' },
+        { id: 2, title: '24/7 delivery' },
+        { id: 3, title: 'No minimum quantity' },
+        { id: 4, title: 'Emergency service' },
+        { id: 6, title: 'Quick response' },
+      ],
+      '4': [ // Battery Replacement
+        { id: 1, title: 'Quality batteries' },
+        { id: 2, title: 'Free testing' },
+        { id: 3, title: 'On-site replacement' },
+        { id: 4, title: 'Warranty included' },
+        { id: 5, title: '24/7 service' },
+      ],
+      '5': [ // AC Gas Refill
+        { id: 1, title: 'Professional AC service' },
+        { id: 2, title: 'Leak detection' },
+        { id: 3, title: 'Quality refrigerants' },
+        { id: 4, title: 'System diagnostics' },
+        { id: 5, title: 'Performance check' },
+        { id: 6, title: 'Warranty on service' },
+      ],
+      '6': [ // Tire Replacement
+        { id: 1, title: 'All tire brands' },
+        { id: 2, title: 'Professional fitting' },
+        { id: 3, title: 'Wheel balancing' },
+        { id: 4, title: 'Pressure check' },
+        { id: 5, title: 'Valve replacement' },
+      ],
+      '7': [ // Oil Change
+        { id: 1, title: 'Premium quality oil' },
+        { id: 2, title: 'Filter replacement' },
+        { id: 3, title: 'Fluid top-up' },
+        { id: 4, title: 'Multi-point inspection' },
+        { id: 5, title: 'Quick service' },
+      ],
+      '8': [ // Inspection / Repair
+        { id: 1, title: 'Comprehensive inspection' },
+        { id: 2, title: 'Certified mechanics' },
+        { id: 3, title: 'Diagnostic report' },
+        { id: 4, title: 'Transparent pricing' },
+        { id: 5, title: 'Genuine parts' },
+        { id: 6, title: 'Warranty on repairs' },
+      ],
+      '9': [ // Car Wash
+        { id: 1, title: 'Eco-friendly products' },
+        { id: 2, title: 'Hand wash' },
+        { id: 3, title: 'Interior cleaning' },
+        { id: 4, title: 'Tire shine' },
+        { id: 5, title: 'Window cleaning' },
+        { id: 6, title: 'Quick drying' },
+      ],
+      '10': [ // Car Detailing
+        { id: 1, title: 'Complete interior detail' },
+        { id: 2, title: 'Exterior polishing' },
+        { id: 3, title: 'Paint protection' },
+        { id: 4, title: 'Leather treatment' },
+        { id: 5, title: 'Engine bay cleaning' },
+        { id: 6, title: 'Ceramic coating option' },
+      ],
+      '11': [ // Car Rental
+        { id: 1, title: 'Wide vehicle selection' },
+        { id: 2, title: 'Flexible duration' },
+        { id: 3, title: 'Insurance included' },
+        { id: 4, title: 'Unlimited mileage' },
+        { id: 5, title: '24/7 road assistance' },
+      ],
+      '12': [ // Spare Parts
+        { id: 1, title: 'Genuine parts' },
+        { id: 2, title: 'All makes/models' },
+        { id: 3, title: 'Quick delivery' },
+        { id: 4, title: 'Price match' },
+        { id: 5, title: 'Warranty included' },
+        { id: 6, title: 'Expert advice' },
+      ],
+    };
+    
+    return features[serviceId as string] || features['1'];
+  };
 
-  const whatsIncluded = [
-    'Vehicle pickup from location',
-    'Safe flatbed transport',
-    'Delivery to destination',
-    'Basic damage inspection',
-  ];
+  // What's included based on service
+  const getWhatsIncluded = (id: string) => {
+    const included: { [key: string]: string[] } = {
+      '1': [ // Towing
+        'Vehicle pickup from location',
+        'Safe flatbed transport',
+        'Delivery to destination',
+        'Basic damage inspection',
+      ],
+      '2': [ // Roadside Assistance
+        'Emergency response',
+        'Jump start service',
+        'Flat tire change',
+        'Lockout assistance',
+      ],
+      '3': [ // Fuel Delivery
+        'Fuel delivery to location',
+        'Fuel type of your choice',
+        'Emergency service',
+        'Safe handling',
+      ],
+      '4': [ // Battery Replacement
+        'Battery testing',
+        'New battery installation',
+        'Old battery recycling',
+        'System check',
+      ],
+      '5': [ // AC Gas Refill
+        'AC system check',
+        'Leak detection',
+        'Gas refill',
+        'Performance test',
+      ],
+      '6': [ // Tire Replacement
+        'Tire removal',
+        'New tire installation',
+        'Wheel balancing',
+        'Pressure check',
+      ],
+      '7': [ // Oil Change
+        'Oil drain',
+        'New oil fill',
+        'Filter replacement',
+        'Fluid top-up',
+      ],
+      '8': [ // Inspection / Repair
+        'Full vehicle inspection',
+        'Diagnostic report',
+        'Repair estimate',
+        'Quality assurance',
+      ],
+      '9': [ // Car Wash
+        'Exterior hand wash',
+        'Interior vacuum',
+        'Window cleaning',
+        'Tire shine',
+      ],
+      '10': [ // Car Detailing
+        'Deep interior cleaning',
+        'Exterior polish',
+        'Paint protection',
+        'Final inspection',
+      ],
+      '11': [ // Car Rental
+        'Vehicle rental',
+        'Insurance coverage',
+        '24/7 support',
+        'Clean & sanitized',
+      ],
+      '12': [ // Spare Parts
+        'Part identification',
+        'Quality verification',
+        'Secure packaging',
+        'Delivery tracking',
+      ],
+    };
+    
+    return included[serviceId as string] || included['1'];
+  };
 
-  const stats = [
-    { id: 1, icon: 'shield-checkmark-outline', title: 'Verified' },
-    { id: 2, icon: 'people-outline', title: '234+ Jobs' },
-    { id: 3, icon: 'star-outline', title: 'Top Rated' },
-  ];
+  // Stats based on service
+  const getStats = (id: string) => {
+    const statsMap: { [key: string]: Array<{ id: number; icon: string; title: string }> } = {
+      '1': [
+        { id: 1, icon: 'shield-checkmark-outline', title: 'Verified' },
+        { id: 2, icon: 'people-outline', title: '500+ Jobs' },
+        { id: 3, icon: 'star-outline', title: 'Top Rated' },
+      ],
+      '2': [
+        { id: 1, icon: 'shield-checkmark-outline', title: '24/7 Service' },
+        { id: 2, icon: 'people-outline', title: '1000+ Rescues' },
+        { id: 3, icon: 'star-outline', title: '4.9 Rating' },
+      ],
+      '3': [
+        { id: 1, icon: 'shield-checkmark-outline', title: 'Verified' },
+        { id: 2, icon: 'people-outline', title: '300+ Delivers' },
+        { id: 3, icon: 'star-outline', title: '4.8 Rating' },
+      ],
+      '4': [
+        { id: 1, icon: 'shield-checkmark-outline', title: 'Certified' },
+        { id: 2, icon: 'people-outline', title: '400+ Jobs' },
+        { id: 3, icon: 'star-outline', title: '4.7 Rating' },
+      ],
+    };
+    
+    return statsMap[serviceId as string] || [
+      { id: 1, icon: 'shield-checkmark-outline', title: 'Verified' },
+      { id: 2, icon: 'people-outline', title: '200+ Jobs' },
+      { id: 3, icon: 'star-outline', title: 'Top Rated' },
+    ];
+  };
 
+  // Reviews data
   const reviews = [
     {
       id: 1,
@@ -89,27 +291,75 @@ const ServiceDetailsScreen = () => {
     },
   ];
 
+  // Get service details
+  const serviceIcon = getServiceIcon(serviceId as string, serviceName as string);
+  const keyFeatures = getKeyFeatures(serviceId as string);
+  const whatsIncluded = getWhatsIncluded(serviceId as string);
+  const stats = getStats(serviceId as string);
+
+  // Parse values
+  const parsedRating = parseFloat(serviceRating as string) || 4.8;
+  const parsedPrice = parseFloat(servicePrice as string) || 75;
+  const displayDistance = serviceDistance || '1.5 km away';
+  const displayTime = serviceTime || '15-20 min';
+
   const handleBack = () => {
-    // Navigate back to the appropriate screen
     if (comingFrom === 'home') {
-      router.push('/(customer)/home');
+      router.push('/(customer)/Home');
+    } else if (comingFrom === 'popular') {
+      router.push('/(customer)/PopularServices');
+    } else if (comingFrom === 'services') {
+      router.push('/(customer)/Services');
     } else {
       router.back();
     }
   };
 
   const handleBookNow = () => {
-    console.log('Book now pressed for service:', serviceDetails.name);
-    // Navigate to locationdetails screen with service details
+  // Services that should skip location and go directly to vehicle contact info
+  const skipLocationServiceIds = ['11']; // Car Rental only skips location
+  
+  const shouldSkipLocation = skipLocationServiceIds.includes(serviceId as string);
+  
+  // Prepare params with ALL service requirements
+  const serviceParams = {
+    // Pass all service data
+    serviceId: serviceId as string,
+    serviceName: serviceName as string,
+    servicePrice: parsedPrice.toString(),
+    serviceCategory: serviceName as string,
+    
+    // Pass service-specific requirements as booleans
+    requiresDestination: serviceId === '1' ? 'true' : 'false', // Towing
+    requiresFuelType: serviceId === '3' ? 'true' : 'false',    // Fuel Delivery
+    requiresLicense: serviceId === '11' ? 'true' : 'false',    // Car Rental
+    hasBooking: (serviceId === '9' || serviceId === '10') ? 'true' : 'false', // Car Wash/Detailing
+    requiresTextDescription: serviceId === '12' ? 'true' : 'false', // Spare Parts
+    
+    // Flag to indicate location was skipped
+    locationSkipped: shouldSkipLocation ? 'true' : 'false'
+  };
+  
+  if (shouldSkipLocation) {
+    // For Car Rental - skip location
     router.push({
-      pathname: '/(customer)/locationdetails',
+      pathname: '/(customer)/VehicleContactInfo',
       params: {
-        serviceName: serviceDetails.name,
-        servicePrice: serviceDetails.price.toString(),
-        serviceCategory: serviceDetails.category,
+        // Pass placeholder location data
+        pickupAddress: 'Location not required for this service',
+        pickupLat: '0',
+        pickupLng: '0',
+        ...serviceParams
       }
     });
-  };
+  } else {
+    // Normal flow - go to location details first
+    router.push({
+      pathname: '/(customer)/LocationDetails',
+      params: serviceParams
+    });
+  }
+};
 
   return (
     <View style={styles.container}>
@@ -137,19 +387,19 @@ const ServiceDetailsScreen = () => {
         {/* Service Header Card */}
         <View style={styles.serviceHeaderCard}>
           <View style={styles.serviceIconContainer}>
-            <View style={styles.serviceIconBox}>
+            <View style={[styles.serviceIconBox, { backgroundColor: '#e3f5ff' }]}>
               <Image
-                source={serviceDetails.icon}
+                source={serviceIcon}
                 style={styles.serviceIcon}
                 resizeMode="contain"
               />
             </View>
           </View>
-          <Text style={styles.serviceName}>{serviceDetails.name}</Text>
+          <Text style={styles.serviceName}>{serviceName || 'Quick Tow (Flatbed)'}</Text>
           <View style={styles.ratingDistanceContainer}>
             <View style={styles.ratingBox}>
               <Ionicons name="star" size={14} color="#FFB800" />
-              <Text style={styles.ratingText}>{serviceDetails.rating}</Text>
+              <Text style={styles.ratingText}>{parsedRating}</Text>
               <Text style={styles.reviewCount}>(234)</Text>
             </View>
             <View style={styles.separator}>
@@ -157,14 +407,14 @@ const ServiceDetailsScreen = () => {
             </View>
             <View style={styles.distanceBox}>
               <Ionicons name="time-outline" size={14} color="#8c8c8c" />
-              <Text style={styles.distanceText}>15-20 min</Text>
+              <Text style={styles.distanceText}>{displayTime}</Text>
             </View>
           </View>
           <View style={styles.priceSection}>
             <Text style={styles.startingFromText}>Starting from</Text>
             <View style={styles.priceRight}>
-              <Text style={styles.headerPrice}>{serviceDetails.price}</Text>
-              <Text style={styles.currency}>{serviceDetails.currency}</Text>
+              <Text style={styles.headerPrice}>{parsedPrice}</Text>
+              <Text style={styles.currency}>BHD</Text>
             </View>
           </View>
         </View>
@@ -174,10 +424,10 @@ const ServiceDetailsScreen = () => {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>About this service</Text>
           <Text style={styles.aboutText}>
-            {serviceDetails.description}
+            {serviceDescription || 'Professional service for your vehicle.'}
           </Text>
           <Text style={styles.aboutText}>
-            Our {serviceDetails.category} service provides fast, reliable assistance. We use state-of-the-art equipment to ensure your vehicle is handled with care.
+            Our {serviceName || 'service'} provides fast, reliable assistance. We use state-of-the-art equipment to ensure your vehicle is handled with care.
           </Text>
         </View>
         <View style={styles.sectionSeparator} />
@@ -218,30 +468,12 @@ const ServiceDetailsScreen = () => {
 
         {/* Stats Cards */}
         <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Image
-              source={require('../../assets/customer/shield.png')}
-              style={styles.statIcon}
-              resizeMode="contain"
-            />
-            <Text style={styles.statTitle}>Verified</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Image
-              source={require('../../assets/customer/jobs.png')}
-              style={styles.statIcon}
-              resizeMode="contain"
-            />
-            <Text style={styles.statTitle}>234+ Jobs</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Image
-              source={require('../../assets/customer/rated.png')}
-              style={styles.statIcon}
-              resizeMode="contain"
-            />
-            <Text style={styles.statTitle}>Top Rated</Text>
-          </View>
+          {stats.map((stat) => (
+            <View key={stat.id} style={styles.statCard}>
+              <Ionicons name={stat.icon as any} size={32} color="#68bdee" />
+              <Text style={styles.statTitle}>{stat.title}</Text>
+            </View>
+          ))}
         </View>
         <View style={styles.sectionSeparator} />
 
@@ -294,7 +526,7 @@ const ServiceDetailsScreen = () => {
               <Text style={styles.pricingInfoTitle}>Transparent pricing</Text>
             </View>
             <Text style={styles.pricingInfoText}>
-              Starting price is {serviceDetails.price} BHD. Final cost may vary based on distance and additional services. You'll see the exact price before confirming.
+              Starting price is {parsedPrice} BHD. Final cost may vary based on distance and additional services. You'll see the exact price before confirming.
             </Text>
           </View>
         </View>
@@ -307,7 +539,7 @@ const ServiceDetailsScreen = () => {
         <View style={styles.priceContainer}>
           <Text style={styles.priceLabel}>Starting from</Text>
           <Text style={styles.price}>
-            {serviceDetails.price} {serviceDetails.currency}
+            {parsedPrice} BHD
           </Text>
         </View>
         <TouchableOpacity
@@ -618,7 +850,6 @@ const styles = StyleSheet.create({
     color: '#5c5c5c',
     lineHeight: 18,
   },
-  // New wrapper with white background
   pricingWrapper: {
     backgroundColor: '#FFFFFF',
     paddingVertical: 20,

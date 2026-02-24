@@ -34,6 +34,19 @@ const PriceSummaryScreen = () => {
     }
   };
 
+  // Get service info
+  const serviceId = getStringParam(params.serviceId);
+  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
+  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
+  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
+  
+  // Check service types
+  const isCarRental = serviceId === '11';
+  const isFuelDelivery = serviceId === '3';
+  const isSpareParts = serviceId === '12';
+  const isTowing = serviceId === '1';
+  const isCarWash = serviceId === '9' || serviceId === '10';
+
   // Get all data from previous screens
   const pickupAddress = getStringParam(params.pickupAddress);
   const pickupLat = getStringParam(params.pickupLat);
@@ -41,9 +54,6 @@ const PriceSummaryScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
-  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
-  const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
   
   // Additional details data
   const urgency = getStringParam(params.urgency) || 'moderate';
@@ -70,6 +80,15 @@ const PriceSummaryScreen = () => {
   const emergencyContact = getStringParam(params.emergencyContact);
   const saveVehicle = getStringParam(params.saveVehicle) === 'true';
   
+  // NEW FIELDS from VehicleContactInfoScreen
+  const licenseFront = getStringParam(params.licenseFront);
+  const licenseBack = getStringParam(params.licenseBack);
+  const fuelType = getStringParam(params.fuelType);
+  const partDescription = getStringParam(params.partDescription);
+  
+  // Location skipped flag
+  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
+  
   // Schedule data
   const serviceTime = getStringParam(params.serviceTime) || 'schedule_later';
   const scheduledDate = getStringParam(params.scheduledDate);
@@ -86,6 +105,7 @@ const PriceSummaryScreen = () => {
     // Log received data for debugging
     console.log('Price Summary - Received data:', {
       serviceName,
+      serviceId,
       servicePrice,
       urgency,
       issuesCount: issues.length,
@@ -98,7 +118,12 @@ const PriceSummaryScreen = () => {
       makeModel,
       licensePlate,
       fullName,
-      phoneNumber
+      phoneNumber,
+      // New fields
+      hasLicense: !!licenseFront,
+      fuelType,
+      partDescription,
+      locationSkipped
     });
   }, []);
 
@@ -107,9 +132,9 @@ const PriceSummaryScreen = () => {
   };
 
   const handleContinue = () => {
-    // Navigate to confirm booking screen with all collected data
+    // Navigate to confirm booking screen with ALL collected data
     router.push({
-      pathname: '/(customer)/confirmbooking',
+      pathname: '/(customer)/ConfirmBooking',
       params: {
         // Location data
         pickupAddress,
@@ -120,6 +145,7 @@ const PriceSummaryScreen = () => {
         dropoffLng,
         
         // Service data
+        serviceId,
         serviceName,
         servicePrice,
         serviceCategory,
@@ -149,6 +175,15 @@ const PriceSummaryScreen = () => {
         emergencyContact,
         saveVehicle: String(saveVehicle),
         
+        // NEW FIELDS from VehicleContactInfo
+        licenseFront,
+        licenseBack,
+        fuelType,
+        partDescription,
+        
+        // Location skipped flag
+        locationSkipped: String(locationSkipped),
+        
         // Schedule data
         serviceTime,
         scheduledDate,
@@ -171,8 +206,11 @@ const PriceSummaryScreen = () => {
     return match ? parseInt(match[0], 10) : 75;
   };
 
+  // Calculate fees based on service type
   const baseServiceFee = parsePrice(servicePrice);
-  const distanceFee = 15;
+  
+  // Different fee structure for Car Rental
+  const distanceFee = isCarRental ? 0 : 15; // No distance fee for car rental
   const platformServiceFee = 5;
   const taxRate = 0.05;
   
@@ -185,10 +223,67 @@ const PriceSummaryScreen = () => {
     if (serviceTime === 'right_now') {
       return 'ASAP (15-20 min)';
     } else if (scheduledDate && scheduledTimeSlot) {
-      return `${scheduledDate} at ${scheduledTimeSlot}`;
+      try {
+        const date = new Date(scheduledDate);
+        return `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
+      } catch {
+        return `${scheduledDate} at ${scheduledTimeSlot}`;
+      }
     } else {
       return 'Schedule later';
     }
+  };
+
+  // Get service-specific summary details
+  const getServiceSpecificSummary = () => {
+    if (isCarRental && licenseFront) {
+      return (
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>License:</Text>
+          <Text style={styles.summaryValue}>Uploaded ✓</Text>
+        </View>
+      );
+    }
+    if (isFuelDelivery && fuelType) {
+      return (
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Fuel Type:</Text>
+          <Text style={styles.summaryValue}>
+            {fuelType === 'petrol' ? 'Petrol' : 
+             fuelType === 'diesel' ? 'Diesel' : 'Premium'}
+          </Text>
+        </View>
+      );
+    }
+    if (isSpareParts && partDescription) {
+      return (
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Part:</Text>
+          <Text style={styles.summaryValue} numberOfLines={1}>
+            {partDescription.substring(0, 30)}...
+          </Text>
+        </View>
+      );
+    }
+    return null;
+  };
+
+  // Get step number based on service
+  const getStepNumber = () => {
+    if (isCarRental) return 6; // Location (1) → Vehicle+License (2) → Additional (3) → Schedule (4) → Price Summary (5) → Confirm (6)
+    return 5; // Normal flow: Location (1) → Vehicle (2) → Additional (3) → Schedule (4) → Price Summary (5)
+  };
+
+  // Get total steps
+  const getTotalSteps = () => {
+    return 7;
+  };
+
+  // Calculate progress percentage
+  const getProgressPercentage = () => {
+    const step = getStepNumber();
+    const total = getTotalSteps();
+    return `${(step / total) * 100}%`;
   };
 
   return (
@@ -203,7 +298,7 @@ const PriceSummaryScreen = () => {
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>PRICE SUMMARY</Text>
-          <Text style={styles.headerSubtitle}>Step 8 of 10</Text>
+          <Text style={styles.headerSubtitle}>Step {getStepNumber()} of {getTotalSteps()}</Text>
         </View>
         <TouchableOpacity style={styles.editButton}>
           <Image 
@@ -216,9 +311,35 @@ const PriceSummaryScreen = () => {
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: '80%' }]} />
+          <View style={[styles.progressFill, { width: getProgressPercentage() as any}]} />
         </View>
       </View>
+
+      {/* Service Banner for special services */}
+      {isCarRental && (
+        <View style={styles.serviceBanner}>
+          <Ionicons name="car" size={20} color="#FFFFFF" />
+          <Text style={styles.serviceBannerText}>
+            Car Rental - License verified ✓
+          </Text>
+        </View>
+      )}
+      {isFuelDelivery && fuelType && (
+        <View style={[styles.serviceBanner, { backgroundColor: '#4CAF50' }]}>
+          <Ionicons name="flame" size={20} color="#FFFFFF" />
+          <Text style={styles.serviceBannerText}>
+            Fuel: {fuelType === 'petrol' ? 'Petrol' : fuelType === 'diesel' ? 'Diesel' : 'Premium'}
+          </Text>
+        </View>
+      )}
+      {isSpareParts && partDescription && (
+        <View style={[styles.serviceBanner, { backgroundColor: '#9C27B0' }]}>
+          <Ionicons name="construct" size={20} color="#FFFFFF" />
+          <Text style={styles.serviceBannerText}>
+            Part details provided
+          </Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scrollView}
@@ -234,28 +355,34 @@ const PriceSummaryScreen = () => {
             <Text style={styles.summaryValue}>{serviceName}</Text>
           </View>
           
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Pickup:</Text>
-            <Text style={styles.summaryValue} numberOfLines={2}>
-              {pickupAddress || 'Not specified'}
-            </Text>
-          </View>
+          {/* Show service-specific summary */}
+          {getServiceSpecificSummary()}
           
-          {dropoffAddress ? (
+          {/* Show pickup only if not locationSkipped or if it's a valid address */}
+          {!locationSkipped && pickupAddress && pickupAddress !== 'Location not required for this service' && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Pickup:</Text>
+              <Text style={styles.summaryValue} numberOfLines={2}>
+                {pickupAddress}
+              </Text>
+            </View>
+          )}
+          
+          {dropoffAddress && !locationSkipped && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Dropoff:</Text>
               <Text style={styles.summaryValue} numberOfLines={2}>
                 {dropoffAddress}
               </Text>
             </View>
-          ) : null}
+          )}
           
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Schedule:</Text>
             <Text style={styles.summaryValue}>{getScheduleDisplay()}</Text>
           </View>
 
-          {urgency && (
+          {urgency && !isCarRental && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Urgency:</Text>
               <Text style={styles.summaryValue}>
@@ -273,6 +400,13 @@ const PriceSummaryScreen = () => {
               </Text>
             </View>
           )}
+
+          {licensePlate && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Plate:</Text>
+              <Text style={styles.summaryValue}>{licensePlate}</Text>
+            </View>
+          )}
         </View>
 
         {/* Price Breakdown */}
@@ -284,10 +418,12 @@ const PriceSummaryScreen = () => {
             <Text style={styles.priceValue}>{baseServiceFee} BHD</Text>
           </View>
           
-          <View style={styles.priceRow}>
-            <Text style={styles.priceLabel}>Distance Fee (~5 km)</Text>
-            <Text style={styles.priceValue}>{distanceFee} BHD</Text>
-          </View>
+          {!isCarRental && (
+            <View style={styles.priceRow}>
+              <Text style={styles.priceLabel}>Distance Fee (~5 km)</Text>
+              <Text style={styles.priceValue}>{distanceFee} BHD</Text>
+            </View>
+          )}
           
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Platform Service Fee</Text>
@@ -319,36 +455,38 @@ const PriceSummaryScreen = () => {
           </View>
         </View>
 
-        {/* Tip Section */}
-        <View style={styles.tipCard}>
-          <Text style={styles.cardTitle}>ADD TIP (OPTIONAL)</Text>
-          
-          <View style={styles.tipOptionsContainer}>
-            {tipOptions.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={[
-                  styles.tipButton,
-                  selectedTip === option.value && styles.tipButtonSelected,
-                ]}
-                onPress={() => handleSelectTip(option.value)}
-              >
-                <Text
+        {/* Tip Section - Hide for Car Rental maybe? */}
+        {!isCarRental && (
+          <View style={styles.tipCard}>
+            <Text style={styles.cardTitle}>ADD TIP (OPTIONAL)</Text>
+            
+            <View style={styles.tipOptionsContainer}>
+              {tipOptions.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
                   style={[
-                    styles.tipButtonText,
-                    selectedTip === option.value && styles.tipButtonTextSelected,
+                    styles.tipButton,
+                    selectedTip === option.value && styles.tipButtonSelected,
                   ]}
+                  onPress={() => handleSelectTip(option.value)}
                 >
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <Text
+                    style={[
+                      styles.tipButtonText,
+                      selectedTip === option.value && styles.tipButtonTextSelected,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            <Text style={styles.tipNote}>
+              100% of your tip goes directly to the service provider
+            </Text>
           </View>
-          
-          <Text style={styles.tipNote}>
-            100% of your tip goes directly to the service provider
-          </Text>
-        </View>
+        )}
 
         {/* Promo Code */}
         <View style={styles.promoCard}>
@@ -432,9 +570,10 @@ const PriceSummaryScreen = () => {
             <Text style={styles.guaranteeTitle}>Price Guarantee</Text>
           </View>
           <Text style={styles.guaranteeText}>
-            Final price may vary by ±10% based on actual distance and service time. 
-            You'll be notified of any changes before service begins and can cancel 
-            free of charge.
+            {isCarRental 
+              ? 'Final price includes all rental fees and insurance. No hidden charges.'
+              : 'Final price may vary by ±10% based on actual distance and service time. You\'ll be notified of any changes before service begins and can cancel free of charge.'
+            }
           </Text>
         </View>
 
@@ -448,40 +587,63 @@ const PriceSummaryScreen = () => {
           
           <View style={styles.calculationDivider} />
           
-          <View style={styles.calculationItem}>
-            <View style={styles.bulletPoint} />
-            <Text style={styles.calculationText}>
-              Base fee covers the first 3km and basic service
-            </Text>
-          </View>
-          
-          <View style={styles.calculationItem}>
-            <View style={styles.bulletPoint} />
-            <Text style={styles.calculationText}>
-              Distance fee: 3 BHD per additional kilometer
-            </Text>
-          </View>
-          
-          <View style={styles.calculationItem}>
-            <View style={styles.bulletPoint} />
-            <Text style={styles.calculationText}>
-              Platform fee supports app maintenance
-            </Text>
-          </View>
-          
-          <View style={styles.calculationItem}>
-            <View style={styles.bulletPoint} />
-            <Text style={styles.calculationText}>
-              Urgent service adds priority to your request
-            </Text>
-          </View>
-          
-          <View style={styles.calculationItem}>
-            <View style={styles.bulletPoint} />
-            <Text style={styles.calculationText}>
-              All taxes are included in the final price
-            </Text>
-          </View>
+          {isCarRental ? (
+            // Car Rental specific calculation
+            <>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Base rental fee includes daily rate and insurance
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Platform fee supports app maintenance
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  All taxes are included in the final price
+                </Text>
+              </View>
+            </>
+          ) : (
+            // Normal service calculation
+            <>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Base fee covers the first 3km and basic service
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Distance fee: 3 BHD per additional kilometer
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Platform fee supports app maintenance
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  Urgent service adds priority to your request
+                </Text>
+              </View>
+              <View style={styles.calculationItem}>
+                <View style={styles.bulletPoint} />
+                <Text style={styles.calculationText}>
+                  All taxes are included in the final price
+                </Text>
+              </View>
+            </>
+          )}
         </View>
 
         <View style={{ height: 20 }} />
@@ -565,6 +727,20 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
+  },
+  serviceBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#68bdee',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  serviceBannerText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    flex: 1,
+    fontWeight: '500',
   },
   scrollView: {
     flex: 1,
