@@ -26,9 +26,26 @@ interface UserData {
   fullName: string;
   email: string;
   phoneNumber: string;
+  role?: string; // Optional - backend will set to 'provider'
 }
 
-const SignUpScreen = () => {
+interface BackendResponse {
+  success: boolean;
+  message?: string;
+  data?: {
+    id: string;
+    firebaseUserId: string;
+    fullName: string;
+    email: string;
+    phoneNumber: string;
+    role: string;
+    status: string;
+    createdAt: string;
+    token: string;
+  };
+}
+
+const ProviderSignUpScreen = () => {
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<string>('signup');
@@ -50,17 +67,6 @@ const SignUpScreen = () => {
 
   const handleSignInNavigation = () => {
     router.push('/provider_signin');
-  };
-
-  // Function to save user type to local storage
-  const saveUserTypeToStorage = async (email: string): Promise<void> => {
-    try {
-      const storageKey = `userType_${email.toLowerCase().trim()}`;
-      await AsyncStorage.setItem(storageKey, 'provider');
-      console.log('User type saved as provider for:', email);
-    } catch (error) {
-      console.error('Error saving user type:', error);
-    }
   };
 
   const formatPhoneNumber = (phone: string): string => {
@@ -96,16 +102,19 @@ const SignUpScreen = () => {
     return password.length >= 6;
   };
 
-  const sendUserDataToBackend = async (firebaseUserId: string): Promise<void> => {
+  const sendUserDataToBackend = async (firebaseUserId: string): Promise<BackendResponse['data'] | null> => {
     try {
       const userData: UserData = {
         firebaseUserId,
         fullName,
         email,
         phoneNumber: formatPhoneNumber(phoneNumber),
+        role: 'provider' // Send provider role explicitly
       };
 
       const backendUrl = 'https://yhiw-backend.onrender.com';
+      
+      console.log('Sending provider data to backend:', userData);
       
       const response = await fetch(`${backendUrl}/api/users`, {
         method: 'POST',
@@ -115,14 +124,30 @@ const SignUpScreen = () => {
         body: JSON.stringify(userData),
       });
 
-      if (!response.ok) {
-        console.warn('Backend save failed, but continuing...');
+      const data: BackendResponse = await response.json();
+
+      if (response.ok && data.success && data.data) {
+        // Save the JWT token from response
+        if (data.data.token) {
+          await AsyncStorage.setItem('userToken', data.data.token);
+          await AsyncStorage.setItem('userData', JSON.stringify(data.data));
+          console.log('Provider data and token saved to storage:', {
+            id: data.data.id,
+            role: data.data.role,
+            email: data.data.email
+          });
+          return data.data;
+        }
       } else {
-        console.log('User data saved to backend successfully');
+        console.warn('Backend save failed:', data.message);
+        if (response.status === 409) {
+          Alert.alert('Account Exists', data.message || 'User already exists');
+        }
       }
     } catch (error: any) {
-      console.warn('Backend error (non-critical):', error.message);
+      console.warn('Backend error:', error.message);
     }
+    return null;
   };
 
   const validateForm = (): boolean => {
@@ -187,8 +212,6 @@ const SignUpScreen = () => {
       const otp = generateOTP();
       setGeneratedOtp(otp);
       
-      // TODO: Send OTP to backend to send SMS
-      // For now, just show it in console and alert (for testing)
       console.log('Generated OTP:', otp);
       console.log('Phone number:', formattedPhone);
 
@@ -206,7 +229,6 @@ const SignUpScreen = () => {
         });
       }, 1000);
 
-      // Show OTP in alert (FOR TESTING ONLY - remove in production)
       Alert.alert(
         'OTP Sent', 
         `Your verification code is: ${otp}\n\nSent to: ${formattedPhone}\n\n(This is for testing. In production, you'll receive it via SMS)`,
@@ -226,7 +248,6 @@ const SignUpScreen = () => {
       return;
     }
 
-    // Verify OTP matches
     if (verificationCode !== generatedOtp) {
       Alert.alert('Invalid Code', 'The verification code is incorrect. Please try again.');
       return;
@@ -235,7 +256,6 @@ const SignUpScreen = () => {
     setIsVerifyingOtp(true);
 
     try {
-      // Create email/password account
       const userCredential = await createUserWithEmailAndPassword(
         auth, 
         email, 
@@ -243,22 +263,30 @@ const SignUpScreen = () => {
       );
       const user = userCredential.user;
 
-      console.log('Firebase user created:', user.uid);
+      console.log('Firebase provider created:', user.uid);
 
-      // Save user type to AsyncStorage
-      await saveUserTypeToStorage(email);
+      // Send to backend and get complete user data with token
+      const userData = await sendUserDataToBackend(user.uid);
 
-      // Try to save to backend (non-critical)
-      await sendUserDataToBackend(user.uid);
-
-      Alert.alert(
-        'Success', 
-        'Your account has been created successfully!',
-        [{ 
-          text: 'Continue', 
-          onPress: () => router.replace('/(provider)/Home' as any) 
-        }]
-      );
+      if (userData) {
+        Alert.alert(
+          'Success', 
+          'Your provider account has been created successfully!',
+          [{ 
+            text: 'Continue', 
+            onPress: () => router.replace('/(provider)/Home' as any) 
+          }]
+        );
+      } else {
+        Alert.alert(
+          'Partial Success', 
+          'Account created!',
+          [{ 
+            text: 'Continue', 
+            onPress: () => router.replace('/(provider)/Home' as any) 
+          }]
+        );
+      }
     } catch (error: any) {
       console.error('Account creation error:', error);
       
@@ -330,7 +358,7 @@ const SignUpScreen = () => {
             />
           </View>
           <Text style={styles.appName}>YHIW</Text>
-          <Text style={styles.tagline}>YOUR HELP IN WAY</Text>
+          <Text style={styles.tagline}>PROVIDER REGISTRATION</Text>
         </View>
 
         {/* Sign In / Sign Up Toggle */}
@@ -350,7 +378,7 @@ const SignUpScreen = () => {
             disabled={isLoading || isSendingOtp || isVerifyingOtp}
           >
             <Text style={[styles.tabText, activeTab === 'signup' && styles.activeTabText]}>
-              Sign Up
+              SIGN UP
             </Text>
           </TouchableOpacity>
         </View>
@@ -506,7 +534,7 @@ const SignUpScreen = () => {
             ) : (
               <>
                 <Text style={styles.primaryButtonText}>
-                  SEND VERIFICATION CODE
+                  CREATE ACCOUNT
                 </Text>
                 <Feather name="arrow-right" size={18} color="#FFF" style={styles.arrowIcon} />
               </>
@@ -526,7 +554,7 @@ const SignUpScreen = () => {
             ) : (
               <>
                 <Text style={styles.primaryButtonText}>
-                  CREATE ACCOUNT
+                  CREATE PROVIDER ACCOUNT
                 </Text>
                 <Feather name="check" size={18} color="#FFF" style={styles.arrowIcon} />
               </>
@@ -584,6 +612,7 @@ const SignUpScreen = () => {
   );
 };
 
+// Copy the same styles from your customer SignUpScreen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -832,4 +861,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SignUpScreen;
+export default ProviderSignUpScreen;

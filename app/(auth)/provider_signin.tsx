@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState, useEffect } from 'react';
@@ -20,26 +14,34 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// import {  signInWithEmailAndPassword as firebaseSignIn } from 'firebase/auth';
-import { signOut, signInWithEmailAndPassword } from 'firebase/auth';
-
-// @ts-ignore - Your JS file doesn't have TypeScript types
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../constants/firebase';
 
 interface UserData {
+  id: string;
   firebaseUserId: string;
   fullName: string;
   email: string;
   phoneNumber: string;
+  role: 'customer' | 'provider' | 'admin';
+  status: 'active' | 'inactive' | 'suspended';
+  createdAt: string;
+  updatedAt?: string;
+  token: string;
+}
+
+interface BackendResponse {
+  success: boolean;
+  message?: string;
+  data?: UserData;
 }
 
 interface FirebaseAuthError {
   code: string;
   message: string;
-  name?: string;
 }
 
-const SignInScreen = () => {
+const ProviderSignInScreen = () => {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState('signin');
   const [email, setEmail] = useState('');
@@ -47,8 +49,6 @@ const SignInScreen = () => {
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-
-  // ✅ Get auth lazily (Expo-safe)
 
   // Load saved credentials on mount
   useEffect(() => {
@@ -69,39 +69,31 @@ const SignInScreen = () => {
     loadSavedCredentials();
   }, []);
 
-  // Check if email belongs to a provider
-  const checkIfprovider = async (userEmail: string): Promise<boolean> => {
-    try {
-      const storageKey = `userType_${userEmail.toLowerCase().trim()}`;
-      const userType = await AsyncStorage.getItem(storageKey);
-
-      console.log(`Checking user type for ${userEmail}:`, userType);
-
-      return userType === 'provider';
-    } catch (error) {
-      console.error('Error checking provider status:', error);
-      return false;
-    }
-  };
-
   const fetchUserDataFromBackend = async (firebaseUserId: string): Promise<UserData | null> => {
     try {
       const backendUrl = 'https://yhiw-backend.onrender.com';
-      if (!backendUrl) {
-        console.warn('Backend URL is not defined');
-        return null;
-      }
-
+      
+      console.log('Fetching provider data for Firebase UID:', firebaseUserId);
+      
       const response = await fetch(`${backendUrl}/api/users/${firebaseUserId}`);
 
       if (!response.ok) {
-        console.warn('Failed to fetch user data from backend');
+        console.warn('Failed to fetch user data from backend:', response.status);
         return null;
       }
 
-      const userData: UserData = await response.json();
-      console.log('User data fetched from backend:', userData);
-      return userData;
+      const data: BackendResponse = await response.json();
+      
+      if (data.success && data.data) {
+        console.log('Provider data fetched from backend:', {
+          id: data.data.id,
+          email: data.data.email,
+          role: data.data.role
+        });
+        return data.data;
+      }
+      
+      return null;
     } catch (error) {
       console.error('Error fetching user data from backend:', error);
       return null;
@@ -136,43 +128,53 @@ const SignInScreen = () => {
     setIsLoading(true);
 
     try {
-      // Use Firebase auth directly (no wrapper needed)
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email,
-        password
-      ); const user = userCredential.user;
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
 
-      console.log('Firebase user signed in successfully:', user.uid);
+      console.log('Firebase provider signed in successfully:', user.uid);
 
-      // Check if this email belongs to a provider
-      const isprovider = await checkIfprovider(email);
+      // Fetch user data from backend (includes role and token)
+      const userData = await fetchUserDataFromBackend(user.uid);
 
-      if (!isprovider) {
-        // Sign out the user if they're not a provider
-
+      if (!userData) {
+        await signInWithEmailAndPassword(auth, email, password); // Sign out
         Alert.alert(
-          'Access Denied',
-          'This account is registered as a customer, not a provider. Please use the customer to sign in.',
+          'Account Error',
+          'Your account exists but profile data is missing. Please contact support.'
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      // Check if user is a provider
+      if (userData.role !== 'provider') {
+        await signInWithEmailAndPassword(auth, email, password);
+        
+        const message = userData.role === 'customer' 
+          ? 'This account is registered as a customer. Please use the customer app to sign in.'
+          : 'You do not have provider access. Please contact support.';
+        
+        Alert.alert('Access Denied', message, [{ text: 'OK' }]);
+        setIsLoading(false);
+        return;
+      }
+
+      // Check if account is active
+      if (userData.status !== 'active') {
+        await signInWithEmailAndPassword(auth, email, password);
+        Alert.alert(
+          'Account Inactive',
+          'Your provider account is not active. Please contact support.',
           [{ text: 'OK' }]
         );
         setIsLoading(false);
         return;
       }
 
-      // Fetch additional user data from backend
-      let userData: UserData | null = null;
-      try {
-        userData = await fetchUserDataFromBackend(user.uid);
-
-        if (userData) {
-          await AsyncStorage.setItem('userData', JSON.stringify(userData));
-          console.log('Full user data:', userData);
-        }
-      } catch (backendError) {
-        console.log('Backend fetch failed, continuing with Firebase auth');
-      }
-
+      // Save the JWT token and user data from backend
+      await AsyncStorage.setItem('userToken', userData.token);
+      await AsyncStorage.setItem('userData', JSON.stringify(userData));
+      
       // Store remember me preference
       if (rememberMe) {
         await AsyncStorage.setItem('rememberMe', 'true');
@@ -182,11 +184,12 @@ const SignInScreen = () => {
         await AsyncStorage.removeItem('savedEmail');
       }
 
-      // Navigate directly without alert (cleaner UX)
+      console.log('Provider sign in successful - token and user data saved');
+
       router.replace('/(provider)/Home');
 
     } catch (error: unknown) {
-      console.error('Firebase signin error:', error);
+      console.error('Sign in error:', error);
 
       let errorMessage = 'Failed to sign in. Please check your credentials and try again.';
 
@@ -195,16 +198,15 @@ const SignInScreen = () => {
           typeof err === 'object' &&
           err !== null &&
           'code' in err &&
-          typeof (err as FirebaseAuthError).code === 'string' &&
-          'message' in err &&
-          typeof (err as FirebaseAuthError).message === 'string'
+          typeof (err as FirebaseAuthError).code === 'string'
         );
       };
 
       if (isFirebaseError(error)) {
         switch (error.code) {
           case 'auth/user-not-found':
-            errorMessage = 'No account found with this email. Please sign up first.';
+          case 'auth/invalid-credential':
+            errorMessage = 'Invalid email or password. Please try again.';
             break;
           case 'auth/wrong-password':
             errorMessage = 'Incorrect password. Please try again.';
@@ -221,16 +223,9 @@ const SignInScreen = () => {
           case 'auth/too-many-requests':
             errorMessage = 'Too many failed attempts. Please try again later.';
             break;
-          case 'auth/invalid-credential':
-            errorMessage = 'Invalid credentials. Please check your email and password.';
-            break;
           default:
             errorMessage = error.message || 'An unexpected error occurred';
         }
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
-      } else if (typeof error === 'string') {
-        errorMessage = error;
       }
 
       Alert.alert('Sign In Failed', errorMessage);
@@ -242,10 +237,6 @@ const SignInScreen = () => {
 
   const handleSignUpNavigation = () => {
     router.push('/provider_signup');  
-  };
-
-  const handleContinueAsGuest = () => {
-    router.push('/(provider)/Home');
   };
 
   const handleForgotPassword = () => {
@@ -268,7 +259,7 @@ const SignInScreen = () => {
             />
           </View>
           <Text style={styles.appName}>YHIW</Text>
-          <Text style={styles.tagline}>YOUR HELP IN WAY</Text>
+          <Text style={styles.tagline}>PROVIDER SIGN IN</Text>
         </View>
 
         {/* Sign In / Sign Up Toggle */}
@@ -288,7 +279,7 @@ const SignInScreen = () => {
             disabled={isLoading}
           >
             <Text style={[styles.tabText, activeTab === 'signup' && styles.activeTabText]}>
-              Sign Up
+              SIGN UP
             </Text>
           </TouchableOpacity>
         </View>
@@ -381,44 +372,26 @@ const SignInScreen = () => {
 
         {/* Social Login Buttons */}
         <View style={styles.socialButtonsContainer}>
-          <TouchableOpacity
-            style={[styles.socialButton, isLoading && styles.disabledButton]}
-            disabled={isLoading}
-          >
+          <TouchableOpacity style={[styles.socialButton, isLoading && styles.disabledButton]} disabled={isLoading}>
             <Text style={styles.socialButtonText}>G</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.socialButton, isLoading && styles.disabledButton]}
-            disabled={isLoading}
-          >
+          <TouchableOpacity style={[styles.socialButton, isLoading && styles.disabledButton]} disabled={isLoading}>
             <Image
               source={require('../../assets/auth/apple.png')}
               style={styles.socialIcon}
               resizeMode="contain"
             />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.socialButton, isLoading && styles.disabledButton]}
-            disabled={isLoading}
-          >
+          <TouchableOpacity style={[styles.socialButton, isLoading && styles.disabledButton]} disabled={isLoading}>
             <Text style={styles.socialButtonText}>f</Text>
           </TouchableOpacity>
         </View>
 
-        {/* 
-        <TouchableOpacity
-          style={[styles.guestButton, isLoading && styles.disabledButton]}
-          onPress={handleContinueAsGuest}
-          disabled={isLoading}
-        >
-          <Text style={styles.guestButtonText}>CONTINUE AS A GUEST</Text>
-        </TouchableOpacity> */}
-
-        {/* Sign Up Link with Underline */}
+        {/* Sign Up Link */}
         <View style={styles.signUpContainer}>
           <Text style={styles.signUpText}>DON'T HAVE AN ACCOUNT? </Text>
           <TouchableOpacity onPress={handleSignUpNavigation} disabled={isLoading}>
-            <Text style={styles.signUpLink}>APPLY Now</Text>
+            <Text style={styles.signUpLink}>APPLY NOW</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -426,7 +399,7 @@ const SignInScreen = () => {
   );
 };
 
-// Keep your styles the same...
+// Copy the same styles from your customer SignInScreen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -626,21 +599,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#2c2c2c',
   },
-  guestButton: {
-    paddingVertical: 16,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 24,
-    backgroundColor: '#FFF',
-  },
-  guestButtonText: {
-    fontSize: 12,
-    color: '#68bdee',
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
   signUpContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -659,4 +617,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default SignInScreen;
+export default ProviderSignInScreen;

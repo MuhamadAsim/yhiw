@@ -28,6 +28,22 @@ interface UserData {
   phoneNumber: string;
 }
 
+interface BackendResponse {
+  success: boolean;
+  message?: string;
+  data?: {
+    id: string;
+    firebaseUserId: string;
+    fullName: string;
+    email: string;
+    phoneNumber: string;
+    role: string;
+    status: string;
+    createdAt: string;
+    token: string;
+  };
+}
+
 const SignUpScreen = () => {
   const router = useRouter();
 
@@ -50,17 +66,6 @@ const SignUpScreen = () => {
 
   const handleSignInNavigation = () => {
     router.push('/customer_signin');
-  };
-
-  // Function to save user type to local storage
-  const saveUserTypeToStorage = async (email: string): Promise<void> => {
-    try {
-      const storageKey = `userType_${email.toLowerCase().trim()}`;
-      await AsyncStorage.setItem(storageKey, 'customer');
-      console.log('User type saved as customer for:', email);
-    } catch (error) {
-      console.error('Error saving user type:', error);
-    }
   };
 
   const formatPhoneNumber = (phone: string): string => {
@@ -96,16 +101,19 @@ const SignUpScreen = () => {
     return password.length >= 6;
   };
 
-  const sendUserDataToBackend = async (firebaseUserId: string): Promise<void> => {
+  const sendUserDataToBackend = async (firebaseUserId: string): Promise<BackendResponse['data'] | null> => {
     try {
       const userData: UserData = {
         firebaseUserId,
         fullName,
         email,
         phoneNumber: formatPhoneNumber(phoneNumber),
+        // Role not sent - backend defaults to 'customer'
       };
 
       const backendUrl = 'https://yhiw-backend.onrender.com';
+      
+      console.log('Sending user data to backend:', userData);
       
       const response = await fetch(`${backendUrl}/api/users`, {
         method: 'POST',
@@ -115,14 +123,31 @@ const SignUpScreen = () => {
         body: JSON.stringify(userData),
       });
 
-      if (!response.ok) {
-        console.warn('Backend save failed, but continuing...');
+      const data: BackendResponse = await response.json();
+
+      if (response.ok && data.success && data.data) {
+        // Save the JWT token from response
+        if (data.data.token) {
+          await AsyncStorage.setItem('userToken', data.data.token);
+          await AsyncStorage.setItem('userData', JSON.stringify(data.data));
+          console.log('User data and token saved to storage:', {
+            id: data.data.id,
+            role: data.data.role,
+            email: data.data.email
+          });
+          return data.data;
+        }
       } else {
-        console.log('User data saved to backend successfully');
+        console.warn('Backend save failed:', data.message);
+        // Log the actual error for debugging
+        if (response.status === 409) {
+          Alert.alert('Account Exists', data.message || 'User already exists');
+        }
       }
     } catch (error: any) {
-      console.warn('Backend error (non-critical):', error.message);
+      console.warn('Backend error:', error.message);
     }
+    return null;
   };
 
   const validateForm = (): boolean => {
@@ -245,20 +270,30 @@ const SignUpScreen = () => {
 
       console.log('Firebase user created:', user.uid);
 
-      // Save user type to AsyncStorage
-      await saveUserTypeToStorage(email);
+      // Send to backend and get complete user data with token
+      const userData = await sendUserDataToBackend(user.uid);
 
-      // Try to save to backend (non-critical)
-      await sendUserDataToBackend(user.uid);
-
-      Alert.alert(
-        'Success', 
-        'Your account has been created successfully!',
-        [{ 
-          text: 'Continue', 
-          onPress: () => router.replace('/(customer)/Home' as any) 
-        }]
-      );
+      if (userData) {
+        // Success - user data and token saved by sendUserDataToBackend
+        Alert.alert(
+          'Success', 
+          'Your account has been created successfully!',
+          [{ 
+            text: 'Continue', 
+            onPress: () => router.replace('/(customer)/Home' as any) 
+          }]
+        );
+      } else {
+        // Handle case where backend save failed but Firebase account was created
+        Alert.alert(
+          'Partial Success', 
+          'Account created!',
+          [{ 
+            text: 'Continue', 
+            onPress: () => router.replace('/(customer)/Home' as any) 
+          }]
+        );
+      }
     } catch (error: any) {
       console.error('Account creation error:', error);
       
@@ -309,6 +344,14 @@ const SignUpScreen = () => {
     setVerificationCode('');
     setGeneratedOtp('');
     setOtpCooldown(0);
+  };
+
+  // Debug function to check stored data (optional)
+  const checkStoredData = async () => {
+    const token = await AsyncStorage.getItem('userToken');
+    const userData = await AsyncStorage.getItem('userData');
+    console.log('Stored token:', token ? 'exists' : 'none');
+    console.log('Stored user data:', userData ? JSON.parse(userData) : 'none');
   };
 
   return (
@@ -506,7 +549,7 @@ const SignUpScreen = () => {
             ) : (
               <>
                 <Text style={styles.primaryButtonText}>
-                  SEND VERIFICATION CODE
+                  CREATE ACCOUNT
                 </Text>
                 <Feather name="arrow-right" size={18} color="#FFF" style={styles.arrowIcon} />
               </>
@@ -579,6 +622,11 @@ const SignUpScreen = () => {
             <Text style={styles.signInLink}>SIGN IN</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Debug button - remove in production */}
+        {/* <TouchableOpacity onPress={checkStoredData} style={{marginTop: 10}}>
+          <Text>Check Storage</Text>
+        </TouchableOpacity> */}
       </ScrollView>
     </KeyboardAvoidingView>
   );
