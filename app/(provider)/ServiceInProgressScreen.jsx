@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
-  StatusBar,
-} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
+import {
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 // ─── Timer Hook ───────────────────────────────────────────────────────────────
 
@@ -115,92 +115,62 @@ export default function ServiceInProgressScreen() {
   };
 
   const handleComplete = () => {
-    // First confirmation
-    Alert.alert(
-      'Complete Service',
-      'Are you sure you want to complete this service?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel'
-        },
-        {
-          text: 'Yes, Complete',
-          onPress: () => {
-            // Check if checklist is completed
-            if (completedItems.length < CHECKLIST.length) {
-              Alert.alert(
-                'Incomplete Checklist',
-                `You have completed ${completedItems.length} out of ${CHECKLIST.length} items. Are you sure you want to continue?`,
-                [
-                  {
-                    text: 'Go Back',
-                    style: 'cancel'
+  // First confirmation
+  Alert.alert(
+    'Complete Service',
+    'Are you sure you want to complete this service?',
+    [
+      {
+        text: 'Cancel',
+        style: 'cancel'
+      },
+      {
+        text: 'Continue',
+        onPress: () => {
+          // Check if checklist is incomplete
+          if (completedItems.length < CHECKLIST.length) {
+            // Show warning about incomplete checklist
+            Alert.alert(
+              'Incomplete Checklist',
+              `You have completed ${completedItems.length} out of ${CHECKLIST.length} items. Complete anyway?`,
+              [
+                {
+                  text: 'Go Back',
+                  style: 'cancel'
+                },
+                {
+                  text: 'Complete Service',
+                  onPress: () => {
+                    // Navigate to Service Complete screen
+                    router.push({
+                      pathname: '/ServiceCompletedScreen',
+                      params: {
+                        serviceTime: display,
+                        earnings: '81',
+                        requestId: 'REQ-7891'
+                      }
+                    });
                   },
-                  {
-                    text: 'Complete Anyway',
-                    onPress: () => {
-                      // Second confirmation
-                      Alert.alert(
-                        'Final Confirmation',
-                        'This action cannot be undone. Complete service now?',
-                        [
-                          {
-                            text: 'Cancel',
-                            style: 'cancel'
-                          },
-                          {
-                            text: 'Complete Service',
-                            onPress: () => {
-                              // Navigate to Service Complete screen with service data
-                              router.push({
-                                pathname: '/ServiceCompleteScreen',
-                                params: {
-                                  serviceTime: display,
-                                  earnings: '81',
-                                  requestId: 'REQ-7891'
-                                }
-                              });
-                            }
-                          }
-                        ]
-                      );
-                    }
-                  }
-                ]
-              );
-            } else {
-              // Second confirmation directly
-              Alert.alert(
-                'Final Confirmation',
-                'This action cannot be undone. Complete service now?',
-                [
-                  {
-                    text: 'Cancel',
-                    style: 'cancel'
-                  },
-                  {
-                    text: 'Complete Service',
-                    onPress: () => {
-                      // Navigate to Service Complete screen with service data
-                      router.push({
-                        pathname: '/ServiceCompleteScreen',
-                        params: {
-                          serviceTime: display,
-                          earnings: '81',
-                          requestId: 'REQ-7891'
-                        }
-                      });
-                    }
-                  }
-                ]
-              );
-            }
+                  style: 'destructive'
+                }
+              ]
+            );
+          } else {
+            // Checklist complete - go straight to completion
+            router.push({
+              pathname: '/ServiceCompletedScreen',
+              params: {
+                serviceTime: display,
+                earnings: '81',
+                requestId: 'REQ-7891'
+              }
+            });
           }
         }
-      ]
-    );
-  };
+      }
+    ]
+  );
+};
 
   return (
     <SafeAreaView style={styles.safeArea}>

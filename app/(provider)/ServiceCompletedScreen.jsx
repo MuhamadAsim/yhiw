@@ -1,17 +1,17 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
-  TextInput,
-  StatusBar,
-} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import {
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
@@ -23,12 +23,22 @@ export default function MarkServiceCompletedScreen() {
 
   const handleViewAll = () => Alert.alert('Photos', 'Viewing all photos...');
   const handleConfirm = () => {
-    if (!paymentChecked) {
-      Alert.alert('Payment Required', 'Please confirm payment received to complete.');
-      return;
-    }
-    Alert.alert('Confirmed', 'Service marked as completed!');
-  };
+  if (!paymentChecked) {
+    Alert.alert('Payment Required', 'Please confirm payment received to complete.');
+    return;
+  }
+  
+  Alert.alert(
+    'Service Completed',
+    'Service has been marked as completed successfully!',
+    [
+      {
+        text: 'OK',
+        onPress: () => router.push('/Home') // Navigate to Home screen
+      }
+    ]
+  );
+};
   // const handleBackToHome = () => Alert.alert('Home', 'Going back to home...');
 
   return (
