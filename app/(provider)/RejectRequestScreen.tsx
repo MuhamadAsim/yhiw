@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useState, useEffect } from 'react';
 import {
   Alert,
   SafeAreaView,
@@ -9,9 +9,41 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { providerWebSocket } from '../../services/websocket.service';
 
-// ─── Icon components (no external deps) ─────────────────────────────────────
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface JobData {
+  jobId: string;
+  bookingId: string;
+  jobNumber: string;
+  serviceType: string;
+  title: string;
+  price: number;
+  estimatedEarnings: number;
+  distance: string;
+  customerName: string;
+  pickupLocation: string;
+  [key: string]: any;
+}
+
+// ─── Decline Reasons ─────────────────────────────────────────────────────────
+
+const DECLINE_REASONS = [
+  { id: 'too_far', label: 'Too far from current location' },
+  { id: 'another_job', label: 'Already have another job' },
+  { id: 'vehicle_type', label: 'Vehicle type not suitable' },
+  { id: 'outside_hours', label: 'Outside service hours' },
+  { id: 'other', label: 'Other reason' },
+];
+
+// ─── Icon components ─────────────────────────────────────────────────────────
 
 const DollarIcon = () => (
   <View style={styles.iconWrap}>
@@ -43,44 +75,39 @@ const WarningIcon = () => (
   <Text style={{ fontSize: 18, color: '#FFA000' }}>⚠</Text>
 );
 
-// ─── Decline Reasons ─────────────────────────────────────────────────────────
-
-const DECLINE_REASONS = [
-  { id: 'too_far', label: 'Too far from current location' },
-  { id: 'another_job', label: 'Already have another job' },
-  { id: 'vehicle_type', label: 'Vehicle type not suitable' },
-  { id: 'outside_hours', label: 'Outside service hours' },
-  { id: 'other', label: 'Other reason' },
-];
-
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-const RequestSummary = () => (
-  <View style={styles.summaryCard}>
-    <Text style={styles.sectionLabel}>REQUEST SUMMARY</Text>
-    <View style={styles.summaryRow}>
-      <View style={styles.summaryItem}>
-        <DollarIcon />
-        <Text style={styles.summaryValue}>81 BHD</Text>
-        <Text style={styles.summarySubLabel}>Earnings</Text>
-      </View>
-      <View style={styles.summaryDivider} />
-      <View style={styles.summaryItem}>
-        <PinIcon />
-        <Text style={styles.summaryValue}>2.5 KM</Text>
-        <Text style={styles.summarySubLabel}>Distance</Text>
-      </View>
-      <View style={styles.summaryDivider} />
-      <View style={styles.summaryItem}>
-        <ClockIcon />
-        <Text style={styles.summaryValue}>8-10</Text>
-        <Text style={styles.summarySubLabel}>Minutes</Text>
+const RequestSummary = ({ jobData }: { jobData: JobData }) => {
+  // Extract distance number from string (e.g., "2.5 KM" -> 2.5)
+  const distanceNum = parseFloat(jobData.distance) || 2.5;
+  
+  return (
+    <View style={styles.summaryCard}>
+      <Text style={styles.sectionLabel}>REQUEST SUMMARY</Text>
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryItem}>
+          <DollarIcon />
+          <Text style={styles.summaryValue}>{jobData.price} BHD</Text>
+          <Text style={styles.summarySubLabel}>Total</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryItem}>
+          <PinIcon />
+          <Text style={styles.summaryValue}>{distanceNum} KM</Text>
+          <Text style={styles.summarySubLabel}>Distance</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryItem}>
+          <ClockIcon />
+          <Text style={styles.summaryValue}>8-10</Text>
+          <Text style={styles.summarySubLabel}>Minutes</Text>
+        </View>
       </View>
     </View>
-  </View>
-);
+  );
+};
 
-const AcceptSection = ({ onAccept }) => (
+const AcceptSection = ({ onAccept, loading }: { onAccept: () => void; loading: boolean }) => (
   <View style={styles.acceptCard}>
     <View style={styles.acceptSection}>
       <View style={styles.cardHeader}>
@@ -95,6 +122,7 @@ const AcceptSection = ({ onAccept }) => (
     </View>
 
     <View style={styles.cardDividergreen} />
+    
     <View style={styles.acceptSection}>
       <Text style={styles.nextLabel}>WHAT HAPPENS NEXT:</Text>
       <View style={styles.stepRow}>
@@ -113,40 +141,52 @@ const AcceptSection = ({ onAccept }) => (
       <TouchableOpacity
         style={styles.acceptBtn}
         onPress={onAccept}
+        disabled={loading}
         activeOpacity={0.85}
       >
-        <Text style={styles.acceptBtnText}>Accept & Start Navigation</Text>
+        {loading ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.acceptBtnText}>Accept & Start Navigation</Text>
+        )}
       </TouchableOpacity>
     </View>
   </View>
 );
 
-// ─── Decline Section (with reason selection) ─────────────────────────────────
+// ─── Decline Section ─────────────────────────────────────────────────────────
 
-const DeclineSection = ({ onDecline, onCancel }) => {
-  const [selectedReason, setSelectedReason] = useState(null);
+const DeclineSection = ({ onDecline, onCancel, loading }: { 
+  onDecline: (reason: string) => void; 
+  onCancel: () => void;
+  loading: boolean;
+}) => {
+  const [selectedReason, setSelectedReason] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const handleConfirmDecline = () => {
     if (!selectedReason) {
       Alert.alert('Select a Reason', 'Please select a reason before declining.');
       return;
     }
-    const reason = DECLINE_REASONS.find(r => r.id === selectedReason)?.label;
+    const reason = DECLINE_REASONS.find(r => r.id === selectedReason)?.label || selectedReason;
     onDecline(reason);
   };
 
   const handleCancel = () => {
     setSelectedReason(null);
-    if (onCancel) {
-      onCancel();
-    }
+    setIsExpanded(false);
+    if (onCancel) onCancel();
   };
 
   return (
     <View style={styles.declineCard}>
-
-      {/* 🔴 Top Header Section */}
-      <View style={styles.declineTop}>
+      {/* 🔴 Top Header Section - Clickable to expand */}
+      <TouchableOpacity 
+        style={styles.declineTop}
+        onPress={() => setIsExpanded(!isExpanded)}
+        activeOpacity={0.7}
+      >
         <View style={styles.cardHeader}>
           <View style={styles.declineIconCircle}>
             <CrossIcon size={16} color="#FFFFFF" />
@@ -155,71 +195,82 @@ const DeclineSection = ({ onDecline, onCancel }) => {
             <Text style={styles.declineCardTitle}>Decline Request</Text>
             <Text style={styles.cardSubtitle}>Not available for this job</Text>
           </View>
+          <Feather 
+            name={isExpanded ? "chevron-up" : "chevron-down"} 
+            size={20} 
+            color="#F44336" 
+          />
         </View>
-      </View>
+      </TouchableOpacity>
 
-      {/* 🔴 Full-width Divider */}
-      <View style={styles.cardDividerred} />
+      {/* 🔴 Full-width Divider - Only show when expanded */}
+      {isExpanded && <View style={styles.cardDividerred} />}
 
-      {/* ⚪ Bottom White Section — Reason Selection */}
-      <View style={styles.declineBottom}>
+      {/* ⚪ Bottom White Section — Reason Selection (only when expanded) */}
+      {isExpanded && (
+        <View style={styles.declineBottom}>
+          <Text style={styles.reasonLabel}>SELECT A REASON (REQUIRED):</Text>
 
-        <Text style={styles.reasonLabel}>SELECT A REASON (REQUIRED):</Text>
+          {DECLINE_REASONS.map((reason) => (
+            <TouchableOpacity
+              key={reason.id}
+              style={[
+                styles.radioOption,
+                selectedReason === reason.id && styles.radioOptionSelected,
+              ]}
+              onPress={() => setSelectedReason(reason.id)}
+              activeOpacity={0.7}
+            >
+              <View style={[
+                styles.radioCircle,
+                selectedReason === reason.id && styles.radioCircleSelected,
+              ]}>
+                {selectedReason === reason.id && (
+                  <View style={styles.radioInner} />
+                )}
+              </View>
+              <Text style={[
+                styles.radioLabel,
+                selectedReason === reason.id && styles.radioLabelSelected,
+              ]}>
+                {reason.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
 
-        {DECLINE_REASONS.map((reason) => (
+          {/* Confirm Decline Button */}
           <TouchableOpacity
-            key={reason.id}
             style={[
-              styles.radioOption,
-              selectedReason === reason.id && styles.radioOptionSelected,
+              styles.confirmDeclineBtn,
+              (!selectedReason || loading) && styles.confirmDeclineBtnDisabled,
             ]}
-            onPress={() => setSelectedReason(reason.id)}
+            onPress={handleConfirmDecline}
+            disabled={!selectedReason || loading}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.confirmDeclineBtnText}>Confirm Decline</Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Cancel Button */}
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={handleCancel}
+            disabled={loading}
             activeOpacity={0.7}
           >
-            <View style={[
-              styles.radioCircle,
-              selectedReason === reason.id && styles.radioCircleSelected,
-            ]}>
-              {selectedReason === reason.id && (
-                <View style={styles.radioInner} />
-              )}
-            </View>
-            <Text style={[
-              styles.radioLabel,
-              selectedReason === reason.id && styles.radioLabelSelected,
-            ]}>
-              {reason.label}
-            </Text>
+            <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
-        ))}
-
-        {/* Confirm Decline Button */}
-        <TouchableOpacity
-          style={[
-            styles.confirmDeclineBtn,
-            !selectedReason && styles.confirmDeclineBtnDisabled,
-          ]}
-          onPress={handleConfirmDecline}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.confirmDeclineBtnText}>Confirm Decline</Text>
-        </TouchableOpacity>
-
-        {/* Cancel Button */}
-        <TouchableOpacity
-          style={styles.cancelBtn}
-          onPress={handleCancel}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.cancelBtnText}>Cancel</Text>
-        </TouchableOpacity>
-
-      </View>
+        </View>
+      )}
     </View>
   );
 };
 
-const ImportantWarning = () => (
+const ImportantWarning = ({ acceptanceRate = 98 }: { acceptanceRate?: number }) => (
   <View style={styles.warningCard}>
     <View style={styles.warningHeader}>
       <WarningIcon />
@@ -228,12 +279,12 @@ const ImportantWarning = () => (
     <Text style={styles.warningText}>
       High rejection rate may affect your account standing and future request
       priority. Current acceptance rate:{' '}
-      <Text style={styles.warningBold}>98%</Text>
+      <Text style={styles.warningBold}>{acceptanceRate}%</Text>
     </Text>
   </View>
 );
 
-const ImpactStats = () => (
+const ImpactStats = ({ price = 81 }: { price?: number }) => (
   <View style={styles.impactCard}>
     <Text style={styles.sectionLabel}>IMPACT ON YOUR STATS</Text>
     <View style={styles.impactRow}>
@@ -241,7 +292,7 @@ const ImpactStats = () => (
         <Text style={styles.impactColHead}>If you Accept:</Text>
         <View style={styles.impactStatRow}>
           <Text style={styles.impactIconGreen}>✓</Text>
-          <Text style={styles.impactStatGreen}>+81 BHD earnings</Text>
+          <Text style={styles.impactStatGreen}>+{price} BHD earnings</Text>
         </View>
         <View style={styles.impactStatRow}>
           <Text style={styles.impactIconGreen}>✓</Text>
@@ -268,31 +319,185 @@ const ImpactStats = () => (
 
 export default function MakeYourDecisionScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  
+  const [loading, setLoading] = useState(false);
+  const [jobData, setJobData] = useState<JobData | null>(null);
+  const [acceptanceRate, setAcceptanceRate] = useState(98);
 
-  const handleAccept = () => {
-    // Navigate to NavigateToCustomer page when Accept button is pressed
-    router.push('/NavigateToCustomerScreen');
+  // Extract job data from params
+  const jobId = params.jobId as string;
+  const bookingId = params.bookingId as string;
+
+  useEffect(() => {
+    // Load job data from params (passed from previous screen)
+    if (params) {
+      setJobData({
+        jobId: jobId,
+        bookingId: bookingId || jobId,
+        jobNumber: params.jobNumber as string || 'REQ-7891',
+        serviceType: params.serviceType as string || 'Towing',
+        title: params.title as string || params.serviceType as string || 'Service',
+        price: parseFloat(params.price as string) || 95,
+        estimatedEarnings: parseFloat(params.estimatedEarnings as string) || 81,
+        distance: params.distance as string || '2.5 KM',
+        customerName: params.customerName as string || 'Mohammed A.',
+        pickupLocation: params.pickupLocation as string || 'Main Street, Manama',
+        ...params
+      });
+    }
+
+    // Fetch provider stats
+    fetchProviderStats();
+  }, [params]);
+
+  const fetchProviderStats = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      const userDataStr = await AsyncStorage.getItem('userData');
+      
+      if (token && userDataStr) {
+        const userData = JSON.parse(userDataStr);
+        const providerId = userData.firebaseUserId || userData.uid;
+        
+        // Fetch provider stats to get acceptance rate
+        const response = await fetch(`${API_BASE_URL}/provider/${providerId}/performance`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data) {
+            // Calculate acceptance rate from stats
+            const total = data.data.totalJobsOffered || 100;
+            const accepted = data.data.totalJobsAccepted || 98;
+            setAcceptanceRate(Math.round((accepted / total) * 100));
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching provider stats:', error);
+    }
   };
 
-  const handleDecline = (reason) => {
-    // Navigate to Home page when Confirm Decline is pressed
-    Alert.alert(
-      'Request Declined', 
-      `Reason: ${reason}`,
-      [
-        {
-          text: 'OK',
-          onPress: () => router.push('(provider)/Home')
+  const handleAccept = async () => {
+    if (!jobData) return;
+    
+    setLoading(true);
+    
+    try {
+      // 1. Send acceptance via WebSocket (REALTIME)
+      const wsSent = providerWebSocket.send('accept_job', { 
+        jobId: jobData.jobId,
+        bookingId: jobData.bookingId,
+        responseTime: 15 // You can calculate actual response time
+      });
+
+      // 2. Also call API as backup
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (token) {
+        const response = await fetch(`${API_BASE_URL}/jobs/provider/job/${jobData.jobId}/accept`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        const result = await response.json();
+        
+        if (result.success || wsSent) {
+          // Navigate to NavigateToCustomer page on success
+          router.push({
+            pathname: '/NavigateToCustomerScreen',
+            params: {
+              jobId: jobData.jobId,
+              bookingId: jobData.bookingId,
+              customerName: jobData.customerName,
+              pickupLocation: jobData.pickupLocation,
+              price: jobData.price.toString()
+            }
+          });
+        } else {
+          throw new Error(result.message || 'Failed to accept job');
         }
-      ]
-    );
+      }
+    } catch (error) {
+      console.error('Error accepting job:', error);
+      Alert.alert(
+        'Error',
+        'Failed to accept job. Please try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDecline = async (reason: string) => {
+    if (!jobData) return;
+    
+    setLoading(true);
+    
+    try {
+      // 1. Send decline via WebSocket (REALTIME)
+      const wsSent = providerWebSocket.send('decline_job', { 
+        jobId: jobData.jobId,
+        bookingId: jobData.bookingId,
+        reason: reason
+      });
+
+      // 2. Also call API as backup (if you have this endpoint)
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (token) {
+        // Optional: Call decline API if you have one
+        // If not, just rely on WebSocket
+      }
+
+      // Show success message and go back to home
+      Alert.alert(
+        'Request Declined',
+        `You've declined this job. Reason: ${reason}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => router.push('/(provider)/Home')
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error declining job:', error);
+      Alert.alert(
+        'Error',
+        'Failed to decline job. Please try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCancelDecline = () => {
-    // Just close the decline section (already handled in DeclineSection)
-    // You can add any additional logic here if needed
+    // Just close the decline section - already handled in component
     console.log('Decline cancelled');
   };
+
+  // Show loading if no job data
+  if (!jobData) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#87CEFA" />
+          <Text style={styles.loadingText}>Loading job details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -300,6 +505,7 @@ export default function MakeYourDecisionScreen() {
         <TouchableOpacity 
           style={styles.backButton}
           onPress={() => router.back()}
+          disabled={loading}
         >
           <Feather name="arrow-left" size={24} color="#000" />
         </TouchableOpacity>
@@ -316,22 +522,42 @@ export default function MakeYourDecisionScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <RequestSummary />
-        <AcceptSection onAccept={handleAccept} />
+        <RequestSummary jobData={jobData} />
+        
+        <AcceptSection onAccept={handleAccept} loading={loading} />
+        
         <DeclineSection 
           onDecline={handleDecline} 
           onCancel={handleCancelDecline}
+          loading={loading}
         />
-        <ImportantWarning />
-        <ImpactStats />
+        
+        <ImportantWarning acceptanceRate={acceptanceRate} />
+        
+        <ImpactStats price={jobData.estimatedEarnings || jobData.price * 0.85} />
+        
         <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// Add loading styles
+const loadingStyles = {
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F7F7F7',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666666',
+  },
+};
 
+// Merge with existing styles
 const styles = StyleSheet.create({
   // ── Safe Area ──
   safeArea: {
@@ -751,5 +977,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#F44336',
+  },
+
+  // Loading styles
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F7F7F7',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666666',
   },
 });

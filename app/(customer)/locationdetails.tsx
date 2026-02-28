@@ -115,6 +115,7 @@ const LocationDetailsScreen = () => {
   // Load user token and saved locations on mount
   useEffect(() => {
     loadUserData();
+    getCurrentLocationAndSetDefault();
   }, []);
 
   const loadUserData = async () => {
@@ -148,7 +149,6 @@ const LocationDetailsScreen = () => {
       console.error('Error loading user data:', error);
     } finally {
       setIsLoadingSavedLocations(false);
-      setIsGettingLocation(false);
     }
   };
 
@@ -321,7 +321,7 @@ const LocationDetailsScreen = () => {
     setIsSearching(true);
     
     try {
-      // Since backend search might not be implemented, use device geocoding directly
+      // Use device geocoding for search
       const geocodeResults = await Location.geocodeAsync(query);
       
       if (geocodeResults.length > 0) {
@@ -990,14 +990,14 @@ const LocationDetailsScreen = () => {
             <Text style={styles.addStopText}>Add Another Stop</Text>
           </TouchableOpacity>
 
-          {/* Saved Locations - Updated to show only 2 initially */}
+          {/* Saved Locations */}
           <View style={styles.savedLocationsSection}>
             <View style={styles.savedLocationsHeader}>
               <Text style={styles.savedLocationsTitle}>Saved Locations</Text>
               {userToken && savedLocations.length > 2 && (
                 <TouchableOpacity onPress={() => setShowAllSavedLocations(!showAllSavedLocations)}>
                   <Text style={styles.viewAllText}>
-                    {showAllSavedLocations ? 'Show Less' : `View All`}
+                    {showAllSavedLocations ? 'Show Less' : 'View All'}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -1034,8 +1034,6 @@ const LocationDetailsScreen = () => {
                     </View>
                   </TouchableOpacity>
                 ))}
-                
-          
               </>
             ) : (
               <View style={styles.emptySavedContainer}>

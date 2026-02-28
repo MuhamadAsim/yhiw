@@ -1,3 +1,4 @@
+// findingprovider.tsx - Fixed TypeScript errors
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -6,6 +7,7 @@ import {
   Alert,
   Animated,
   AppState,
+  AppStateStatus,
   Dimensions,
   Image,
   ScrollView,
@@ -13,16 +15,15 @@ import {
   Text,
   View,
 } from 'react-native';
+import { customerWebSocket } from '../../services/websocket.service';
 
 const { height } = Dimensions.get('window');
 
 // API configuration
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
-const POLLING_INTERVAL = 5000; 
-const MAX_POLLING_ATTEMPTS = 25; 
 
 // Define types
-type ConnectionStatus = 'connecting' | 'searching' | 'found' | 'error' | 'no_providers';
+type ConnectionStatus = 'connecting' | 'searching' | 'found' | 'error' | 'no_providers' | 'timeout';
 
 interface BookingData {
   bookingId: string;
@@ -32,25 +33,34 @@ interface BookingData {
   estimatedArrival?: string;
   vehicleDetails?: string;
   status?: string;
+  provider?: any;
 }
 
-interface Coordinates {
-  lat: number;
-  lng: number;
+interface WebSocketData {
+  status?: string;
+  bookingId?: string;
+  providerName?: string;
+  providerRating?: number;
+  providerImage?: string;
+  estimatedArrival?: string;
+  vehicleDetails?: string;
+  provider?: any;
+  message?: string;
 }
 
 const FindingProviderScreen = () => {
   const [spinValue] = useState(new Animated.Value(0));
-  const [isSearching, setIsSearching] = useState(true);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
-  const [pollingAttempts, setPollingAttempts] = useState<number>(0);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  const [wsConnected, setWsConnected] = useState(false);
   
   const params = useLocalSearchParams();
   const router = useRouter();
-  const pollingTimer = useRef<number | null>(null);
   const appState = useRef(AppState.currentState);
+  const timeoutTimer = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
+  const wsListenerRemoved = useRef(false);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -133,7 +143,7 @@ const FindingProviderScreen = () => {
   // Selected tip
   const selectedTip = parseFloat(getStringParam(params.selectedTip)) || 0;
   
-  // Get coordinates (assuming they're passed as separate lat/lng params)
+  // Get coordinates
   const pickupLat = getNumberParam(params.pickupLat);
   const pickupLng = getNumberParam(params.pickupLng);
   const dropoffLat = getNumberParam(params.dropoffLat);
@@ -149,339 +159,370 @@ const FindingProviderScreen = () => {
       })
     ).start();
 
-    // Send booking request to backend
+    // Send booking request and setup WebSocket
     sendBookingRequest();
 
-    // Handle app state changes (background/foreground)
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to the foreground, resume polling if needed
-        if (isSearching && bookingId) {
-          startPolling();
-        }
+    // Handle app state changes
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // Set timeout for finding provider (2 minutes)
+    timeoutTimer.current = setTimeout(() => {
+      if (connectionStatus === 'searching' || connectionStatus === 'connecting') {
+        console.log('Search timeout reached');
+        setConnectionStatus('timeout');
+        handleNoProviders('timeout');
       }
-      appState.current = nextAppState;
-    });
+    }, 120000); // 2 minutes
 
     // Cleanup on unmount
     return () => {
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
+      if (timeoutTimer.current) {
+        clearTimeout(timeoutTimer.current);
+      }
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
       }
       subscription.remove();
+      removeWebSocketListeners();
+      customerWebSocket.disconnect();
+      wsListenerRemoved.current = true;
     };
   }, []);
 
- const sendBookingRequest = async () => {
-   console.log('📤 sendBookingRequest function STARTED');
-  console.log('Params received:', params);
-  try {
-    setConnectionStatus('connecting');
+  const handleAppStateChange = (nextAppState: AppStateStatus) => {
+    if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+      // App has come to the foreground, reconnect WebSocket if needed and we're still searching
+      if (!customerWebSocket.isConnected() && 
+          (connectionStatus === 'searching' || connectionStatus === 'connecting') && 
+          bookingId) {
+        console.log('App came to foreground, reconnecting WebSocket');
+        setupWebSocket();
+        
+        // Request status update
+        setTimeout(() => {
+          if (customerWebSocket.isConnected() && bookingId) {
+            customerWebSocket.send('request_status', { bookingId });
+          }
+        }, 1000);
+      }
+    }
+    appState.current = nextAppState;
+  };
+
+  const setupWebSocket = async () => {
+    try {
+      // Remove existing listeners first
+      removeWebSocketListeners();
+
+      // Add connection listener
+      customerWebSocket.onConnectionChange(handleConnectionChange);
+
+      // Add message listeners
+      customerWebSocket.on('provider_assigned', handleProviderFound);
+      customerWebSocket.on('booking_confirmed', handleProviderFound);
+      customerWebSocket.on('booking_accepted', handleProviderFound);
+      customerWebSocket.on('booking_cancelled', () => handleNoProviders('cancelled'));
+      customerWebSocket.on('booking_expired', () => handleNoProviders('expired'));
+      customerWebSocket.on('status_update', handleStatusUpdate);
+      customerWebSocket.on('error', handleWebSocketError);
+
+      // Connect to WebSocket
+      const connected = await customerWebSocket.connect('customer');
+      
+      if (connected) {
+        console.log('WebSocket connected successfully');
+        setWsConnected(true);
+        
+        // If we have a booking ID, request status immediately
+        if (bookingId) {
+          customerWebSocket.send('request_status', { bookingId });
+        }
+      } else {
+        console.log('WebSocket connection failed');
+        setWsConnected(false);
+        
+        // Try to reconnect after 3 seconds if we're still searching
+        if (connectionStatus === 'searching' || connectionStatus === 'connecting') {
+          reconnectTimer.current = setTimeout(() => {
+            if (!wsListenerRemoved.current) {
+              setupWebSocket();
+            }
+          }, 3000);
+        }
+      }
+    } catch (error) {
+      console.error('Error setting up WebSocket:', error);
+      setWsConnected(false);
+      
+      // Try to reconnect
+      if (connectionStatus === 'searching' || connectionStatus === 'connecting') {
+        reconnectTimer.current = setTimeout(() => {
+          if (!wsListenerRemoved.current) {
+            setupWebSocket();
+          }
+        }, 3000);
+      }
+    }
+  };
+
+  const handleConnectionChange = (isConnected: boolean) => {
+    console.log('WebSocket connection changed:', isConnected);
+    setWsConnected(isConnected);
     
-    const token = await AsyncStorage.getItem('userToken');
+    if (isConnected && bookingId && (connectionStatus === 'searching' || connectionStatus === 'connecting')) {
+      // Request status update
+      customerWebSocket.send('request_status', { bookingId });
+    } else if (!isConnected && (connectionStatus === 'searching' || connectionStatus === 'connecting')) {
+      // Try to reconnect
+      reconnectTimer.current = setTimeout(() => {
+        if (!wsListenerRemoved.current) {
+          setupWebSocket();
+        }
+      }, 3000);
+    }
+  };
+
+  const handleWebSocketError = () => {
+    console.error('WebSocket error');
+    setWsConnected(false);
+    
+    // Try to reconnect
+    if (connectionStatus === 'searching' || connectionStatus === 'connecting') {
+      reconnectTimer.current = setTimeout(() => {
+        if (!wsListenerRemoved.current) {
+          setupWebSocket();
+        }
+      }, 3000);
+    }
+  };
+
+  const removeWebSocketListeners = () => {
+    customerWebSocket.off('provider_assigned', handleProviderFound);
+    customerWebSocket.off('booking_confirmed', handleProviderFound);
+    customerWebSocket.off('booking_accepted', handleProviderFound);
+    customerWebSocket.off('booking_cancelled', () => handleNoProviders('cancelled'));
+    customerWebSocket.off('booking_expired', () => handleNoProviders('expired'));
+    customerWebSocket.off('status_update', handleStatusUpdate);
+    customerWebSocket.off('error', handleWebSocketError);
+  };
+
+  const handleStatusUpdate = (data: WebSocketData) => {
+    console.log('Status update received:', data);
+    
+    if (data.status === 'searching' || data.status === 'pending') {
+      setConnectionStatus('searching');
+    } else if (data.status === 'accepted' || data.status === 'confirmed' || data.status === 'provider_assigned') {
+      handleProviderFound(data);
+    } else if (data.status === 'cancelled' || data.status === 'expired') {
+      handleNoProviders(data.status);
+    }
+  };
+
+  const sendBookingRequest = async () => {
+    console.log('📤 sendBookingRequest function STARTED');
+    try {
+      setConnectionStatus('connecting');
+      
+      const token = await AsyncStorage.getItem('userToken');
       console.log('Token retrieved:', token ? 'Yes' : 'No');
 
-    if (!token) {
-      throw new Error('Authentication token not found. Please sign in again.');
-    }
-
-    // Get user data
-    const userDataStr = await AsyncStorage.getItem('userData');
-    let userData = null;
-    if (userDataStr) {
-      try {
-        userData = JSON.parse(userDataStr);
-        console.log('User data from storage:', userData);
-      } catch (e) {
-        console.error('Error parsing user data:', e);
+      if (!token) {
+        throw new Error('Authentication token not found. Please sign in again.');
       }
-    }
 
-    // Prepare booking data to match backend controller structure
-    const bookingData = {
-      // Location data - matches backend destructuring
-      pickup: {
-        address: pickupAddress,
-        coordinates: pickupLat && pickupLng ? {
-          lat: pickupLat,
-          lng: pickupLng
-        } : null
-      },
-      dropoff: {
-        address: dropoffAddress,
-        coordinates: dropoffLat && dropoffLng ? {
-          lat: dropoffLat,
-          lng: dropoffLng
-        } : null
-      },
-      
-      // Service information - matches backend destructuring
-      serviceId,
-      serviceName,
-      servicePrice: parseFloat(servicePrice) || 0,
-      serviceCategory, // Make sure this matches the enum exactly
-      serviceType: serviceTime,
-      
-      // Service-specific flags
-      isCarRental,
-      isFuelDelivery,
-      isSpareParts,
-      
-      // Vehicle details
-      vehicle: {
-        type: vehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-      },
-      
-      // Customer contact
-      customer: {
-        name: fullName,
-        phone: phoneNumber,
-        email,
-        emergencyContact,
-      },
-      
-      // Service-specific data
-      carRental: isCarRental ? {
-        licenseFront,
-        licenseBack,
-        hasInsurance,
-      } : null,
-      
-      fuelDelivery: isFuelDelivery ? {
-        fuelType,
-      } : null,
-      
-      spareParts: isSpareParts ? {
-        partDescription,
-      } : null,
-      
-      // Additional details
-      additionalDetails: {
-        urgency,
-        issues: issues.length > 0 ? issues : null,
-        description,
-        photos: photos.length > 0 ? photos : null,
-        needSpecificTruck,
-        hasModifications,
-        needMultilingual,
-      },
-      
-      // Schedule information
-      schedule: {
-        type: serviceTime,
-        scheduledDateTime: serviceTime === 'schedule_later' ? {
-          date: scheduledDate,
-          timeSlot: scheduledTimeSlot,
-        } : null,
-      },
-      
-      // Payment information
-      payment: {
-        totalAmount: parseFloat(totalAmount) || 0,
-        selectedTip,
-        baseServiceFee: parseFloat(servicePrice) || 0,
-        paymentMethod: 'cash',
-      },
-      
-      // Location skipped flag
-      locationSkipped,
-      
-      // Metadata
-      timestamp: new Date().toISOString(),
-      platform: 'mobile',
-      version: '1.1',
-    };
-
-    console.log('Sending booking request:', JSON.stringify(bookingData, null, 2));
-
-    const response = await fetch(`${API_BASE_URL}/api/jobs/customer/finding-provider`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(bookingData),
-    });
-
-    console.log('Response status:', response.status);
-    
-    const responseData = await response.json();
-    console.log('Response data:', responseData);
-
-    if (!response.ok) {
-      throw new Error(responseData.message || responseData.error || 'Failed to create booking');
-    }
-
-    setBookingId(responseData.bookingId);
-    setConnectionStatus('searching');
-    startPolling(responseData.bookingId);
-
-  } catch (error: unknown) {
-    console.error('Booking request error details:', {
-      error: error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : null
-    });
-    
-    setConnectionStatus('error');
-    setError(error instanceof Error ? error.message : 'An unknown error occurred');
-    
-    Alert.alert(
-      'Booking Failed',
-      error instanceof Error ? error.message : 'Failed to process request',
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
-        { text: 'Retry', onPress: sendBookingRequest }
-      ]
-    );
-  }
-};
-
-  const startPolling = (id?: string) => {
-    const bookingIdToUse = id || bookingId;
-    if (!bookingIdToUse) return;
-
-    const pollBookingStatus = async () => {
-      try {
-        const token = await AsyncStorage.getItem('userToken');
-        
-        if (!token) {
-          throw new Error('Authentication token not found');
-        }
-
-        // FIXED: Corrected the URL path - removed extra 'api' and added proper endpoint
-        const response = await fetch(`${API_BASE_URL}/api/jobs/customer/${bookingIdToUse}/status`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (!response.ok) {
-          if (response.status === 401) {
-            // Token expired, redirect to sign in
-            Alert.alert(
-              'Session Expired',
-              'Please sign in again to continue.',
-              [
-                {
-                  text: 'OK',
-                  onPress: () => router.replace('/customer_signin')
-                }
-              ]
-            );
-            return;
-          }
-          throw new Error('Failed to check booking status');
-        }
-
-        const data = await response.json();
-        console.log('Booking status:', data.status);
-
-        // Handle different booking statuses
-        switch (data.status) {
-          case 'provider_assigned':
-          case 'confirmed':
-          case 'accepted': // Added accepted status
-            // Provider found! Navigate to next screen with ALL data
-            setConnectionStatus('found');
-            handleProviderFound({
-              bookingId: bookingIdToUse,
-              providerName: data.provider?.name || '',
-              providerRating: data.provider?.rating || 0,
-              providerImage: data.provider?.profileImage || '',
-              estimatedArrival: data.estimatedArrival || '10-15 minutes',
-              vehicleDetails: data.provider?.vehicleDetails || '',
-              ...data
-            });
-            break;
-
-          case 'cancelled':
-          case 'expired':
-            // No providers available - navigate to no providers page
-            setConnectionStatus('no_providers');
-            handleNoProviders();
-            break;
-
-          case 'searching':
-          case 'pending':
-            // Still searching, continue polling if within limits
-            setPollingAttempts(prev => {
-              const newAttempts = prev + 1;
-              if (newAttempts < MAX_POLLING_ATTEMPTS) {
-                // Schedule next poll
-                pollingTimer.current = setTimeout(pollBookingStatus, POLLING_INTERVAL) as unknown as number;
-                return newAttempts;
-              } else {
-                // Max attempts reached - timeout - navigate to no providers page
-                setConnectionStatus('no_providers');
-                handleNoProviders();
-                return newAttempts;
-              }
-            });
-            break;
-
-          default:
-            // Unknown status, continue polling
-            pollingTimer.current = setTimeout(pollBookingStatus, POLLING_INTERVAL) as unknown as number;
-        }
-
-      } catch (error: unknown) {
-        console.error('Polling error:', error);
-        // Don't stop polling on network errors, just retry
-        pollingTimer.current = setTimeout(pollBookingStatus, POLLING_INTERVAL) as unknown as number;
-      }
-    };
-
-    // Start polling
-    pollBookingStatus();
-  };
-
-  const handleProviderFound = (bookingData: BookingData) => {
-    // Clear any pending timers
-    if (pollingTimer.current) {
-      clearTimeout(pollingTimer.current);
-    }
-
-    // Navigate to provider assigned screen with ALL booking info
-    setTimeout(() => {
-      router.push({
-        pathname: '/providerassigned',
-        params: {
-          // Pass ALL data to the next screen
-          ...params,
-          bookingId: bookingData.bookingId,
-          providerName: bookingData.providerName || '',
-          providerRating: bookingData.providerRating?.toString() || '0',
-          providerImage: bookingData.providerImage || '',
-          estimatedArrival: bookingData.estimatedArrival || '',
-          vehicleDetails: bookingData.vehicleDetails || '',
-          // Pass coordinates
-          pickupLat: pickupLat?.toString() || '',
-          pickupLng: pickupLng?.toString() || '',
-          dropoffLat: dropoffLat?.toString() || '',
-          dropoffLng: dropoffLng?.toString() || '',
+      // Prepare booking data
+      const bookingData = {
+        pickup: {
+          address: pickupAddress,
+          coordinates: pickupLat && pickupLng ? {
+            lat: pickupLat,
+            lng: pickupLng
+          } : null
         },
+        dropoff: {
+          address: dropoffAddress,
+          coordinates: dropoffLat && dropoffLng ? {
+            lat: dropoffLat,
+            lng: dropoffLng
+          } : null
+        },
+        serviceId,
+        serviceName,
+        servicePrice: parseFloat(servicePrice) || 0,
+        serviceCategory,
+        serviceType: serviceTime,
+        isCarRental,
+        isFuelDelivery,
+        isSpareParts,
+        vehicle: {
+          type: vehicleType,
+          makeModel,
+          year,
+          color,
+          licensePlate,
+        },
+        customer: {
+          name: fullName,
+          phone: phoneNumber,
+          email,
+          emergencyContact,
+        },
+        carRental: isCarRental ? {
+          licenseFront,
+          licenseBack,
+          hasInsurance,
+        } : null,
+        fuelDelivery: isFuelDelivery ? {
+          fuelType,
+        } : null,
+        spareParts: isSpareParts ? {
+          partDescription,
+        } : null,
+        additionalDetails: {
+          urgency,
+          issues: issues.length > 0 ? issues : null,
+          description,
+          photos: photos.length > 0 ? photos : null,
+          needSpecificTruck,
+          hasModifications,
+          needMultilingual,
+        },
+        schedule: {
+          type: serviceTime,
+          scheduledDateTime: serviceTime === 'schedule_later' ? {
+            date: scheduledDate,
+            timeSlot: scheduledTimeSlot,
+          } : null,
+        },
+        payment: {
+          totalAmount: parseFloat(totalAmount) || 0,
+          selectedTip,
+          baseServiceFee: parseFloat(servicePrice) || 0,
+          paymentMethod: 'cash',
+        },
+        locationSkipped,
+        timestamp: new Date().toISOString(),
+        platform: 'mobile',
+        version: '1.1',
+      };
+
+      const response = await fetch(`${API_BASE_URL}/api/jobs/customer/finding-provider`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(bookingData),
       });
-    }, 1500); // Short delay to show "found" animation
+
+      console.log('Response status:', response.status);
+      
+      const responseData = await response.json();
+      console.log('Response data:', responseData);
+
+      if (!response.ok) {
+        throw new Error(responseData.message || responseData.error || 'Failed to create booking');
+      }
+
+      setBookingId(responseData.bookingId);
+      setConnectionStatus('searching');
+
+      // Setup WebSocket after getting booking ID
+      await setupWebSocket();
+
+    } catch (error: unknown) {
+      console.error('Booking request error details:', {
+        error: error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+      
+      setConnectionStatus('error');
+      setError(error instanceof Error ? error.message : 'An unknown error occurred');
+      
+      Alert.alert(
+        'Booking Failed',
+        error instanceof Error ? error.message : 'Failed to process request',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+          { text: 'Retry', onPress: sendBookingRequest }
+        ]
+      );
+    }
   };
 
-  const handleNoProviders = () => {
-    // Clear any pending timers
-    if (pollingTimer.current) {
-      clearTimeout(pollingTimer.current);
+ // Update the handleProviderFound function to handle both types
+const handleProviderFound = (data: BookingData | WebSocketData) => {
+  console.log('Provider found:', data);
+  
+  // Clear timeout timer
+  if (timeoutTimer.current) {
+    clearTimeout(timeoutTimer.current);
+    timeoutTimer.current = null;
+  }
+
+  // Clear reconnect timer
+  if (reconnectTimer.current) {
+    clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = null;
+  }
+
+  setConnectionStatus('found');
+
+  // Create a properly typed booking data object with defaults
+  const bookingData: BookingData = {
+    bookingId: data.bookingId || bookingId || '',
+    providerName: data.providerName || data.provider?.name || '',
+    providerRating: data.providerRating || data.provider?.rating || 0,
+    providerImage: data.providerImage || data.provider?.profileImage || '',
+    estimatedArrival: data.estimatedArrival || '10-15 minutes',
+    vehicleDetails: data.vehicleDetails || data.provider?.vehicleDetails || '',
+    provider: data.provider
+  };
+
+  // Navigate to provider assigned screen
+  setTimeout(() => {
+    router.push({
+      pathname: '/providerassigned',
+      params: {
+        ...params,
+        bookingId: bookingData.bookingId,
+        providerName: bookingData.providerName,
+        // providerRating: bookingData.providerRating.toString(),
+        providerImage: bookingData.providerImage,
+        estimatedArrival: bookingData.estimatedArrival,
+        vehicleDetails: bookingData.vehicleDetails,
+        pickupLat: pickupLat?.toString() || '',
+        pickupLng: pickupLng?.toString() || '',
+        dropoffLat: dropoffLat?.toString() || '',
+        dropoffLng: dropoffLng?.toString() || '',
+      },
+    });
+  }, 1500);
+};
+  const handleNoProviders = (reason: string = 'no_providers') => {
+    console.log('No providers found, reason:', reason);
+    
+    // Clear timeout timer
+    if (timeoutTimer.current) {
+      clearTimeout(timeoutTimer.current);
+      timeoutTimer.current = null;
     }
 
-    // Navigate to no providers available screen with ALL data
+    // Clear reconnect timer
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+
+    setConnectionStatus('no_providers');
+
+    // Navigate to no providers screen
     router.push({
       pathname: '/ProviderAssigned',
       params: {
         ...params,
         noProviders: 'true',
+        reason: reason,
         pickupLat: pickupLat?.toString() || '',
         pickupLng: pickupLng?.toString() || '',
         dropoffLat: dropoffLat?.toString() || '',
@@ -536,13 +577,15 @@ const FindingProviderScreen = () => {
       case 'connecting':
         return 'Connecting to server...';
       case 'searching':
-        return pollingAttempts > 0 
-          ? `Searching for providers... (${pollingAttempts}s)` 
-          : 'Searching for providers...';
+        return wsConnected 
+          ? 'Searching for providers' 
+          : 'Connecting to server';
       case 'found':
         return 'Provider found! Redirecting...';
       case 'no_providers':
         return 'No providers available at this time';
+      case 'timeout':
+        return 'Search timed out. Please try again.';
       case 'error':
         return 'Connection error. Please try again.';
       default:
@@ -568,12 +611,30 @@ const FindingProviderScreen = () => {
         {/* Title */}
         <Text style={styles.title}>Finding a Provider</Text>
 
-        {/* Subtitle */}
+        {/* Subtitle with WebSocket indicator */}
         <Text style={styles.subtitle}>
           {renderStatusMessage()}
         </Text>
 
-     
+        {/* WebSocket Status Indicator
+        {(connectionStatus === 'searching' || connectionStatus === 'connecting') && (
+          <View style={[
+            styles.wsIndicator,
+            wsConnected ? styles.wsConnected : styles.wsDisconnected
+          ]}>
+            <View style={[
+              styles.wsDot,
+              wsConnected ? styles.wsDotConnected : styles.wsDotDisconnected
+            ]} />
+            <Text style={[
+              styles.wsText,
+              wsConnected ? styles.wsTextConnected : styles.wsTextDisconnected
+            ]}>
+              {wsConnected ? 'Live updates active' : 'Connecting...'}
+            </Text>
+          </View>
+        )} */}
+
         {/* Progress Steps */}
         <View style={styles.stepsContainer}>
           {/* Step 1: Request received */}
@@ -597,6 +658,7 @@ const FindingProviderScreen = () => {
             <Text style={styles.stepTextActive}>
               {connectionStatus === 'found' ? 'Provider found!' : 
                connectionStatus === 'no_providers' ? 'No providers available' :
+               connectionStatus === 'timeout' ? 'Search timed out' :
                'Searching for providers...'}
             </Text>
           </View>
@@ -607,16 +669,18 @@ const FindingProviderScreen = () => {
               <View style={[
                 styles.emptyCircle,
                 connectionStatus === 'found' && styles.completedCircle,
-                connectionStatus === 'no_providers' && styles.inactiveCircle
+                connectionStatus === 'no_providers' && styles.inactiveCircle,
+                connectionStatus === 'timeout' && styles.inactiveCircle
               ]} />
             </View>
             <Text style={[
               styles.stepTextInactive,
               connectionStatus === 'found' && styles.stepTextCompleted,
-              connectionStatus === 'no_providers' && styles.stepTextInactive
+              (connectionStatus === 'no_providers' || connectionStatus === 'timeout') && styles.stepTextInactive
             ]}>
               {connectionStatus === 'found' ? 'Provider assigned' : 
                connectionStatus === 'no_providers' ? 'No provider found' :
+               connectionStatus === 'timeout' ? 'Search failed' :
                'Assigning provider'}
             </Text>
           </View>
@@ -638,7 +702,7 @@ const FindingProviderScreen = () => {
           <View style={[
             styles.dotActive,
             connectionStatus === 'found' && styles.dotCompleted,
-            connectionStatus === 'no_providers' && styles.dotError
+            (connectionStatus === 'no_providers' || connectionStatus === 'timeout') && styles.dotError
           ]} />
           <View style={styles.dotInactive} />
         </View>
@@ -688,58 +752,47 @@ const styles = StyleSheet.create({
     color: '#68bdee',
     textAlign: 'center',
     lineHeight: 20,
-    marginBottom: height * 0.03,
+    marginBottom: height * 0.02,
     letterSpacing: 0.3,
     paddingHorizontal: 10,
     fontWeight: '600',
   },
-  summaryBox: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    width: '100%',
-    marginBottom: height * 0.03,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  wsIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: height * 0.02,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
   },
-  summaryTitle: {
-    fontSize: Math.min(16, height * 0.02),
-    fontWeight: 'bold',
-    color: '#3c3c3c',
-    marginBottom: 10,
+  wsConnected: {
+    backgroundColor: '#E8F5E9',
   },
-  summaryText: {
-    fontSize: Math.min(13, height * 0.016),
-    color: '#5c5c5c',
-    marginBottom: 5,
+  wsDisconnected: {
+    backgroundColor: '#FFEBEE',
   },
-  serviceSpecificText: {
-    fontSize: Math.min(12, height * 0.015),
-    color: '#4CAF50',
-    marginBottom: 5,
-    fontWeight: '500',
+  wsDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
   },
-  coordinatesText: {
-    fontSize: Math.min(11, height * 0.014),
-    color: '#68bdee',
-    marginBottom: 5,
-    marginLeft: 10,
+  wsDotConnected: {
+    backgroundColor: '#4CAF50',
   },
-  totalAmount: {
-    fontSize: Math.min(15, height * 0.018),
-    color: '#68bdee',
-    fontWeight: 'bold',
-    marginTop: 5,
+  wsDotDisconnected: {
+    backgroundColor: '#F44336',
   },
-  tipText: {
-    fontSize: Math.min(11, height * 0.014),
-    color: '#8c8c8c',
-    fontStyle: 'italic',
+  wsText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  wsTextConnected: {
+    color: '#2E7D32',
+  },
+  wsTextDisconnected: {
+    color: '#C62828',
   },
   stepsContainer: {
     width: '100%',

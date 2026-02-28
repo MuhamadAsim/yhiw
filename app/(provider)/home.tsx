@@ -1,3 +1,4 @@
+// HomePage.tsx - Fixed with proper navigation to job requests page
 import { Feather, Ionicons } from "@expo/vector-icons";
 import * as Location from 'expo-location';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -23,6 +24,7 @@ import MapView, { Marker, Region } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
 import Sidebar from "./components/sidebar";
+import { providerWebSocket } from '../../services/websocket.service';
 
 // Get screen width for styles
 const { width, height } = Dimensions.get('window');
@@ -65,6 +67,17 @@ interface LocationSuggestion {
   placeId?: string;
 }
 
+interface JobRequest {
+  id: string;
+  customerName: string;
+  serviceType: string;
+  pickupLocation: string;
+  dropoffLocation?: string;
+  distance: string;
+  estimatedEarnings: number;
+  timestamp: string;
+}
+
 const HomePage = () => {
   const router = useRouter();
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -84,6 +97,7 @@ const HomePage = () => {
   const [notificationCount, setNotificationCount] = useState(0);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [wsConnected, setWsConnected] = useState(false);
 
   // Map picker states
   const mapRef = useRef<MapView>(null);
@@ -104,21 +118,26 @@ const HomePage = () => {
   });
 
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
-  const notificationInterval = useRef<NodeJS.Timeout | null>(null);
 
   // Load provider data on mount
   useEffect(() => {
     loadProviderData();
-    checkLocationPermission(); // Check permission without requesting
+    checkLocationPermission();
     return () => {
       if (locationInterval.current) {
         clearInterval(locationInterval.current);
       }
-      if (notificationInterval.current) {
-        clearInterval(notificationInterval.current);
-      }
+      removeWebSocketListeners();
+      providerWebSocket.disconnect();
     };
   }, []);
+
+  // Setup WebSocket when provider data is loaded
+  useEffect(() => {
+    if (providerData?.firebaseUserId) {
+      setupWebSocket();
+    }
+  }, [providerData]);
 
   // Refresh data when screen comes into focus
   useFocusEffect(
@@ -131,21 +150,106 @@ const HomePage = () => {
   useEffect(() => {
     if (isOnline && locationPermission) {
       startLocationTracking();
-      // Start notification polling when online
-      startNotificationPolling();
     } else {
       stopLocationTracking();
-      stopNotificationPolling();
     }
   }, [isOnline, locationPermission]);
 
-  // NEW: Check location permission without requesting
+  const setupWebSocket = async () => {
+    try {
+      // Remove existing listeners
+      removeWebSocketListeners();
+
+      // Add connection listener with proper type
+      providerWebSocket.onConnectionChange((isConnected: boolean) => {
+        console.log('Provider WebSocket connection changed:', isConnected);
+        setWsConnected(isConnected);
+        
+        if (isConnected && isOnline) {
+          // Send online status via WebSocket
+          providerWebSocket.send('provider_status', { 
+            isOnline: true,
+            location: currentLocation 
+          });
+        }
+      });
+
+      // Add message listeners for job requests
+      providerWebSocket.on('new_job_request', handleNewJobRequest);
+      providerWebSocket.on('job_cancelled', handleJobCancelled);
+      providerWebSocket.on('job_updated', handleJobUpdated);
+      providerWebSocket.on('notification', handleNotification);
+      providerWebSocket.on('provider_status_update', handleStatusUpdate);
+
+      // Connect to WebSocket
+      const connected = await providerWebSocket.connect('provider');
+      
+      if (connected) {
+        console.log('Provider WebSocket connected successfully');
+      } else {
+        console.log('Provider WebSocket connection failed');
+      }
+    } catch (error) {
+      console.error('Error setting up provider WebSocket:', error);
+    }
+  };
+
+  const removeWebSocketListeners = () => {
+    providerWebSocket.off('new_job_request', handleNewJobRequest);
+    providerWebSocket.off('job_cancelled', handleJobCancelled);
+    providerWebSocket.off('job_updated', handleJobUpdated);
+    providerWebSocket.off('notification', handleNotification);
+    providerWebSocket.off('provider_status_update', handleStatusUpdate);
+  };
+
+  const handleNewJobRequest = (jobData: JobRequest) => {
+    console.log('New job request received:', jobData);
+    
+    // Increment notification count
+    setNotificationCount(prev => prev + 1);
+    
+    // Optional: Show a toast or alert (but don't show modal)
+    if (Platform.OS === 'ios') {
+      // You could use a toast library here
+    }
+  };
+
+  const handleJobCancelled = (data: any) => {
+    console.log('Job cancelled:', data);
+    
+    // Decrement notification count if appropriate
+    setNotificationCount(prev => Math.max(0, prev - 1));
+    
+    // Show alert
+    Alert.alert('Job Cancelled', 'A job request has been cancelled.');
+  };
+
+  const handleJobUpdated = (data: any) => {
+    console.log('Job updated:', data);
+    // Refresh jobs list if needed
+    if (providerData?.firebaseUserId && providerData?.token) {
+      fetchRecentJobs(providerData.firebaseUserId, providerData.token);
+    }
+  };
+
+  const handleNotification = (data: any) => {
+    console.log('Notification received:', data);
+    setNotificationCount(prev => prev + (data.count || 1));
+  };
+
+  const handleStatusUpdate = (data: any) => {
+    console.log('Status update received:', data);
+    // Update online status if changed from elsewhere
+    if (data.isOnline !== undefined && data.isOnline !== isOnline) {
+      setIsOnline(data.isOnline);
+    }
+  };
+
   const checkLocationPermission = async () => {
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
       setLocationPermission(status === 'granted');
       
-      // If permission is already granted, get current location
       if (status === 'granted') {
         await getCurrentLocation(false);
       }
@@ -155,7 +259,6 @@ const HomePage = () => {
     }
   };
 
-  // NEW: Request location permission only when needed
   const requestLocationPermissionIfNeeded = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -216,7 +319,6 @@ const HomePage = () => {
           isVerified: true,
         });
 
-        // Set demo performance data
         setPerformanceData({
           earnings: 245,
           jobs: 8,
@@ -224,7 +326,6 @@ const HomePage = () => {
           rating: 4.8,
         });
 
-        // Set demo recent jobs
         setRecentJobs([
           {
             id: '1',
@@ -249,7 +350,6 @@ const HomePage = () => {
           }
         ]);
         
-        // Demo notification count
         setNotificationCount(3);
       }
     } catch (error) {
@@ -261,18 +361,10 @@ const HomePage = () => {
 
   const fetchAllProviderData = async (firebaseUserId: string, token: string) => {
     try {
-      // Fetch provider status
       await fetchProviderStatus(firebaseUserId, token);
-      
-      // Fetch performance data
       await fetchPerformanceData(firebaseUserId, token);
-      
-      // Fetch recent jobs
       await fetchRecentJobs(firebaseUserId, token);
-      
-      // Fetch notification count
       await fetchNotificationCount(token);
-      
     } catch (error) {
       console.error('Error fetching provider data:', error);
     }
@@ -281,8 +373,6 @@ const HomePage = () => {
   const fetchProviderStatus = async (firebaseUserId: string, token: string) => {
     try {
       const statusUrl = `${API_BASE_URL}/provider/${firebaseUserId}/status`;
-      console.log('Fetching provider status from:', statusUrl);
-
       const response = await fetch(statusUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -294,7 +384,6 @@ const HomePage = () => {
         const statusData = await response.json();
         if (statusData.success) {
           setIsOnline(statusData.data.isOnline);
-          console.log('Provider status fetched:', statusData.data.isOnline);
         }
       }
     } catch (error) {
@@ -349,29 +438,16 @@ const HomePage = () => {
     }
   };
 
-  // NEW: Dedicated function to fetch notification count
   const fetchNotificationCount = async (token?: string) => {
     try {
       const authToken = token || await AsyncStorage.getItem('userToken');
       const userDataStr = await AsyncStorage.getItem('userData');
       
       if (!authToken || !userDataStr) {
-        console.log('No auth token or user data for notification fetch');
         return;
       }
       
-      const userData = JSON.parse(userDataStr);
-      const firebaseUserId = userData.firebaseUserId || userData.uid;
-      
-      if (!firebaseUserId) {
-        console.log('No firebaseUserId for notification fetch');
-        return;
-      }
-      
-      // CORRECTED URL - using the notifications endpoint
       const notificationUrl = `${API_BASE_URL}/notifications/unread-count`;
-      
-      console.log('Fetching notification count from:', notificationUrl);
       
       const response = await fetch(notificationUrl, {
         method: 'GET',
@@ -383,69 +459,27 @@ const HomePage = () => {
 
       if (response.ok) {
         const data = await response.json();
-        console.log('Notification count response:', data);
-        
         if (data.success) {
           setNotificationCount(data.count || 0);
-        } else {
-          setNotificationCount(0);
         }
-      } else {
-        console.log('Notification fetch failed with status:', response.status);
-        setNotificationCount(0);
       }
     } catch (error) {
       console.error('Error fetching notification count:', error);
-      setNotificationCount(0);
     }
   };
 
-  // NEW: Refresh notification count (can be called manually)
   const refreshNotificationCount = () => {
     if (providerData?.token) {
       fetchNotificationCount(providerData.token);
-    } else {
-      AsyncStorage.getItem('userToken').then(token => {
-        if (token) fetchNotificationCount(token);
-      });
     }
-  };
-
-  // NEW: Start polling for notifications
-  const startNotificationPolling = () => {
-    if (notificationInterval.current) {
-      clearInterval(notificationInterval.current);
-    }
-    
-    // Poll every 30 seconds
-    notificationInterval.current = setInterval(() => {
-      if (isOnline) {
-        refreshNotificationCount();
-      }
-    }, 30000);
-  };
-
-  const stopNotificationPolling = () => {
-    if (notificationInterval.current) {
-      clearInterval(notificationInterval.current);
-      notificationInterval.current = null;
-    }
-  };
-
-  // MODIFIED: Only request permission when explicitly needed
-  const requestLocationPermission = async () => {
-    return await requestLocationPermissionIfNeeded();
   };
 
   const getCurrentLocation = async (isManualSelection: boolean = false) => {
     if (currentLocation?.isManual && !isManualSelection) {
-      console.log('Using existing manual location, not overriding with GPS');
       return currentLocation;
     }
 
     if (!locationPermission) {
-      // Don't automatically request, just return null
-      console.log('Location permission not granted');
       return null;
     }
 
@@ -476,6 +510,17 @@ const HomePage = () => {
 
       if (isOnline && providerData?.firebaseUserId && providerData?.token) {
         await sendLocationToBackend(locationData);
+        
+        // Also send via WebSocket for real-time updates
+        if (wsConnected) {
+          providerWebSocket.send('location_update', {
+            latitude: locationData.latitude,
+            longitude: locationData.longitude,
+            address: locationData.address,
+            isManual: locationData.isManual,
+            timestamp: locationData.timestamp,
+          });
+        }
       }
 
       return locationData;
@@ -494,13 +539,6 @@ const HomePage = () => {
     try {
       const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/location`;
 
-      console.log('Sending location to backend:', {
-        latitude: location.latitude,
-        longitude: location.longitude,
-        isManual: location.isManual,
-        address: location.address
-      });
-
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -516,41 +554,11 @@ const HomePage = () => {
         }),
       });
 
-      const responseData = await response.json();
-
       if (response.ok) {
-        console.log('✅ Location sent successfully:', responseData);
-      } else {
-        console.log('❌ Location send failed:', responseData);
+        console.log('✅ Location sent successfully');
       }
     } catch (error) {
       console.error('Error sending location to backend:', error);
-    }
-  };
-
-  const verifyLocationInBackend = async () => {
-    if (!providerData?.firebaseUserId || !providerData?.token) return;
-
-    try {
-      const statusUrl = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/status`;
-      const response = await fetch(statusUrl, {
-        headers: {
-          'Authorization': `Bearer ${providerData.token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        console.log('🔍 Backend location check:', {
-          frontendLocation: currentLocation,
-          backendLocation: data.data.location,
-          frontendIsManual: currentLocation?.isManual,
-          backendIsManual: data.data.location?.isManual
-        });
-      }
-    } catch (error) {
-      console.error('Error verifying location:', error);
     }
   };
 
@@ -564,7 +572,17 @@ const HomePage = () => {
       if (activeLocation?.isManual) {
         if (isOnline && providerData?.firebaseUserId && providerData?.token) {
           await sendLocationToBackend(activeLocation);
-          console.log('Manual location re-sent:', activeLocation.address);
+          
+          // Also send via WebSocket
+          if (wsConnected) {
+            providerWebSocket.send('location_update', {
+              latitude: activeLocation.latitude,
+              longitude: activeLocation.longitude,
+              address: activeLocation.address,
+              isManual: activeLocation.isManual,
+              timestamp: activeLocation.timestamp,
+            });
+          }
         }
       } else {
         await getCurrentLocation(false);
@@ -583,14 +601,11 @@ const HomePage = () => {
     }
   };
 
-  // MODIFIED: Handle location selection with proper permission check
   const handleLocationSelection = (type: 'auto' | 'manual') => {
     setLocationModalVisible(false);
 
     if (type === 'auto') {
-      // Check if permission is already granted
       if (!locationPermission) {
-        // Only request permission if not already granted
         requestLocationPermissionIfNeeded().then((granted) => {
           if (granted) {
             getCurrentLocation(false).then(() => {
@@ -610,7 +625,6 @@ const HomePage = () => {
           }
         });
       } else {
-        // Permission already granted, just get location
         getCurrentLocation(false).then(() => {
           if (isOnline) {
             startLocationTracking();
@@ -784,9 +798,18 @@ const HomePage = () => {
       setCurrentLocation(manualLocation);
 
       if (isOnline && providerData?.firebaseUserId && providerData?.token) {
-        sendLocationToBackend(manualLocation).then(() => {
-          setTimeout(verifyLocationInBackend, 1000);
-        });
+        sendLocationToBackend(manualLocation);
+        
+        // Send via WebSocket
+        if (wsConnected) {
+          providerWebSocket.send('location_update', {
+            latitude: manualLocation.latitude,
+            longitude: manualLocation.longitude,
+            address: manualLocation.address,
+            isManual: true,
+            timestamp: manualLocation.timestamp,
+          });
+        }
       }
 
       if (isOnline) {
@@ -799,56 +822,67 @@ const HomePage = () => {
     }
   };
 
-  // MODIFIED: Toggle online status with proper permission check
   const toggleOnlineStatus = () => {
     const newStatus = !isOnline;
     console.log('Toggling online status to:', newStatus);
     
     if (newStatus) {
-      // Check if we have location permission and location
       if (!locationPermission) {
-        // Show location selection modal which will handle permission
         setLocationModalVisible(true);
         return;
       }
       
       if (!currentLocation) {
-        // Try to get current location if permission exists
         getCurrentLocation(false).then((location) => {
           if (location) {
             setIsOnline(true);
             startLocationTracking();
-            startNotificationPolling();
             refreshNotificationCount();
             
             if (providerData?.firebaseUserId && providerData?.token) {
               updateProviderStatus(true);
+              
+              // Send online status via WebSocket
+              if (wsConnected) {
+                providerWebSocket.send('provider_status', { 
+                  isOnline: true,
+                  location: location 
+                });
+              }
             }
           } else {
-            // If we couldn't get location, show the location modal
             setLocationModalVisible(true);
           }
         });
         return;
       }
       
-      // We have permission and location, go online
       setIsOnline(true);
       startLocationTracking();
-      startNotificationPolling();
       refreshNotificationCount();
       
       if (providerData?.firebaseUserId && providerData?.token) {
         updateProviderStatus(true);
+        
+        // Send online status via WebSocket
+        if (wsConnected) {
+          providerWebSocket.send('provider_status', { 
+            isOnline: true,
+            location: currentLocation 
+          });
+        }
       }
     } else {
-      // Going offline
       setIsOnline(false);
       stopLocationTracking();
-      stopNotificationPolling();
       
       if (providerData?.firebaseUserId && providerData?.token) {
         updateProviderStatus(false);
+        
+        // Send offline status via WebSocket
+        if (wsConnected) {
+          providerWebSocket.send('provider_status', { isOnline: false });
+        }
       }
     }
   };
@@ -858,8 +892,7 @@ const HomePage = () => {
 
     try {
       const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/status`;
-      console.log('Sending status update:', url, status);
-
+      
       const response = await fetch(url, {
         method: 'PUT',
         headers: {
@@ -891,10 +924,8 @@ const HomePage = () => {
   };
 
   const handleNotificationPress = () => {
-    // Navigate to notifications screen
+    // Navigate to the separate job requests page
     router.push('/NewRequestNotification');
-    // Optionally reset badge count after navigating
-    // setNotificationCount(0);
   };
 
   const formatProviderId = (id: string) => {
@@ -1098,6 +1129,12 @@ const HomePage = () => {
                 </Text>
               </View>
             )}
+            {/* WebSocket status indicator */}
+            {wsConnected && (
+              <View style={styles.wsBadge}>
+                <View style={styles.wsBadgeDot} />
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -1150,6 +1187,14 @@ const HomePage = () => {
             <View style={[styles.toggleThumb, isOnline && styles.toggleThumbOnline]} />
           </TouchableOpacity>
         </View>
+
+        {/* WebSocket Status (optional) */}
+        {wsConnected && (
+          <View style={styles.wsStatusContainer}>
+            <View style={styles.wsStatusDot} />
+            <Text style={styles.wsStatusText}>Connected to real-time updates</Text>
+          </View>
+        )}
 
         {/* Performance Container */}
         <View style={styles.performanceContainer}>
@@ -1262,8 +1307,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#FFFFFF",
   },
-
-  // Header Container
   headerContainer: {
     paddingTop: 35,
     paddingHorizontal: 24,
@@ -1309,9 +1352,43 @@ const styles = StyleSheet.create({
     position: "relative",
     backgroundColor: "#FFFFFF",
   },
-
-
-  // Profile Container
+  notificationBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    backgroundColor: "#EF4444",
+    borderRadius: 12,
+    minWidth: 20,
+    height: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
+    borderColor: "#FFFFFF",
+  },
+  notificationBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  wsBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    backgroundColor: "#4CAF50",
+    borderRadius: 8,
+    width: 8,
+    height: 8,
+    borderWidth: 1.5,
+    borderColor: "#FFFFFF",
+  },
+  wsBadgeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#FFFFFF",
+  },
   profileContainer: {
     paddingHorizontal: 24,
     paddingVertical: 20,
@@ -1388,8 +1465,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-
-  // Status Container
   statusContainer: {
     paddingHorizontal: 24,
     paddingVertical: 16,
@@ -1426,16 +1501,27 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
     marginTop: 2,
   },
-  locationModeContainer: {
-    marginTop: 4,
+  wsStatusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 8,
+    backgroundColor: '#F0F9FF',
+    marginHorizontal: 24,
+    marginBottom: 16,
+    borderRadius: 8,
   },
-  locationModeText: {
-    fontSize: 10,
-    color: '#68bdee',
+  wsStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4CAF50',
+    marginRight: 8,
+  },
+  wsStatusText: {
+    fontSize: 12,
+    color: '#2E7D32',
     fontWeight: '500',
-    marginLeft: 4,
   },
   toggleSwitch: {
     width: 51,
@@ -1457,8 +1543,6 @@ const styles = StyleSheet.create({
   toggleThumbOnline: {
     alignSelf: "flex-end",
   },
-
-  // Performance Container
   performanceContainer: {
     paddingHorizontal: 24,
     paddingVertical: 20,
@@ -1513,8 +1597,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     letterSpacing: 0,
   },
-
-  // Recent Jobs Container
   recentJobsContainer: {
     paddingHorizontal: 24,
     paddingTop: 20,
@@ -1563,28 +1645,6 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     letterSpacing: -0.15,
   },
-
-  // Add this to your styles object (replace the existing notificationBadge)
-notificationBadge: {
-  position: "absolute",
-  top: -6,
-  right: -6,
-  backgroundColor: "#EF4444", // Red color
-  borderRadius: 12,
-  minWidth: 20,
-  height: 20,
-  justifyContent: "center",
-  alignItems: "center",
-  paddingHorizontal: 4,
-  borderWidth: 1.5,
-  borderColor: "#FFFFFF",
-},
-notificationBadgeText: {
-  color: "#FFFFFF",
-  fontSize: 10,
-  fontWeight: "700",
-  textAlign: "center",
-},
   jobTime: {
     fontSize: 12,
     color: "#87CEFA",
@@ -1664,24 +1724,6 @@ notificationBadgeText: {
     textDecorationLine: "underline",
     textDecorationStyle: "solid",
   },
-  manualLocationBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0F9FF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    marginBottom: 8,
-    alignSelf: 'flex-start',
-  },
-  manualLocationText: {
-    fontSize: 11,
-    color: '#68bdee',
-    fontWeight: '500',
-    marginLeft: 4,
-  },
-
-  // Bottom Buttons
   bottomButtons: {
     paddingHorizontal: 24,
     paddingVertical: 16,
@@ -1705,8 +1747,6 @@ notificationBadgeText: {
     color: "#87cefa",
     letterSpacing: -0.15,
   },
-
-  // Modal Styles
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -1781,8 +1821,6 @@ notificationBadgeText: {
     fontWeight: '600',
     color: '#9CA3AF',
   },
-
-  // Map Picker Styles
   mapPickerContainer: {
     flex: 1,
     backgroundColor: '#FFFFFF',

@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import {
   Image,
@@ -14,9 +14,93 @@ import {
 
 const RequestDetails = () => {
   const router = useRouter();
+  const params = useLocalSearchParams();
+
+  // Extract all params with defaults
+  const jobId = params.jobId as string || '';
+  const bookingId = params.bookingId as string || '';
+  const customerName = params.customerName as string || 'MOHAMMED A.';
+  const customerPhone = params.customerPhone as string || '';
+  const serviceType = params.serviceType as string || 'TOWING SERVICE';
+  const serviceName = params.serviceName as string || serviceType;
+  const price = parseFloat(params.price as string) || 0;
+  const estimatedEarnings = parseFloat(params.estimatedEarnings as string) || price;
+  const pickupLocation = params.pickupLocation as string || 'MAIN STREET, MANAMA';
+  const pickupLat = params.pickupLat as string;
+  const pickupLng = params.pickupLng as string;
+  const dropoffLocation = params.dropoffLocation as string;
+  const dropoffLat = params.dropoffLat as string;
+  const dropoffLng = params.dropoffLng as string;
+  const distance = params.distance as string || '2.5 KM';
+  const urgency = params.urgency as string || 'normal';
+  const description = params.description as string || '';
+  const timestamp = params.timestamp as string;
+  
+  // Vehicle details
+  const vehicleMakeModel = params.vehicleMakeModel as string || 'TOYOTA CAMRY 2020';
+  const vehicleLicensePlate = params.vehicleLicensePlate as string || 'ABC 1234';
+  const vehicleColor = params.vehicleColor as string || 'WHITE';
+  const vehicleType = params.vehicleType as string || 'SEDAN';
+
+  // Format price
+  const formatPrice = (value: number) => {
+    return value.toFixed(2);
+  };
+
+  // Calculate provider earnings (85% of job price)
+  const providerEarnings = price * 0.85;
+
+  // Format timestamp
+  const getTimeAgo = (timestamp?: string) => {
+    if (!timestamp) return 'Just now';
+    const now = new Date();
+    const jobTime = new Date(timestamp);
+    const diffMinutes = Math.floor((now.getTime() - jobTime.getTime()) / 60000);
+    
+    if (diffMinutes < 1) return 'Just now';
+    if (diffMinutes < 60) return `${diffMinutes} min ago`;
+    return `${Math.floor(diffMinutes / 60)} hours ago`;
+  };
+
+  // Get urgency color and text
+  const getUrgencyDetails = () => {
+    switch(urgency?.toLowerCase()) {
+      case 'emergency':
+        return { color: '#DC2626', bgColor: '#FEE2E2', text: 'EMERGENCY' };
+      case 'urgent':
+        return { color: '#F59E0B', bgColor: '#FEF3C7', text: 'URGENT' };
+      default:
+        return { color: '#6B7280', bgColor: '#F3F4F6', text: 'STANDARD' };
+    }
+  };
+
+  const urgencyDetails = getUrgencyDetails();
 
   const handleAcceptReject = () => {
-    router.push('/RejectRequestScreen');
+    router.push({
+      pathname: '/RejectRequestScreen',
+      params: {
+        jobId,
+        bookingId,
+        customerName,
+        serviceType,
+        price: price.toString()
+      }
+    });
+  };
+
+  const handleCallCustomer = () => {
+    if (customerPhone) {
+      // In a real app, you'd use Linking.openURL(`tel:${customerPhone}`)
+      console.log('Calling:', customerPhone);
+    }
+  };
+
+  const handleNavigate = () => {
+    if (pickupLat && pickupLng) {
+      // In a real app, you'd open maps with coordinates
+      console.log('Navigate to:', pickupLat, pickupLng);
+    }
   };
 
   return (
@@ -34,11 +118,13 @@ const RequestDetails = () => {
         
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>REQUEST DETAILS</Text>
-          <Text style={styles.requestId}>REQ-7891</Text>
+          <Text style={styles.requestId}>{bookingId ? bookingId.slice(-8) : 'REQ-7891'}</Text>
         </View>
         
-        <View style={styles.urgentBadge}>
-          <Text style={styles.urgentText}>URGENT</Text>
+        <View style={[styles.urgentBadge, { backgroundColor: urgencyDetails.bgColor }]}>
+          <Text style={[styles.urgentText, { color: urgencyDetails.color }]}>
+            {urgencyDetails.text}
+          </Text>
         </View>
       </View>
 
@@ -58,8 +144,10 @@ const RequestDetails = () => {
               />
             </View>
             <View style={styles.serviceInfo}>
-              <Text style={styles.serviceTitle}>TOWING SERVICE</Text>
-              <Text style={styles.serviceSubtitle}>ASAP</Text>
+              <Text style={styles.serviceTitle}>{serviceName}</Text>
+              <Text style={styles.serviceSubtitle}>
+                {getTimeAgo(timestamp)} • {serviceType}
+              </Text>
             </View>
           </View>
           
@@ -68,13 +156,12 @@ const RequestDetails = () => {
               <Feather name="dollar-sign" size={20} color="#000" />
               <Text style={styles.earningsLabel}>YOUR EARNINGS</Text>
             </View>
-            <Text style={styles.earningsValue}>95 BHD</Text>
+            <Text style={styles.earningsValue}>{formatPrice(providerEarnings)} BHD</Text>
           </View>
         </View>
 
         {/* Customer Information */}
         <View style={styles.section}>
-
           <Text style={styles.sectionTitle}>CUSTOMER INFORMATION</Text>
           <View style={styles.customerCard}>
             <View style={styles.customerLeft}>
@@ -82,20 +169,24 @@ const RequestDetails = () => {
                 <Feather name="user" size={24} color="#87CEFA" />
               </View>
               <View>
-                <Text style={styles.customerName}>MOHAMMED A.</Text>
+                <Text style={styles.customerName}>{customerName}</Text>
                 <View style={styles.ratingRow}>
                   <Feather name="star" size={12} color="#000" />
                   <Text style={styles.ratingText}>4.5 CUSTOMER RATING</Text>
                 </View>
               </View>
             </View>
-            <TouchableOpacity style={styles.callButton}>
-              <Image
-                source={require('../../assets/provider/callbutton.png')}
-                style={styles.callIcon}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
+            {customerPhone ? (
+              <TouchableOpacity style={styles.callButton} onPress={handleCallCustomer}>
+                <Image
+                  source={require('../../assets/provider/callbutton.png')}
+                  style={styles.callIcon}
+                  resizeMode="contain"
+                />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.callButton} />
+            )}
           </View>
         </View>
 
@@ -107,18 +198,18 @@ const RequestDetails = () => {
               <Feather name="truck" size={20} color="#9CA3AF" />
               <View style={styles.vehicleInfo}>
                 <Text style={styles.vehicleLabel}>TYPE & MODEL</Text>
-                <Text style={styles.vehicleValue}>SEDAN - TOYOTA CAMRY 2020</Text>
+                <Text style={styles.vehicleValue}>{vehicleMakeModel}</Text>
               </View>
             </View>
             
             <View style={styles.detailsGrid}>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>LICENSE PLATE:</Text>
-                <Text style={styles.detailValue}>ABC 1234</Text>
+                <Text style={styles.detailValue}>{vehicleLicensePlate}</Text>
               </View>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>COLOR:</Text>
-                <Text style={styles.detailValue}>WHITE</Text>
+                <Text style={styles.detailValue}>{vehicleColor}</Text>
               </View>
             </View>
           </View>
@@ -128,7 +219,7 @@ const RequestDetails = () => {
         <View style={styles.section}>
           <View style={styles.locationHeader}>
             <Text style={styles.sectionTitle}>LOCATION DETAILS</Text>
-            <TouchableOpacity>
+            <TouchableOpacity onPress={handleNavigate}>
               <Text style={styles.navigateText}>
                 <Feather name="navigation" size={12} color="#87CEFA" /> NAVIGATE
               </Text>
@@ -140,37 +231,41 @@ const RequestDetails = () => {
               <View style={styles.locationDot} />
               <View style={styles.locationInfo}>
                 <Text style={styles.locationLabel}>PICKUP LOCATION</Text>
-                <Text style={styles.locationAddress}>MAIN STREET, MANAMA, NEAR CITY MALL</Text>
+                <Text style={styles.locationAddress}>{pickupLocation}</Text>
               </View>
             </View>
             
-            <View style={styles.locationDivider} />
-            
-            <View style={styles.locationItem}>
-              <View style={[styles.locationDot, styles.locationDotOutline]} />
-              <View style={styles.locationInfo}>
-                <Text style={styles.locationLabel}>DROP-OFF LOCATION</Text>
-                <Text style={styles.locationAddress}>AL SEEF GARAGE, BAHRAIN</Text>
-              </View>
-            </View>
+            {dropoffLocation && (
+              <>
+                <View style={styles.locationDivider} />
+                
+                <View style={styles.locationItem}>
+                  <View style={[styles.locationDot, styles.locationDotOutline]} />
+                  <View style={styles.locationInfo}>
+                    <Text style={styles.locationLabel}>DROP-OFF LOCATION</Text>
+                    <Text style={styles.locationAddress}>{dropoffLocation}</Text>
+                  </View>
+                </View>
+              </>
+            )}
             
             <View style={styles.distanceCard}>
               <Feather name="navigation" size={16} color="#87CEFA" />
               <Text style={styles.distanceLabel}>DISTANCE FROM YOU</Text>
-              <Text style={styles.distanceValue}>2.5 KM AWAY</Text>
+              <Text style={styles.distanceValue}>{distance}</Text>
             </View>
           </View>
         </View>
 
         {/* Customer Notes */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>CUSTOMER NOTES</Text>
-          <View style={styles.notesCard}>
-            <Text style={styles.notesText}>
-              VEHICLE WON'T START. BATTERY ISSUE SUSPECTED. LOCATED IN UNDERGROUND PARKING.
-            </Text>
+        {description && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>CUSTOMER NOTES</Text>
+            <View style={styles.notesCard}>
+              <Text style={styles.notesText}>{description}</Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Payment Information */}
         <View style={styles.section}>
@@ -182,25 +277,31 @@ const RequestDetails = () => {
             </View>
             <View style={styles.paymentRow}>
               <Text style={styles.paymentLabel}>SERVICE FEE:</Text>
-              <Text style={styles.paymentValue}>95 BHD</Text>
+              <Text style={styles.paymentValue}>{formatPrice(price)} BHD</Text>
             </View>
             <View style={[styles.paymentRow, styles.earningsHighlight]}>
               <Text style={styles.paymentLabelBold}>YOUR EARNINGS (85%):</Text>
-              <Text style={styles.paymentValueBold}>81 BHD</Text>
+              <Text style={styles.paymentValueBold}>{formatPrice(providerEarnings)} BHD</Text>
             </View>
           </View>
         </View>
 
-        {/* Urgent Request Alert */}
-        <View style={styles.urgentAlert}>
-          <Feather name="alert-circle" size={20} color="#EF4444" />
-          <View style={styles.urgentAlertContent}>
-            <Text style={styles.urgentAlertTitle}>URGENT REQUEST</Text>
-            <Text style={styles.urgentAlertText}>
-              THIS IS A PRIORITY REQUEST. CUSTOMER IS WAITING AND NEEDS IMMEDIATE ASSISTANCE.
-            </Text>
+        {/* Urgent Request Alert - Only show if urgent or emergency */}
+        {(urgency?.toLowerCase() === 'urgent' || urgency?.toLowerCase() === 'emergency') && (
+          <View style={[styles.urgentAlert, { backgroundColor: urgencyDetails.bgColor }]}>
+            <Feather name="alert-circle" size={20} color={urgencyDetails.color} />
+            <View style={styles.urgentAlertContent}>
+              <Text style={[styles.urgentAlertTitle, { color: urgencyDetails.color }]}>
+                {urgencyDetails.text} REQUEST
+              </Text>
+              <Text style={[styles.urgentAlertText, { color: urgencyDetails.color }]}>
+                {urgency === 'emergency' 
+                  ? 'EMERGENCY SITUATION - Immediate assistance required!'
+                  : 'This is a priority request. Customer is waiting for immediate assistance.'}
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Estimated Arrival */}
         <View style={styles.arrivalCard}>
@@ -272,14 +373,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   urgentBadge: {
-    backgroundColor: '#ffe2e2',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 29757000,
   },
   urgentText: {
     fontSize: 12,
-    color: '#EF4444',
     fontWeight: '500',
     letterSpacing: 0,
   },
@@ -606,7 +705,6 @@ const styles = StyleSheet.create({
 
   // Urgent Alert
   urgentAlert: {
-    backgroundColor: '#FEE2E2',
     borderRadius: 12,
     padding: 16,
     flexDirection: 'row',
@@ -621,12 +719,10 @@ const styles = StyleSheet.create({
   urgentAlertTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#EF4444',
     marginBottom: 4,
   },
   urgentAlertText: {
     fontSize: 12,
-    color: '#DC2626',
     lineHeight: 18,
   },
 
@@ -637,10 +733,7 @@ const styles = StyleSheet.create({
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: "space-between",
     marginBottom: 24,
-    paddingHorizontal: 24,
-    paddingVertical: 16,
     borderBottomWidth: 1.77,
     borderBottomColor: "#d1d5dc",
   },

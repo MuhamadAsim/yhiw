@@ -1,22 +1,35 @@
-// services/websocket.service.js
+// services/websocket.service.ts
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Types
+type UserType = 'customer' | 'provider';
+type MessageCallback = (data: any) => void;
+type ConnectionCallback = (isConnected: boolean) => void;
+
+interface PendingMessage {
+  type: string;
+  data: any;
+}
+
+interface WebSocketMessage {
+  type: string;
+  data: any;
+}
+
 class WebSocketService {
-  constructor() {
-    this.socket = null;
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.reconnectTimeout = 3000;
-    this.listeners = new Map();
-    this.connectionListeners = [];
-    this.pendingMessages = [];
-    this.userId = null;
-    this.userType = null; // 'customer' or 'provider'
-  }
+  private socket: WebSocket | null = null;
+  private reconnectAttempts: number = 0;
+  private readonly maxReconnectAttempts: number = 5;
+  private readonly reconnectTimeout: number = 3000;
+  private listeners: Map<string, MessageCallback[]> = new Map();
+  private connectionListeners: ConnectionCallback[] = [];
+  private pendingMessages: PendingMessage[] = [];
+  private userId: string | null = null;
+  private userType: UserType | null = null;
 
   // Initialize WebSocket connection
-  async connect(userType) {
+  async connect(userType: UserType): Promise<boolean> {
     try {
       const token = await AsyncStorage.getItem('userToken');
       const userDataStr = await AsyncStorage.getItem('userData');
@@ -59,15 +72,16 @@ class WebSocketService {
         this.pendingMessages = [];
       };
 
-      this.socket.onmessage = (event) => {
+      this.socket.onmessage = (event: WebSocketMessageEvent) => {
         this.handleMessage(event.data);
       };
 
-      this.socket.onerror = (error) => {
+      this.socket.onerror = (error: Event) => {
         console.error('WebSocket error:', error);
+        this.notifyConnectionListeners(false);
       };
 
-      this.socket.onclose = (event) => {
+      this.socket.onclose = (event: WebSocketCloseEvent) => {
         console.log('WebSocket disconnected:', event.code, event.reason);
         this.notifyConnectionListeners(false);
         
@@ -83,18 +97,30 @@ class WebSocketService {
   }
 
   // Handle incoming messages
-  handleMessage(data) {
+  private handleMessage(data: string): void {
     try {
-      const message = JSON.parse(data);
+      const message: WebSocketMessage = JSON.parse(data);
       console.log('WebSocket message received:', message.type, message);
 
       // Notify specific listeners for this message type
       const listeners = this.listeners.get(message.type) || [];
-      listeners.forEach(callback => callback(message.data));
+      listeners.forEach(callback => {
+        try {
+          callback(message.data);
+        } catch (error) {
+          console.error(`Error in listener for ${message.type}:`, error);
+        }
+      });
 
       // Also notify general listeners
       const generalListeners = this.listeners.get('*') || [];
-      generalListeners.forEach(callback => callback(message));
+      generalListeners.forEach(callback => {
+        try {
+          callback(message);
+        } catch (error) {
+          console.error('Error in general listener:', error);
+        }
+      });
 
     } catch (error) {
       console.error('Error handling WebSocket message:', error);
@@ -102,7 +128,7 @@ class WebSocketService {
   }
 
   // Send a message
-  send(type, data) {
+  send(type: string, data: any): boolean {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       console.log('WebSocket not connected, queueing message:', type);
       this.pendingMessages.push({ type, data });
@@ -120,7 +146,7 @@ class WebSocketService {
   }
 
   // Attempt to reconnect
-  attemptReconnect(userType) {
+  private attemptReconnect(userType: UserType): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('Max reconnection attempts reached');
       return;
@@ -137,33 +163,44 @@ class WebSocketService {
   }
 
   // Add event listener
-  on(eventType, callback) {
+  on(eventType: string, callback: MessageCallback): void {
     if (!this.listeners.has(eventType)) {
       this.listeners.set(eventType, []);
     }
-    this.listeners.get(eventType).push(callback);
+    this.listeners.get(eventType)?.push(callback);
   }
 
   // Remove event listener
-  off(eventType, callback) {
+  off(eventType: string, callback: MessageCallback): void {
     if (!this.listeners.has(eventType)) return;
     
-    const callbacks = this.listeners.get(eventType).filter(cb => cb !== callback);
+    const callbacks = this.listeners.get(eventType)?.filter(cb => cb !== callback) || [];
     this.listeners.set(eventType, callbacks);
   }
 
   // Add connection state listener
-  onConnectionChange(callback) {
+  onConnectionChange(callback: ConnectionCallback): void {
     this.connectionListeners.push(callback);
   }
 
+  // Remove connection state listener
+  offConnectionChange(callback: ConnectionCallback): void {
+    this.connectionListeners = this.connectionListeners.filter(cb => cb !== callback);
+  }
+
   // Notify connection listeners
-  notifyConnectionListeners(isConnected) {
-    this.connectionListeners.forEach(callback => callback(isConnected));
+  private notifyConnectionListeners(isConnected: boolean): void {
+    this.connectionListeners.forEach(callback => {
+      try {
+        callback(isConnected);
+      } catch (error) {
+        console.error('Error in connection listener:', error);
+      }
+    });
   }
 
   // Disconnect
-  disconnect() {
+  disconnect(): void {
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -171,11 +208,17 @@ class WebSocketService {
     this.listeners.clear();
     this.connectionListeners = [];
     this.pendingMessages = [];
+    this.reconnectAttempts = 0;
   }
 
   // Get connection status
-  isConnected() {
-    return this.socket && this.socket.readyState === WebSocket.OPEN;
+  isConnected(): boolean {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  // Get socket ready state
+  getReadyState(): number | null {
+    return this.socket ? this.socket.readyState : null;
   }
 }
 

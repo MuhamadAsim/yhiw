@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,26 +8,274 @@ import {
   SafeAreaView,
   Alert,
   StatusBar,
+  Platform,
+  Linking,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import * as Location from 'expo-location';
+
+// Google Maps API Keys
+const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
+const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
+
+// Select API key based on platform
+const GOOGLE_MAPS_API_KEY = Platform.select({
+  android: ANDROID_API_KEY,
+  ios: IOS_API_KEY,
+});
+
+interface RouteStep {
+  instruction: string;
+  distance: string;
+  duration: string;
+}
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function NavigateToCustomerScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  
+  const mapRef = useRef<MapView>(null);
+  
+  const [userLocation, setUserLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  
+  const [destination, setDestination] = useState({
+    latitude: parseFloat(params.pickupLat as string) || 26.2285,
+    longitude: parseFloat(params.pickupLng as string) || 50.5860,
+    address: params.pickupLocation as string || 'Main Street, Manama',
+  });
+  
+  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
+  const [nextTurn, setNextTurn] = useState<RouteStep | null>(null);
+  const [eta, setEta] = useState('8 min');
+  const [distance, setDistance] = useState('2.5 km');
+  const [isLoading, setIsLoading] = useState(true);
 
-  const handleCompass = () => Alert.alert('Compass', 'Recenter map');
-  const handleCall = () => Alert.alert('Call', 'Calling Mohammed A...');
-  const handleMessage = () => Alert.alert('Message', 'Opening message...');
-  
-  const handleArrived = () => {
-    // Navigate to Service In Progress screen when arrived
-    router.push('/ServiceInProgressScreen');
+  // Get customer info from params
+  const customerName = params.customerName as string || 'Mohammed A.';
+  const customerPhone = params.customerPhone as string || '';
+  const jobId = params.jobId as string;
+
+  useEffect(() => {
+    getUserLocation();
+  }, []);
+
+  const getUserLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Location permission is required for navigation');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+
+      const userLoc = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+
+      setUserLocation(userLoc);
+      
+      // Get route after we have user location
+      if (destination) {
+        await getRoute(userLoc, destination);
+      }
+
+      // Center map on user location
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          ...userLoc,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }, 1000);
+      }
+
+      // Start location tracking
+      startLocationTracking();
+      
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert('Error', 'Failed to get your current location');
+    } finally {
+      setIsLoading(false);
+    }
   };
-  
+
+  const startLocationTracking = () => {
+    // Update location every 5 seconds
+    const interval = setInterval(async () => {
+      try {
+        const location = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Highest,
+        });
+        
+        const newLocation = {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        };
+        
+        setUserLocation(newLocation);
+        
+        // Update route in real-time
+        if (destination) {
+          await getRoute(newLocation, destination);
+        }
+        
+      } catch (error) {
+        console.error('Error updating location:', error);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  };
+
+  const getRoute = async (origin: { latitude: number; longitude: number }, dest: { latitude: number; longitude: number }) => {
+    try {
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+      
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.routes.length > 0) {
+        const route = data.routes[0];
+        
+        // Decode polyline points
+        const points = decodePolyline(route.overview_polyline.points);
+        setRouteCoordinates(points);
+
+        // Get next turn instruction
+        if (route.legs.length > 0 && route.legs[0].steps.length > 0) {
+          const firstStep = route.legs[0].steps[0];
+          setNextTurn({
+            instruction: firstStep.html_instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
+            distance: firstStep.distance.text,
+            duration: firstStep.duration.text,
+          });
+        }
+
+        // Update ETA and distance
+        if (route.legs.length > 0) {
+          setEta(route.legs[0].duration.text);
+          setDistance(route.legs[0].distance.text);
+        }
+      }
+    } catch (error) {
+      console.error('Error getting route:', error);
+    }
+  };
+
+  // Function to decode Google Maps polyline
+  const decodePolyline = (t: string, e: number = 5) => {
+    let points = [];
+    let lat = 0;
+    let lng = 0;
+    let index = 0;
+    let shift = 0;
+    let result = 0;
+
+    while (index < t.length) {
+      let b = 0;
+      shift = 0;
+      result = 0;
+      
+      do {
+        b = t.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      
+      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+      
+      shift = 0;
+      result = 0;
+      
+      do {
+        b = t.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      
+      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+      
+      points.push({
+        latitude: lat / 1e5,
+        longitude: lng / 1e5
+      });
+    }
+    
+    return points;
+  };
+
+  const handleCompass = () => {
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateToRegion({
+        ...userLocation,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    }
+  };
+
+  const handleCall = () => {
+    if (customerPhone) {
+      Linking.openURL(`tel:${customerPhone}`);
+    } else {
+      Alert.alert('Call', `Calling ${customerName}...`);
+    }
+  };
+
+  const handleMessage = () => {
+    Alert.alert('Message', 'Opening message...');
+  };
+
+  const handleOpenMaps = () => {
+    if (userLocation && destination) {
+      const url = Platform.select({
+        ios: `maps://app?saddr=${userLocation.latitude},${userLocation.longitude}&daddr=${destination.latitude},${destination.longitude}`,
+        android: `google.navigation:q=${destination.latitude},${destination.longitude}`,
+      });
+      
+      if (url) {
+        Linking.openURL(url);
+      }
+    }
+  };
+
+  const handleArrived = () => {
+    router.push({
+      pathname: '/ServiceInProgressScreen',
+      params: {
+        jobId,
+        customerName,
+        pickupLocation: destination.address,
+      }
+    });
+  };
+
   const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
   const handleCancelService = () => Alert.alert('Cancel Service', 'Are you sure you want to cancel?');
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading navigation...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -35,6 +283,42 @@ export default function NavigateToCustomerScreen() {
 
       {/* ── MAP AREA ── */}
       <View style={styles.mapArea}>
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={{
+            latitude: userLocation?.latitude || 26.2285,
+            longitude: userLocation?.longitude || 50.5860,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          showsTraffic={true}
+        >
+          {/* Destination Marker */}
+          {destination && (
+            <Marker
+              coordinate={destination}
+              title="Pickup Location"
+              description={destination.address}
+            >
+              <View style={styles.destinationMarker}>
+                <Feather name="map-pin" size={24} color="#EF4444" />
+              </View>
+            </Marker>
+          )}
+
+          {/* Route Polyline */}
+          {routeCoordinates.length > 0 && (
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeWidth={4}
+              strokeColor="#4eafe4"
+            />
+          )}
+        </MapView>
 
         {/* Back Button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
@@ -46,29 +330,36 @@ export default function NavigateToCustomerScreen() {
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
 
+        {/* Open in Google Maps Button */}
+        <TouchableOpacity style={styles.mapsBtn} onPress={handleOpenMaps} activeOpacity={0.8}>
+          <Feather name="external-link" size={20} color="#8fd1fb" />
+        </TouchableOpacity>
+
         {/* Navigation Card */}
-        <View style={styles.navCard}>
-          <View style={styles.navCardTop}>
-            <View style={styles.navIconWrap}>
-              <Feather name="navigation" size={18} color="#8fd1fb" />
+        {nextTurn && (
+          <View style={styles.navCard}>
+            <View style={styles.navCardTop}>
+              <View style={styles.navIconWrap}>
+                <Feather name="navigation" size={18} color="#8fd1fb" />
+              </View>
+              <View style={styles.navCardTextBlock}>
+                <Text style={styles.navCardLabel}>NEXT TURN</Text>
+                <Text style={styles.navCardTurn}>{nextTurn.instruction}</Text>
+              </View>
             </View>
-            <View style={styles.navCardTextBlock}>
-              <Text style={styles.navCardLabel}>NEXT TURN</Text>
-              <Text style={styles.navCardTurn}>Turn right on Main Street</Text>
+            <View style={styles.navCardDivider} />
+            <View style={styles.navCardBottom}>
+              <View style={styles.navCardStat}>
+                <Text style={styles.navStatLabel}>ETA</Text>
+                <Text style={styles.navStatValue}>{eta}</Text>
+              </View>
+              <View style={styles.navCardStat}>
+                <Text style={styles.navStatLabel}>DISTANCE</Text>
+                <Text style={styles.navStatValue}>{distance}</Text>
+              </View>
             </View>
           </View>
-          <View style={styles.navCardDivider} />
-          <View style={styles.navCardBottom}>
-            <View style={styles.navCardStat}>
-              <Text style={styles.navStatLabel}>ETA</Text>
-              <Text style={styles.navStatValue}>8 minutes</Text>
-            </View>
-            <View style={styles.navCardStat}>
-              <Text style={styles.navStatLabel}>DISTANCE</Text>
-              <Text style={styles.navStatValue}>2.5 km</Text>
-            </View>
-          </View>
-        </View>
+        )}
 
         {/* Navigation Active Badge */}
         <View style={styles.navActiveBadge}>
@@ -102,7 +393,7 @@ export default function NavigateToCustomerScreen() {
                 <Feather name="user" size={26} color="#8fd1fb" />
               </View>
               <View style={styles.customerText}>
-                <Text style={styles.customerName}>Mohammed A.</Text>
+                <Text style={styles.customerName}>{customerName}</Text>
                 <Text style={styles.customerRating}>⭐ 4.5 Customer Rating</Text>
               </View>
             </View>
@@ -129,7 +420,7 @@ export default function NavigateToCustomerScreen() {
               <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
               <View>
                 <Text style={styles.locationLabel}>Pickup Location</Text>
-                <Text style={styles.locationValue}>Main Street, Manama, near City Mall</Text>
+                <Text style={styles.locationValue}>{destination.address}</Text>
               </View>
             </View>
           </View>
@@ -173,8 +464,48 @@ export default function NavigateToCustomerScreen() {
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// Add these new styles
+const additionalStyles = {
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F7F7F7',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666666',
+  },
+  destinationMarker: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#EF4444',
+  },
+  mapsBtn: {
+    position: 'absolute',
+    top: 87,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 10,
+  },
+};
 
+// Merge with existing styles
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -194,18 +525,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
     position: 'relative',
     minHeight: 260,
-    paddingHorizontal: 20,
-    paddingTop: 40,
   },
   backBtn: {
     position: 'absolute',
     top: 27,
     left: 16,
-     width: 45,
-     height: 45,
-     borderRadius: 10,
-     borderWidth: 1.5,
-     borderColor: '#1e2939',
+    width: 45,
+    height: 45,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#1e2939',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#1e2939',
@@ -233,6 +562,23 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 10,
   },
+  mapsBtn: {
+    position: 'absolute',
+    top: 87,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 10,
+  },
   navCard: {
     position: 'absolute',
     top: 88,
@@ -242,8 +588,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-     borderWidth: 1.5,
-  borderColor: '#87cefa',
+    borderWidth: 1.5,
+    borderColor: '#87cefa',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
@@ -532,5 +878,26 @@ const styles = StyleSheet.create({
   footerDot: {
     fontSize: 14,
     color: '#6a7282',
+  },
+  // Additional styles
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F7F7F7',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666666',
+  },
+  destinationMarker: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#EF4444',
   },
 });

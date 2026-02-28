@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,20 +9,50 @@ import {
   Dimensions,
   Alert,
   Linking,
+  Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import * as Location from 'expo-location';
+import { customerWebSocket } from '../../services/websocket.service';
 
 const { height, width } = Dimensions.get('window');
+
+// Google Maps API Keys
+const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
+const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
+
+interface ProviderLocation {
+  latitude: number;
+  longitude: number;
+  heading?: number;
+  lastUpdate?: string;
+}
 
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const mapRef = useRef<MapView>(null);
+
+  const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [timeRemaining, setTimeRemaining] = useState<number>(0);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('connected');
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
     if (!param) return '';
     return Array.isArray(param) ? param[0] : param;
+  };
+
+  // Helper function to safely get number from params
+  const getNumberParam = (param: string | string[] | undefined): number | null => {
+    if (!param) return null;
+    const value = Array.isArray(param) ? param[0] : param;
+    const num = parseFloat(value);
+    return isNaN(num) ? null : num;
   };
 
   // Get provider data from params
@@ -42,14 +72,129 @@ const ProviderAssignedScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const totalAmount = getStringParam(params.totalAmount) || '89.25';
   
-  // Get coordinates for map (if available)
-  const pickupLat = getStringParam(params.pickupLat);
-  const pickupLng = getStringParam(params.pickupLng);
-  const providerLat = getStringParam(params.providerLat);
-  const providerLng = getStringParam(params.providerLng);
+  // Get coordinates
+  const pickupLat = getNumberParam(params.pickupLat) || 26.2285;
+  const pickupLng = getNumberParam(params.pickupLng) || 50.5860;
+  const providerLat = getNumberParam(params.providerLat);
+  const providerLng = getNumberParam(params.providerLng);
+  const dropoffLat = getNumberParam(params.dropoffLat);
+  const dropoffLng = getNumberParam(params.dropoffLng);
+  const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
   // Check if this is a "no providers" scenario
   const noProviders = getStringParam(params.noProviders) === 'true';
+
+  useEffect(() => {
+    if (!noProviders && bookingId) {
+      setupWebSocketListeners();
+      startEtaCountdown();
+    }
+
+    return () => {
+      removeWebSocketListeners();
+    };
+  }, [bookingId]);
+
+  const setupWebSocketListeners = () => {
+    // Listen for provider location updates
+    customerWebSocket.on('provider_location', handleProviderLocationUpdate);
+    customerWebSocket.on('provider_status_update', handleProviderStatusUpdate);
+    customerWebSocket.on('connection_change', handleConnectionChange);
+
+    // Request initial provider location
+    customerWebSocket.send('request_provider_location', { bookingId });
+  };
+
+  const removeWebSocketListeners = () => {
+    customerWebSocket.off('provider_location', handleProviderLocationUpdate);
+    customerWebSocket.off('provider_status_update', handleProviderStatusUpdate);
+    customerWebSocket.off('connection_change', handleConnectionChange);
+  };
+
+  const handleProviderLocationUpdate = (data: any) => {
+    console.log('Provider location update:', data);
+    
+    if (data.latitude && data.longitude) {
+      const newLocation = {
+        latitude: data.latitude,
+        longitude: data.longitude,
+        heading: data.heading,
+        lastUpdate: data.timestamp || new Date().toISOString(),
+      };
+      
+      setProviderLocation(newLocation);
+      
+      // Center map to show both provider and pickup
+      if (mapRef.current && providerLat && providerLng) {
+        mapRef.current.fitToCoordinates(
+          [
+            { latitude: newLocation.latitude, longitude: newLocation.longitude },
+            { latitude: pickupLat, longitude: pickupLng }
+          ],
+          {
+            edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
+            animated: true,
+          }
+        );
+      }
+      
+      setIsLoading(false);
+    }
+  };
+
+  const handleProviderStatusUpdate = (data: any) => {
+    console.log('Provider status update:', data);
+    
+    if (data.status === 'arrived') {
+      Alert.alert(
+        'Provider Arrived',
+        `${providerName} has arrived at your location.`,
+        [{ text: 'OK' }]
+      );
+    } else if (data.status === 'en-route') {
+      // Update ETA if provided
+      if (data.estimatedArrival) {
+        setTimeRemaining(parseInt(data.estimatedArrival) * 60);
+      }
+    }
+  };
+
+  const handleConnectionChange = (isConnected: boolean) => {
+    setConnectionStatus(isConnected ? 'connected' : 'disconnected');
+    
+    if (!isConnected) {
+      // Try to reconnect
+      setTimeout(() => {
+        setConnectionStatus('reconnecting');
+        customerWebSocket.connect('customer');
+      }, 3000);
+    }
+  };
+
+  const startEtaCountdown = () => {
+    const etaMinutes = parseInt(estimatedArrival);
+    if (isNaN(etaMinutes)) return;
+
+    setTimeRemaining(etaMinutes * 60);
+
+    const interval = setInterval(() => {
+      setTimeRemaining(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  };
+
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const handleCall = () => {
     if (providerPhone) {
@@ -60,32 +205,45 @@ const ProviderAssignedScreen = () => {
   };
 
   const handleMessage = () => {
-    // Navigate to chat screen with provider
     router.push({
       pathname: '/(customer)/Chat',
       params: {
         providerName,
         bookingId,
+        providerId: getStringParam(params.providerId),
       }
     });
   };
 
   const handleTrackProvider = () => {
-    if (pickupLat && pickupLng && providerLat && providerLng) {
-      // Navigate to live tracking screen with coordinates
+    if (providerLocation) {
       router.push({
         pathname: '/(customer)/LiveTracking',
         params: {
-          pickupLat,
-          pickupLng,
-          providerLat,
-          providerLng,
+          bookingId,
           providerName,
-          estimatedArrival,
+          providerLat: providerLocation.latitude.toString(),
+          providerLng: providerLocation.longitude.toString(),
+          pickupLat: pickupLat.toString(),
+          pickupLng: pickupLng.toString(),
+          estimatedArrival: timeRemaining.toString(),
         }
       });
     } else {
-      Alert.alert('Coming Soon', 'Live tracking will be available shortly');
+      Alert.alert('Tracking', 'Provider location is being updated...');
+    }
+  };
+
+  const handleOpenInMaps = () => {
+    if (providerLocation) {
+      const url = Platform.select({
+        ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${pickupLat},${pickupLng}`,
+        android: `google.navigation:q=${pickupLat},${pickupLng}`,
+      });
+      
+      if (url) {
+        Linking.openURL(url);
+      }
     }
   };
 
@@ -99,8 +257,18 @@ const ProviderAssignedScreen = () => {
           text: 'Yes, Cancel', 
           style: 'destructive',
           onPress: () => {
+            // Send cancellation via WebSocket
+            customerWebSocket.send('cancel_booking', { bookingId });
+            
             // API call to cancel booking
-            console.log('Cancelling booking:', bookingId);
+            fetch(`${API_BASE_URL}/api/jobs/customer/${bookingId}/cancel`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${getStringParam(params.token)}`,
+                'Content-Type': 'application/json',
+              },
+            }).catch(err => console.error('Cancel error:', err));
+
             router.back();
           }
         }
@@ -153,40 +321,108 @@ const ProviderAssignedScreen = () => {
         {/* Subtitle */}
         <Text style={styles.subtitle}>Your service provider is on the way</Text>
 
+        {/* Connection Status */}
+        {connectionStatus !== 'connected' && (
+          <View style={[
+            styles.connectionStatus,
+            connectionStatus === 'reconnecting' ? styles.reconnectingStatus : styles.disconnectedStatus
+          ]}>
+            <ActivityIndicator size="small" color={connectionStatus === 'reconnecting' ? '#F59E0B' : '#EF4444'} />
+            <Text style={[
+              styles.connectionText,
+              connectionStatus === 'reconnecting' ? styles.reconnectingText : styles.disconnectedText
+            ]}>
+              {connectionStatus === 'reconnecting' ? 'Reconnecting...' : 'Connection lost - Using last known location'}
+            </Text>
+          </View>
+        )}
+
         {/* Map Section - Google Maps Integration */}
         <View style={styles.mapContainer}>
           {/* ETA Badge */}
           <View style={styles.etaBadge}>
-            <Text style={styles.etaLabel}>ETA</Text>
-            <Text style={styles.etaTime}>{estimatedArrival} minutes</Text>
+            <Text style={styles.etaLabel}>ARRIVAL IN</Text>
+            <Text style={styles.etaTime}>
+              {timeRemaining > 0 ? formatTime(timeRemaining) : `${estimatedArrival} min`}
+            </Text>
           </View>
 
-          {/* Google Maps Placeholder - Replace with actual MapView */}
-          <View style={styles.mapPlaceholder}>
-            <View style={styles.mapIconContainer}>
-              <Ionicons name="navigate-outline" size={48} color="#68bdee" />
-            </View>
-            <Text style={styles.mapLabel}>Live Tracking Map</Text>
-            <Text style={styles.mapSubLabel}>
-              Provider arriving from {getStringParam(params.distance) || '2.3'} km away
-            </Text>
-            
-            {/* Location Markers */}
-            <View style={styles.locationMarkers}>
-              <View style={styles.pickupMarker}>
-                <View style={styles.markerDot} />
-                <Text style={styles.markerText} numberOfLines={1}>
-                  Pickup: {pickupAddress}
-                </Text>
+          {/* Google Maps */}
+          <MapView
+            ref={mapRef}
+            provider={PROVIDER_GOOGLE}
+            style={styles.map}
+            initialRegion={{
+              latitude: (providerLat || pickupLat),
+              longitude: (providerLng || pickupLng),
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+            showsUserLocation={true}
+            showsMyLocationButton={false}
+            showsTraffic={true}
+          >
+            {/* Pickup Location Marker */}
+            <Marker
+              coordinate={{ latitude: pickupLat, longitude: pickupLng }}
+              title="Pickup Location"
+              description={pickupAddress}
+            >
+              <View style={styles.pickupMarkerContainer}>
+                <View style={styles.pickupMarkerDot} />
               </View>
-              <View style={styles.providerMarker}>
-                <Ionicons name="car" size={16} color="#68bdee" />
-                <Text style={styles.markerText} numberOfLines={1}>
-                  {providerName} is on the way
-                </Text>
-              </View>
-            </View>
-          </View>
+            </Marker>
+
+            {/* Provider Location Marker */}
+            {providerLocation && (
+              <Marker
+                coordinate={providerLocation}
+                title={providerName}
+                description="Your provider"
+              >
+                <View style={styles.providerMarkerContainer}>
+                  <Ionicons name="car" size={24} color="#68bdee" />
+                </View>
+              </Marker>
+            )}
+
+            {/* Dropoff Location Marker (if available) */}
+            {dropoffLat && dropoffLng && (
+              <Marker
+                coordinate={{ latitude: dropoffLat, longitude: dropoffLng }}
+                title="Dropoff Location"
+                description={dropoffAddress}
+              >
+                <View style={styles.dropoffMarkerContainer}>
+                  <Ionicons name="flag" size={20} color="#10B981" />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+
+          {/* Map Overlay Buttons */}
+          <TouchableOpacity
+            style={styles.recenterButton}
+            onPress={() => {
+              if (providerLocation && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  latitude: providerLocation.latitude,
+                  longitude: providerLocation.longitude,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }, 1000);
+              }
+            }}
+          >
+            <Ionicons name="locate" size={20} color="#68bdee" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.openMapsButton}
+            onPress={handleOpenInMaps}
+          >
+            <Ionicons name="navigate-outline" size={20} color="#68bdee" />
+          </TouchableOpacity>
         </View>
 
         {/* Provider Card */}
@@ -205,7 +441,7 @@ const ProviderAssignedScreen = () => {
             <View style={styles.providerInfo}>
               <Text style={styles.providerName}>{providerName}</Text>
               <View style={styles.ratingContainer}>
-                <Ionicons name="star" size={16} color="#3c3c3c" />
+                <Ionicons name="star" size={16} color="#FFB800" />
                 <Text style={styles.ratingText}>{providerRating}</Text>
                 <Text style={styles.reviewsText}>• {getStringParam(params.totalRatings) || '127'} reviews</Text>
               </View>
@@ -213,6 +449,16 @@ const ProviderAssignedScreen = () => {
               <Text style={styles.plateNumber}>{licensePlate}</Text>
             </View>
           </View>
+
+          {/* Provider Location Info */}
+          {providerLocation && (
+            <View style={styles.locationInfoContainer}>
+              <Ionicons name="location" size={14} color="#68bdee" />
+              <Text style={styles.locationInfoText}>
+                Last updated: {new Date(providerLocation.lastUpdate || '').toLocaleTimeString()}
+              </Text>
+            </View>
+          )}
 
           {/* Divider */}
           <View style={styles.divider} />
@@ -247,7 +493,7 @@ const ProviderAssignedScreen = () => {
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Booking ID</Text>
-            <Text style={styles.detailValue}>{bookingId || 'N/A'}</Text>
+            <Text style={styles.detailValue}>{bookingId?.slice(-8) || 'N/A'}</Text>
           </View>
 
           <View style={styles.detailRow}>
@@ -284,7 +530,7 @@ const ProviderAssignedScreen = () => {
 
         {/* Status Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
-          <Text style={styles.cardTitle}>STATUS</Text>
+          <Text style={styles.cardTitle}>JOB STATUS</Text>
           
           <View style={styles.cardDivider} />
 
@@ -299,16 +545,22 @@ const ProviderAssignedScreen = () => {
             </View>
           </View>
 
-          {/* Status Item 2 - Inactive (current) */}
+          {/* Status Item 2 - In progress (current) */}
           <View style={styles.statusItem}>
-            <View style={styles.statusCheckboxInactive} />
+            <View style={[styles.statusCheckboxInactive, providerLocation && styles.statusCheckboxActive]}>
+              {providerLocation && <View style={styles.statusDotActive} />}
+            </View>
             <View style={styles.statusTextContainer}>
-              <Text style={styles.statusTextInactive}>Provider On the Way</Text>
-              <Text style={styles.statusTimeInactive}>ETA: {estimatedArrival} minutes</Text>
+              <Text style={[styles.statusTextInactive, providerLocation && styles.statusTextActive]}>
+                Provider On the Way
+              </Text>
+              <Text style={[styles.statusTimeInactive, providerLocation && styles.statusTimeActive]}>
+                {providerLocation ? 'Live tracking active' : `ETA: ${estimatedArrival} minutes`}
+              </Text>
             </View>
           </View>
 
-          {/* Status Item 3 - Inactive */}
+          {/* Status Item 3 - Waiting */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxInactive} />
             <View style={styles.statusTextContainer}>
@@ -327,7 +579,8 @@ const ProviderAssignedScreen = () => {
           onPress={handleTrackProvider}
           activeOpacity={0.8}
         >
-          <Text style={styles.trackButtonText}>Track Provider</Text>
+          <Ionicons name="navigate" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+          <Text style={styles.trackButtonText}>Track Provider Live</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -350,7 +603,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     alignItems: 'center',
-    paddingTop: height * 0.06,
+    paddingTop: height * 0.04,
     paddingHorizontal: 20,
     paddingBottom: 30,
   },
@@ -380,6 +633,32 @@ const styles = StyleSheet.create({
     marginBottom: height * 0.025,
     letterSpacing: 0.3,
   },
+  connectionStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginBottom: 12,
+    width: '100%',
+  },
+  disconnectedStatus: {
+    backgroundColor: '#FEE2E2',
+  },
+  reconnectingStatus: {
+    backgroundColor: '#FEF3C7',
+  },
+  connectionText: {
+    fontSize: 12,
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  disconnectedText: {
+    color: '#DC2626',
+  },
+  reconnectingText: {
+    color: '#F59E0B',
+  },
   mapContainer: {
     width: '100%',
     height: height * 0.4,
@@ -390,6 +669,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#d0d0d0',
     overflow: 'hidden',
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
   },
   etaBadge: {
     position: 'absolute',
@@ -402,6 +684,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#3c3c3c',
     zIndex: 10,
+    elevation: 5,
   },
   etaLabel: {
     fontSize: 10,
@@ -415,72 +698,62 @@ const styles = StyleSheet.create({
     color: '#3c3c3c',
     fontWeight: 'bold',
   },
-  mapPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  mapIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+  recenterButton: {
+    position: 'absolute',
+    top: 15,
+    right: 15,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    zIndex: 10,
+    elevation: 5,
+  },
+  openMapsButton: {
+    position: 'absolute',
+    top: 70,
+    right: 15,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    zIndex: 10,
+    elevation: 5,
+  },
+  pickupMarkerContainer: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
     borderWidth: 2,
-    borderColor: '#d0e8f0',
+    borderColor: '#68bdee',
   },
-  mapLabel: {
-    fontSize: 12,
-    color: '#3c3c3c',
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  mapSubLabel: {
-    fontSize: 11,
-    color: '#68bdee',
-    fontWeight: '600',
-    marginBottom: 20,
-  },
-  locationMarkers: {
-    width: '100%',
-    marginTop: 10,
-  },
-  pickupMarker: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    alignSelf: 'flex-start',
-  },
-  providerMarker: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(104, 189, 238, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    alignSelf: 'flex-start',
-  },
-  markerDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  pickupMarkerDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#68bdee',
-    marginRight: 8,
   },
-  markerText: {
-    fontSize: 11,
-    color: '#3c3c3c',
-    fontWeight: '500',
-    maxWidth: width * 0.6,
+  providerMarkerContainer: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#68bdee',
+  },
+  dropoffMarkerContainer: {
+    backgroundColor: 'white',
+    padding: 6,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#10B981',
   },
   providerCard: {
     width: '100%',
@@ -547,6 +820,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#8c8c8c',
     fontWeight: '600',
+  },
+  locationInfoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  locationInfoText: {
+    fontSize: 11,
+    color: '#8c8c8c',
+    marginLeft: 6,
   },
   divider: {
     height: 1,
@@ -728,6 +1014,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     marginBottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   trackButtonText: {
     fontSize: 14,
