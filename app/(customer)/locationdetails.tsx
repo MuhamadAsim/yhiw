@@ -1,24 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-  Modal,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import MapView, { Marker, Region, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 
 const { width, height } = Dimensions.get('window');
 
@@ -69,6 +69,10 @@ const LocationDetailsScreen = () => {
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
+  const [firebaseUserId, setFirebaseUserId] = useState<string | null>(null);
+  
+  // State for showing all saved locations
+  const [showAllSavedLocations, setShowAllSavedLocations] = useState(false);
   
   // Save location modal states
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -117,49 +121,83 @@ const LocationDetailsScreen = () => {
     try {
       // Get user token from AsyncStorage
       const token = await AsyncStorage.getItem('userToken');
-      if (token) {
+      const userDataStr = await AsyncStorage.getItem('userData');
+      
+      if (token && userDataStr) {
         setUserToken(token);
-        // Load saved locations after getting token
-        await fetchSavedLocations(token);
+        
+        const userData = JSON.parse(userDataStr);
+        console.log('User data loaded:', {
+          firebaseUserId: userData.firebaseUserId,
+          email: userData.email,
+          role: userData.role
+        });
+        
+        // Store the firebaseUserId for API calls
+        if (userData.firebaseUserId) {
+          setFirebaseUserId(userData.firebaseUserId);
+          // Load saved locations after getting firebaseUserId
+          await fetchSavedLocations(token, userData.firebaseUserId);
+        } else {
+          console.log('No firebaseUserId found in user data');
+        }
       } else {
-        console.log('No user token found - continuing without saved locations');
-        // Still set isGettingLocation to false even without token
-        setIsGettingLocation(false);
+        console.log('No user token or data found - continuing without saved locations');
       }
     } catch (error) {
       console.error('Error loading user data:', error);
-      // Don't show alert, just continue without saved locations
     } finally {
       setIsLoadingSavedLocations(false);
       setIsGettingLocation(false);
     }
   };
 
-  const fetchSavedLocations = async (token: string) => {
+  const fetchSavedLocations = async (token: string, uid: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/users/saved-locations`, {
+      console.log('Fetching saved locations for firebaseUserId:', uid);
+      const url = `${API_BASE_URL}/customer/${uid}/saved-locations`;
+      console.log('Fetching from URL:', url);
+
+      const response = await fetch(url, {
+        method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
 
+      console.log('Response status:', response.status);
+
       if (!response.ok) {
-        // Just log error and continue with empty saved locations
-        console.log('Could not fetch saved locations, continuing with empty list');
+        // If 404, the endpoint might not be implemented yet
+        if (response.status === 404) {
+          console.log('Saved locations endpoint not found - feature not implemented yet');
+        } else {
+          console.log('Could not fetch saved locations, continuing with empty list');
+        }
         setSavedLocations([]);
         return;
       }
 
       const data = await response.json();
+      console.log('Response data:', data);
+      
       if (data.success && data.data) {
-        setSavedLocations(data.data);
+        // Transform the data to match our SavedLocation interface
+        const transformedLocations = data.data.map((loc: any) => ({
+          id: loc._id || loc.id,
+          title: loc.title,
+          address: loc.address,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          type: loc.type || 'other',
+        }));
+        setSavedLocations(transformedLocations);
       } else {
         setSavedLocations([]);
       }
     } catch (error) {
       console.error('Error fetching saved locations:', error);
-      // Silently fail and set empty array
       setSavedLocations([]);
     }
   };
@@ -283,46 +321,7 @@ const LocationDetailsScreen = () => {
     setIsSearching(true);
     
     try {
-      // Try backend search first if token exists
-      if (userToken) {
-        try {
-          const response = await fetch(`${API_BASE_URL}/locations/search?q=${encodeURIComponent(query)}`, {
-            headers: {
-              'Authorization': `Bearer ${userToken}`,
-              'Content-Type': 'application/json',
-            },
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            
-            if (data.success && data.data) {
-              const suggestions = data.data.map((item: any) => ({
-                id: item.id || item.placeId,
-                title: item.title || item.name,
-                address: item.address,
-                latitude: item.latitude,
-                longitude: item.longitude,
-                placeId: item.placeId,
-              }));
-
-              if (type === 'pickup') {
-                setPickupSuggestions(suggestions);
-                setShowPickupSuggestions(suggestions.length > 0);
-              } else {
-                setDropoffSuggestions(suggestions);
-                setShowDropoffSuggestions(suggestions.length > 0);
-              }
-              setIsSearching(false);
-              return;
-            }
-          }
-        } catch (backendError) {
-          console.log('Backend search failed, falling back to device geocoding');
-        }
-      }
-
-      // Fallback to device geocoding
+      // Since backend search might not be implemented, use device geocoding directly
       const geocodeResults = await Location.geocodeAsync(query);
       
       if (geocodeResults.length > 0) {
@@ -422,17 +421,19 @@ const LocationDetailsScreen = () => {
       setRegion(newRegion);
       mapRef.current?.animateToRegion(newRegion, 1000);
 
-      // Show save location option
-      setTimeout(() => {
-        Alert.alert(
-          'Save Location',
-          'Would you like to save this location for future use?',
-          [
-            { text: 'Not Now', style: 'cancel' },
-            { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
-          ]
-        );
-      }, 500);
+      // Show save location option only if user is signed in
+      if (userToken && firebaseUserId) {
+        setTimeout(() => {
+          Alert.alert(
+            'Save Location',
+            'Would you like to save this location for future use?',
+            [
+              { text: 'Not Now', style: 'cancel' },
+              { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
+            ]
+          );
+        }, 500);
+      }
     } else {
       setDropoffLocation(location.address);
       setDropoffCoordinates({
@@ -459,21 +460,23 @@ const LocationDetailsScreen = () => {
         mapRef.current?.animateToRegion(newRegion, 1000);
       }
 
-      // Show save location option
-      setTimeout(() => {
-        Alert.alert(
-          'Save Location',
-          'Would you like to save this location for future use?',
-          [
-            { text: 'Not Now', style: 'cancel' },
-            { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
-          ]
-        );
-      }, 500);
+      // Show save location option only if user is signed in
+      if (userToken && firebaseUserId) {
+        setTimeout(() => {
+          Alert.alert(
+            'Save Location',
+            'Would you like to save this location for future use?',
+            [
+              { text: 'Not Now', style: 'cancel' },
+              { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
+            ]
+          );
+        }, 500);
+      }
     }
 
     // Try to save to recent locations (silently fail if it doesn't work)
-    if (userToken) {
+    if (userToken && firebaseUserId) {
       saveRecentLocation(location).catch(() => {});
     }
   };
@@ -491,7 +494,7 @@ const LocationDetailsScreen = () => {
   };
 
   const saveLocationToBackend = async () => {
-    if (!selectedLocationForSave || !userToken) {
+    if (!selectedLocationForSave || !userToken || !firebaseUserId) {
       Alert.alert('Error', 'You need to be signed in to save locations');
       setShowSaveModal(false);
       return;
@@ -505,56 +508,86 @@ const LocationDetailsScreen = () => {
     setIsSavingLocation(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/users/saved-locations`, {
+      const url = `${API_BASE_URL}/customer/${firebaseUserId}/saved-locations`;
+      console.log('Saving to URL:', url);
+      
+      const requestBody = {
+        title: saveLocationTitle,
+        address: selectedLocationForSave.address,
+        latitude: selectedLocationForSave.latitude,
+        longitude: selectedLocationForSave.longitude,
+        type: saveLocationType,
+      };
+      console.log('Request body:', requestBody);
+
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${userToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          title: saveLocationTitle,
-          address: selectedLocationForSave.address,
-          latitude: selectedLocationForSave.latitude,
-          longitude: selectedLocationForSave.longitude,
-          type: saveLocationType,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
+      console.log('Save response status:', response.status);
+
       if (!response.ok) {
-        throw new Error('Failed to save location');
+        // If 404, the feature is not implemented yet
+        if (response.status === 404) {
+          Alert.alert(
+            'Coming Soon',
+            'The ability to save locations will be available soon! Your location has been selected for this booking.',
+            [{ text: 'OK' }]
+          );
+          setShowSaveModal(false);
+          return;
+        }
+        throw new Error(`Failed to save location: ${response.status}`);
       }
 
       const data = await response.json();
+      console.log('Save response data:', data);
       
       if (data.success && data.data) {
         // Add the new location to saved locations list
-        setSavedLocations(prev => [data.data, ...prev]);
+        const newLocation = {
+          id: data.data._id || data.data.id,
+          title: data.data.title,
+          address: data.data.address,
+          latitude: data.data.latitude,
+          longitude: data.data.longitude,
+          type: data.data.type || saveLocationType,
+        };
         
-        Alert.alert(
-          'Success',
-          'Location saved successfully!',
-          [{ text: 'OK' }]
-        );
+        setSavedLocations(prev => [newLocation, ...prev]);
         
+        Alert.alert('Success', 'Location saved successfully!');
+        setShowSaveModal(false);
+      } else {
+        Alert.alert('Notice', 'Location selected successfully!');
         setShowSaveModal(false);
       }
     } catch (error) {
       console.error('Error saving location:', error);
+      // Don't show error to user, just close modal - location is still selected
       Alert.alert(
-        'Error',
-        'Failed to save location. Please try again.',
+        'Notice',
+        'Your location has been selected for this booking.',
         [{ text: 'OK' }]
       );
+      setShowSaveModal(false);
     } finally {
       setIsSavingLocation(false);
     }
   };
 
   const saveRecentLocation = async (location: LocationSuggestion) => {
-    if (!userToken) return;
+    if (!userToken || !firebaseUserId) return;
 
     try {
-      await fetch(`${API_BASE_URL}/users/recent-locations`, {
+      const url = `${API_BASE_URL}/customer/${firebaseUserId}/recent-locations`;
+      
+      await fetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${userToken}`,
@@ -957,13 +990,15 @@ const LocationDetailsScreen = () => {
             <Text style={styles.addStopText}>Add Another Stop</Text>
           </TouchableOpacity>
 
-          {/* Saved Locations */}
+          {/* Saved Locations - Updated to show only 2 initially */}
           <View style={styles.savedLocationsSection}>
             <View style={styles.savedLocationsHeader}>
               <Text style={styles.savedLocationsTitle}>Saved Locations</Text>
-              {userToken && savedLocations.length > 0 && (
-                <TouchableOpacity>
-                  <Text style={styles.viewAllText}>View All</Text>
+              {userToken && savedLocations.length > 2 && (
+                <TouchableOpacity onPress={() => setShowAllSavedLocations(!showAllSavedLocations)}>
+                  <Text style={styles.viewAllText}>
+                    {showAllSavedLocations ? 'Show Less' : `View All`}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -971,32 +1006,37 @@ const LocationDetailsScreen = () => {
             {isLoadingSavedLocations ? (
               <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
             ) : savedLocations.length > 0 ? (
-              savedLocations.slice(0, 3).map((location) => ( // Show only first 3
-                <TouchableOpacity
-                  key={location.id}
-                  style={styles.savedLocationCard}
-                  onPress={() => handleAddSavedLocation(location)}
-                >
-                  <View style={styles.savedLocationIconContainer}>
-                    <View style={styles.savedLocationIconCircle}>
-                      <Text style={styles.savedLocationEmoji}>
-                        {getLocationIcon(location.type)}
+              <>
+                {/* Show first 2 locations or all if showAll is true */}
+                {(showAllSavedLocations ? savedLocations : savedLocations.slice(0, 2)).map((location) => (
+                  <TouchableOpacity
+                    key={location.id}
+                    style={styles.savedLocationCard}
+                    onPress={() => handleAddSavedLocation(location)}
+                  >
+                    <View style={styles.savedLocationIconContainer}>
+                      <View style={styles.savedLocationIconCircle}>
+                        <Text style={styles.savedLocationEmoji}>
+                          {getLocationIcon(location.type)}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.savedLocationInfo}>
+                      <Text style={styles.savedLocationTitle} numberOfLines={1}>
+                        {location.title}
+                      </Text>
+                      <Text style={styles.savedLocationAddress} numberOfLines={1}>
+                        {location.address}
                       </Text>
                     </View>
-                  </View>
-                  <View style={styles.savedLocationInfo}>
-                    <Text style={styles.savedLocationTitle} numberOfLines={1}>
-                      {location.title}
-                    </Text>
-                    <Text style={styles.savedLocationAddress} numberOfLines={1}>
-                      {location.address}
-                    </Text>
-                  </View>
-                  <View style={styles.addLocationButton}>
-                    <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
-                  </View>
-                </TouchableOpacity>
-              ))
+                    <View style={styles.addLocationButton}>
+                      <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                
+          
+              </>
             ) : (
               <View style={styles.emptySavedContainer}>
                 <Text style={styles.emptySavedText}>
@@ -1470,6 +1510,23 @@ const styles = StyleSheet.create({
   emptySavedText: {
     fontSize: Math.min(14, width * 0.035),
     color: '#8c8c8c',
+  },
+  showMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: height * 0.015,
+    marginTop: height * 0.01,
+    borderWidth: 1,
+    borderColor: '#68bdee',
+    borderRadius: 8,
+    backgroundColor: '#f0f9ff',
+  },
+  showMoreButtonText: {
+    fontSize: Math.min(14, width * 0.035),
+    color: '#68bdee',
+    fontWeight: '600',
+    marginRight: width * 0.02,
   },
   bottomContainer: {
     backgroundColor: '#FFFFFF',

@@ -12,6 +12,7 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Type definitions
 interface SavedVehicle {
@@ -20,7 +21,13 @@ interface SavedVehicle {
   type: string;
   plate: string;
   color: string;
+  make?: string;
+  model?: string;
+  year?: string;
 }
+
+// Update the Omit type to make name optional for creation
+type NewVehicle = Omit<SavedVehicle, 'id'>;
 
 interface VehicleTypeOption {
   id: string;
@@ -32,6 +39,18 @@ interface FuelTypeOption {
   id: string;
   label: string;
   icon: string;
+}
+
+interface UserData {
+  name?: string;
+  email?: string;
+  phoneNumber?: string;
+  firebaseUserId?: string;
+  uid?: string;
+  displayName?: string; // Common in Firebase
+  fullName?: string; // Alternative field name
+  firstName?: string;
+  lastName?: string;
 }
 
 const VehicleContactInfoScreen = () => {
@@ -60,6 +79,10 @@ const VehicleContactInfoScreen = () => {
   
   // Spare Parts specific
   const [partDescription, setPartDescription] = useState<string>('');
+
+  // Saved vehicles state
+  const [savedVehicles, setSavedVehicles] = useState<SavedVehicle[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -90,6 +113,12 @@ const VehicleContactInfoScreen = () => {
   const isFuelDelivery = serviceId === '3';
   const isSpareParts = serviceId === '12';
 
+  // Load user data from AsyncStorage
+  useEffect(() => {
+    loadUserData();
+    loadSavedVehicles();
+  }, []);
+
   useEffect(() => {
     // Check if location was skipped
     if (locationSkippedParam === 'true') {
@@ -113,22 +142,170 @@ const VehicleContactInfoScreen = () => {
     });
   }, []);
 
-  const savedVehicles: SavedVehicle[] = [
-    {
-      id: 1,
-      name: 'Toyota Camry 2020',
-      type: 'Sedan',
-      plate: 'ABC 1234',
-      color: 'White',
-    },
-    {
-      id: 2,
-      name: 'Honda CR-V 2019',
-      type: 'SUV',
-      plate: 'XYZ 6678',
-      color: 'Black',
-    },
-  ];
+  // FIXED: Load user data from AsyncStorage with better name extraction
+  const loadUserData = async () => {
+    try {
+      // Try to get userData first
+      const userDataStr = await AsyncStorage.getItem('userData');
+      if (userDataStr) {
+        const userData: UserData = JSON.parse(userDataStr);
+        console.log('Loaded user data:', userData);
+        
+        // Try multiple possible name fields
+        let name = '';
+        if (userData.name) {
+          name = userData.name;
+        } else if (userData.displayName) {
+          name = userData.displayName;
+        } else if (userData.fullName) {
+          name = userData.fullName;
+        } else if (userData.firstName && userData.lastName) {
+          name = `${userData.firstName} ${userData.lastName}`;
+        } else if (userData.firstName) {
+          name = userData.firstName;
+        }
+        
+        if (name) {
+          setFullName(name);
+        }
+        
+        // Try to get email
+        if (userData.email) {
+          setEmail(userData.email);
+        }
+        
+        // Try to get phone
+        if (userData.phoneNumber) {
+          setPhoneNumber(userData.phoneNumber);
+        }
+      }
+      
+      // Also try to get user profile data from common keys
+      const userProfileStr = await AsyncStorage.getItem('userProfile');
+      if (userProfileStr && !fullName) {
+        const userProfile = JSON.parse(userProfileStr);
+        if (userProfile.name || userProfile.displayName) {
+          setFullName(userProfile.name || userProfile.displayName);
+        }
+        if (userProfile.email && !email) {
+          setEmail(userProfile.email);
+        }
+        if (userProfile.phone && !phoneNumber) {
+          setPhoneNumber(userProfile.phone);
+        }
+      }
+      
+      // Try to get phone from separate key if not found
+      if (!phoneNumber) {
+        const phoneStr = await AsyncStorage.getItem('userPhone');
+        if (phoneStr) {
+          setPhoneNumber(phoneStr);
+        }
+      }
+      
+      // Try to get user from auth key
+      const authUserStr = await AsyncStorage.getItem('authUser');
+      if (authUserStr && !fullName) {
+        const authUser = JSON.parse(authUserStr);
+        if (authUser.name || authUser.displayName) {
+          setFullName(authUser.name || authUser.displayName);
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error loading user data:', error);
+    }
+  };
+
+  // Load saved vehicles from AsyncStorage
+  const loadSavedVehicles = async () => {
+    try {
+      setIsLoading(true);
+      const savedVehiclesStr = await AsyncStorage.getItem('savedVehicles');
+      if (savedVehiclesStr) {
+        const vehicles = JSON.parse(savedVehiclesStr);
+        setSavedVehicles(vehicles);
+        console.log('Loaded saved vehicles:', vehicles);
+      } else {
+        setSavedVehicles([]);
+      }
+    } catch (error) {
+      console.error('Error loading saved vehicles:', error);
+      setSavedVehicles([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // FIXED: Check for duplicate vehicle before saving
+  const isVehicleDuplicate = (vehicleData: {
+    type: string;
+    make: string;
+    model: string;
+    year: string;
+    color: string;
+    plate: string;
+  }, existingVehicles: SavedVehicle[]): boolean => {
+    return existingVehicles.some(v => 
+      v.type.toLowerCase() === vehicleData.type.toLowerCase() &&
+      v.make?.toLowerCase() === vehicleData.make.toLowerCase() &&
+      v.model?.toLowerCase() === vehicleData.model.toLowerCase() &&
+      v.year === vehicleData.year &&
+      v.color.toLowerCase() === vehicleData.color.toLowerCase() &&
+      v.plate.toLowerCase() === vehicleData.plate.toLowerCase()
+    );
+  };
+
+  // Save vehicle to AsyncStorage - FIXED: Now checks for duplicates
+  const saveVehicleToStorage = async (vehicleData: {
+    type: string;
+    make: string;
+    model: string;
+    year: string;
+    color: string;
+    plate: string;
+  }) => {
+    try {
+      const savedVehiclesStr = await AsyncStorage.getItem('savedVehicles');
+      let vehicles: SavedVehicle[] = savedVehiclesStr ? JSON.parse(savedVehiclesStr) : [];
+      
+      // Check if vehicle already exists
+      if (isVehicleDuplicate(vehicleData, vehicles)) {
+        console.log('Vehicle already exists, not saving duplicate');
+        Alert.alert('Info', 'This vehicle is already saved');
+        return false;
+      }
+      
+      // Create vehicle name from make and model
+      const vehicleName = `${vehicleData.make} ${vehicleData.model}`.trim() || 'My Vehicle';
+      
+      // Create new vehicle with all required fields
+      const newVehicle: SavedVehicle = {
+        id: Date.now(), // Simple ID generation
+        name: vehicleName,
+        type: vehicleData.type,
+        plate: vehicleData.plate,
+        color: vehicleData.color,
+        make: vehicleData.make,
+        model: vehicleData.model,
+        year: vehicleData.year,
+      };
+      
+      vehicles.push(newVehicle);
+      await AsyncStorage.setItem('savedVehicles', JSON.stringify(vehicles));
+      setSavedVehicles(vehicles);
+      
+      console.log('Vehicle saved successfully:', newVehicle);
+      
+      // Optionally show a success message
+      Alert.alert('Success', 'Vehicle saved successfully!');
+      return true;
+    } catch (error) {
+      console.error('Error saving vehicle:', error);
+      Alert.alert('Error', 'Failed to save vehicle. Please try again.');
+      return false;
+    }
+  };
 
   const vehicleTypes: VehicleTypeOption[] = [
     { id: 'sedan', label: 'Sedan', icon: '🚗' },
@@ -172,7 +349,7 @@ const VehicleContactInfoScreen = () => {
     }
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     // Validate required fields
     if (!fullName.trim()) {
       Alert.alert('Required Field', 'Please enter your full name');
@@ -214,6 +391,23 @@ const VehicleContactInfoScreen = () => {
         Alert.alert('Required Field', 'Please describe the spare part you need');
         return;
       }
+    }
+
+    // Save vehicle if checkbox is checked and no existing vehicle selected
+    if (saveVehicle && !selectedVehicle) {
+      // Parse make and model from makeModel string
+      const makeModelParts = makeModel.trim().split(' ');
+      const make = makeModelParts[0] || '';
+      const model = makeModelParts.slice(1).join(' ') || '';
+      
+      await saveVehicleToStorage({
+        type: selectedVehicleType,
+        make: make,
+        model: model,
+        year: year,
+        color: color,
+        plate: licensePlate,
+      });
     }
 
     // Navigate to additional details screen with all collected data
@@ -271,9 +465,10 @@ const VehicleContactInfoScreen = () => {
     const vehicle = savedVehicles.find(v => v.id === vehicleId);
     if (vehicle) {
       setSelectedVehicleType(vehicle.type.toLowerCase());
-      setMakeModel(vehicle.name.split(' ').slice(0, 2).join(' '));
-      setColor(vehicle.color);
-      setLicensePlate(vehicle.plate);
+      setMakeModel(vehicle.name || `${vehicle.make || ''} ${vehicle.model || ''}`.trim());
+      setColor(vehicle.color || '');
+      setLicensePlate(vehicle.plate || '');
+      setYear(vehicle.year || '');
     }
   };
 
@@ -331,47 +526,48 @@ const VehicleContactInfoScreen = () => {
         </View>
       </View>
 
-
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Saved Vehicles */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Saved Vehicles</Text>
-          
-          {savedVehicles.map((vehicle) => (
-            <TouchableOpacity
-              key={vehicle.id}
-              style={[
-                styles.savedVehicleCard,
-                selectedVehicle === vehicle.id && styles.savedVehicleCardSelected
-              ]}
-              onPress={() => handleSelectVehicle(vehicle.id)}
-              activeOpacity={0.7}
-            >
-              <Image
-                source={require('../../assets/customer/saved_vehicle.png')}
-                style={styles.savedVehicleIcon}
-                resizeMode="contain"
-              />
-              <View style={styles.vehicleInfo}>
-                <Text style={styles.vehicleName}>{vehicle.name}</Text>
-                <Text style={styles.vehicleDetails}>
-                  {vehicle.type} • {vehicle.plate} • {vehicle.color}
-                </Text>
-              </View>
-              <View style={styles.radioButton}>
-                {selectedVehicle === vehicle.id && (
-                  <View style={styles.radioButtonInner} />
-                )}
-              </View>
-            </TouchableOpacity>
-          ))}
+        {/* Saved Vehicles - Only show if there are saved vehicles */}
+        {savedVehicles.length > 0 && !isLoading && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Saved Vehicles</Text>
+            
+            {savedVehicles.map((vehicle) => (
+              <TouchableOpacity
+                key={vehicle.id}
+                style={[
+                  styles.savedVehicleCard,
+                  selectedVehicle === vehicle.id && styles.savedVehicleCardSelected
+                ]}
+                onPress={() => handleSelectVehicle(vehicle.id)}
+                activeOpacity={0.7}
+              >
+                <Image
+                  source={require('../../assets/customer/saved_vehicle.png')}
+                  style={styles.savedVehicleIcon}
+                  resizeMode="contain"
+                />
+                <View style={styles.vehicleInfo}>
+                  <Text style={styles.vehicleName}>{vehicle.name}</Text>
+                  <Text style={styles.vehicleDetails}>
+                    {vehicle.type} • {vehicle.plate || 'No plate'} • {vehicle.color || 'No color'}
+                  </Text>
+                </View>
+                <View style={styles.radioButton}>
+                  {selectedVehicle === vehicle.id && (
+                    <View style={styles.radioButtonInner} />
+                  )}
+                </View>
+              </TouchableOpacity>
+            ))}
 
-          <Text style={styles.orDivider}>or add new vehicle</Text>
-        </View>
+            <Text style={styles.orDivider}>or add new vehicle</Text>
+          </View>
+        )}
 
         {/* Vehicle Information */}
         <View style={styles.section}>
@@ -479,7 +675,7 @@ const VehicleContactInfoScreen = () => {
             </Text>
           </View>
 
-          {/* LICENSE UPLOAD - ONLY FOR CAR RENTAL - NOW BELOW LICENSE PLATE */}
+          {/* LICENSE UPLOAD - ONLY FOR CAR RENTAL */}
           {(isCarRental || requiresLicense) && (
             <View style={styles.specialSection}>
               <Text style={styles.specialSectionLabel}>
@@ -541,7 +737,7 @@ const VehicleContactInfoScreen = () => {
             </View>
           )}
 
-          {/* FUEL TYPE - ONLY FOR FUEL DELIVERY - NOW BELOW LICENSE PLATE */}
+          {/* FUEL TYPE - ONLY FOR FUEL DELIVERY */}
           {(isFuelDelivery || requiresFuelType) && (
             <View style={styles.specialSection}>
               <Text style={styles.specialSectionLabel}>
@@ -570,7 +766,7 @@ const VehicleContactInfoScreen = () => {
             </View>
           )}
 
-          {/* SPARE PARTS DESCRIPTION - ONLY FOR SPARE PARTS - NOW BELOW LICENSE PLATE */}
+          {/* SPARE PARTS DESCRIPTION - ONLY FOR SPARE PARTS */}
           {(isSpareParts || requiresTextDescription) && (
             <View style={styles.specialSection}>
               <Text style={styles.specialSectionLabel}>
@@ -608,7 +804,7 @@ const VehicleContactInfoScreen = () => {
             <Text style={styles.sectionTitle}>Contact Information</Text>
           </View>
 
-          {/* Full Name */}
+          {/* Full Name - Auto-filled from AsyncStorage */}
           <View style={styles.inputSection}>
             <Text style={styles.inputLabel}>
               Full Name <Text style={styles.required}>*</Text>
@@ -625,7 +821,7 @@ const VehicleContactInfoScreen = () => {
             </View>
           </View>
 
-          {/* Phone Number */}
+          {/* Phone Number - Auto-filled from AsyncStorage */}
           <View style={styles.inputSection}>
             <Text style={styles.inputLabel}>
               Phone Number <Text style={styles.required}>*</Text>
@@ -646,7 +842,7 @@ const VehicleContactInfoScreen = () => {
             </Text>
           </View>
 
-          {/* Email Address */}
+          {/* Email Address - Auto-filled from AsyncStorage */}
           <View style={styles.inputSection}>
             <Text style={styles.inputLabel}>Email Address (Optional)</Text>
             <View style={styles.inputContainer}>
