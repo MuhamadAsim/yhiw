@@ -1,30 +1,31 @@
 // HomePage.tsx - Fixed with proper navigation to job requests page
 import { Feather, Ionicons } from "@expo/vector-icons";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as IntentLauncher from 'expo-intent-launcher';
 import * as Location from 'expo-location';
-import { useRouter, useFocusEffect } from 'expo-router';
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
   Image,
+  Linking,
+  Modal,
   Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
-  Alert,
-  Modal,
-  ActivityIndicator,
-  Dimensions,
-  TextInput,
-  Linking,
+  Vibration,
 } from "react-native";
 import MapView, { Marker, Region } from 'react-native-maps';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as IntentLauncher from 'expo-intent-launcher';
-import Sidebar from "./components/sidebar";
 import { providerWebSocket } from '../../services/websocket.service';
+import Sidebar from "./components/sidebar";
 
 // Get screen width for styles
 const { width, height } = Dimensions.get('window');
@@ -69,13 +70,36 @@ interface LocationSuggestion {
 
 interface JobRequest {
   id: string;
+  bookingId?: string;
   customerName: string;
+  customerId?: string;
+  customerPhone?: string;
+  customerRating?: number;
   serviceType: string;
+  serviceName: string;
+  serviceId?: string;
   pickupLocation: string;
+  pickupLat?: number;
+  pickupLng?: number;
   dropoffLocation?: string;
+  dropoffLat?: number;
+  dropoffLng?: number;
   distance: string;
+  estimatedDistance?: number;
   estimatedEarnings: number;
+  price: number;
+  urgency: 'normal' | 'urgent' | 'emergency';
   timestamp: string;
+  description?: string;
+  vehicleDetails?: {
+    type?: string;
+    makeModel?: string;
+    year?: string;
+    color?: string;
+    licensePlate?: string;
+  };
+  issues?: string[];
+  photos?: string[];
 }
 
 const HomePage = () => {
@@ -98,6 +122,9 @@ const HomePage = () => {
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
+  
+  // Store incoming job requests
+  const [incomingJobRequest, setIncomingJobRequest] = useState<JobRequest | null>(null);
 
   // Map picker states
   const mapRef = useRef<MapView>(null);
@@ -180,6 +207,11 @@ const HomePage = () => {
       providerWebSocket.on('job_updated', handleJobUpdated);
       providerWebSocket.on('notification', handleNotification);
       providerWebSocket.on('provider_status_update', handleStatusUpdate);
+      
+      // Debug listener for all messages
+      providerWebSocket.on('*', (message: any) => {
+        console.log('📨 All WebSocket messages:', JSON.stringify(message, null, 2));
+      });
 
       // Connect to WebSocket
       const connected = await providerWebSocket.connect('provider');
@@ -200,15 +232,26 @@ const HomePage = () => {
     providerWebSocket.off('job_updated', handleJobUpdated);
     providerWebSocket.off('notification', handleNotification);
     providerWebSocket.off('provider_status_update', handleStatusUpdate);
+    providerWebSocket.off('*', () => {});
   };
 
-  const handleNewJobRequest = (jobData: JobRequest) => {
-    console.log('New job request received:', jobData);
+  const handleNewJobRequest = (message: any) => {
+    // The message comes as { type: 'new_job_request', data: {...} }
+    const jobData = message.data || message;
+    console.log('📦 New job request received:', JSON.stringify(jobData, null, 2));
+    
+    // Store the full job data
+    setIncomingJobRequest(jobData as JobRequest);
     
     // Increment notification count
     setNotificationCount(prev => prev + 1);
     
-    // Optional: Show a toast or alert (but don't show modal)
+    // Vibrate on new request
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate(500);
+    }
+    
+    // Optional: Show a toast or alert
     if (Platform.OS === 'ios') {
       // You could use a toast library here
     }
@@ -220,6 +263,11 @@ const HomePage = () => {
     // Decrement notification count if appropriate
     setNotificationCount(prev => Math.max(0, prev - 1));
     
+    // Clear incoming job if it matches
+    if (incomingJobRequest && (incomingJobRequest.id === data.jobId || incomingJobRequest.bookingId === data.bookingId)) {
+      setIncomingJobRequest(null);
+    }
+    
     // Show alert
     Alert.alert('Job Cancelled', 'A job request has been cancelled.');
   };
@@ -229,6 +277,11 @@ const HomePage = () => {
     // Refresh jobs list if needed
     if (providerData?.firebaseUserId && providerData?.token) {
       fetchRecentJobs(providerData.firebaseUserId, providerData.token);
+    }
+    
+    // Update incoming job if it matches
+    if (incomingJobRequest && (incomingJobRequest.id === data.jobId || incomingJobRequest.bookingId === data.bookingId)) {
+      setIncomingJobRequest(prev => prev ? { ...prev, ...data } : null);
     }
   };
 
@@ -924,8 +977,63 @@ const HomePage = () => {
   };
 
   const handleNotificationPress = () => {
-    // Navigate to the separate job requests page
-    router.push('/NewRequestNotification');
+    console.log('🔔 Notification pressed, incoming job:', incomingJobRequest);
+    
+    if (incomingJobRequest) {
+      // Navigate with all job data
+      router.push({
+        pathname: '/NewRequestNotification',
+        params: {
+          // Core identifiers
+          jobId: incomingJobRequest.id,
+          bookingId: incomingJobRequest.bookingId || incomingJobRequest.id,
+          
+          // Customer info
+          customerName: incomingJobRequest.customerName,
+          customerPhone: incomingJobRequest.customerPhone || '',
+          customerRating: incomingJobRequest.customerRating?.toString() || '',
+          
+          // Service details
+          serviceType: incomingJobRequest.serviceType,
+          serviceName: incomingJobRequest.serviceName || incomingJobRequest.serviceType,
+          
+          // Pickup location
+          pickupLocation: incomingJobRequest.pickupLocation,
+          pickupLat: incomingJobRequest.pickupLat?.toString() || '',
+          pickupLng: incomingJobRequest.pickupLng?.toString() || '',
+          
+          // Dropoff location (if available)
+          dropoffLocation: incomingJobRequest.dropoffLocation || '',
+          dropoffLat: incomingJobRequest.dropoffLat?.toString() || '',
+          dropoffLng: incomingJobRequest.dropoffLng?.toString() || '',
+          
+          // Job details
+          distance: incomingJobRequest.distance,
+          estimatedEarnings: incomingJobRequest.estimatedEarnings.toString(),
+          price: (incomingJobRequest.price || incomingJobRequest.estimatedEarnings).toString(),
+          urgency: incomingJobRequest.urgency || 'normal',
+          timestamp: incomingJobRequest.timestamp,
+          
+          // Additional details
+          description: incomingJobRequest.description || '',
+          
+          // Vehicle details (flattened)
+          vehicleType: incomingJobRequest.vehicleDetails?.type || '',
+          vehicleMakeModel: incomingJobRequest.vehicleDetails?.makeModel || '',
+          vehicleYear: incomingJobRequest.vehicleDetails?.year || '',
+          vehicleColor: incomingJobRequest.vehicleDetails?.color || '',
+          vehicleLicensePlate: incomingJobRequest.vehicleDetails?.licensePlate || '',
+          
+          // Issues and photos (as JSON strings)
+          issues: JSON.stringify(incomingJobRequest.issues || []),
+          photos: JSON.stringify(incomingJobRequest.photos || []),
+        }
+      });
+    } else {
+      // If no specific job, just go to the page (it will show "No Request Found")
+      console.log('No incoming job, going to empty notification page');
+      router.push('/NewRequestNotification');
+    }
   };
 
   const formatProviderId = (id: string) => {

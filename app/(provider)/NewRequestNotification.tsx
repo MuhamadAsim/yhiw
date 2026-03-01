@@ -1,4 +1,4 @@
-// NewRequestNotification.tsx - Real-time WebSocket version
+// NewRequestNotification.tsx - Complete updated version
 import React, { useState, useEffect, useRef } from "react";
 import {
   View,
@@ -13,6 +13,7 @@ import {
   Alert,
   Vibration,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -64,53 +65,25 @@ const NewRequestNotification = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   
-  // State for the incoming job request
-  const [jobRequest, setJobRequest] = useState<JobRequest>({
-    id: (params.jobId as string) || '',
-    bookingId: params.bookingId as string || undefined,
-    customerName: (params.customerName as string) || 'Customer',
-    serviceType: (params.serviceType as string) || 'Service Request',
-    serviceName: (params.serviceName as string) || '',
-    pickupLocation: (params.pickupLocation as string) || 'Location pending',
-    dropoffLocation: (params.dropoffLocation as string) || '',
-    distance: (params.distance as string) || 'Calculating...',
-    estimatedEarnings: parseFloat(params.estimatedEarnings as string) || 0,
-    price: parseFloat(params.price as string) || 0,
-    urgency: (params.urgency as 'normal' | 'urgent' | 'emergency') || 'normal',
-    timestamp: (params.timestamp as string) || new Date().toISOString(),
-  });
-
-  const [timeLeft, setTimeLeft] = useState(30); // 30 seconds to respond
+  const [isLoading, setIsLoading] = useState(true);
+  const [jobRequest, setJobRequest] = useState<JobRequest | null>(null);
+  const [timeLeft, setTimeLeft] = useState(30);
   const [progress] = useState(new Animated.Value(1));
   const [isProcessing, setIsProcessing] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
-  const [otherProviders, setOtherProviders] = useState(0); // Number of other providers viewing this job
+  const [otherProviders, setOtherProviders] = useState(0);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const responseSentRef = useRef(false);
   const wsListenersRef = useRef<{[key: string]: boolean}>({});
 
   useEffect(() => {
-    // Setup WebSocket listeners for this specific job
-    setupJobListeners();
+    // Initialize job data from params (coming from HomePage)
+    initializeFromParams();
+    
+    // Setup WebSocket connection and listeners
+    setupWebSocketAndListeners();
 
-    // Start countdown timer
-    startTimer();
-
-    // Vibrate on new request (optional)
-    if (Platform.OS !== 'web') {
-      Vibration.vibrate(500);
-    }
-
-    // Send "viewing" status to backend
-    if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('job_viewing', { 
-        jobId: jobRequest.id,
-        bookingId: jobRequest.bookingId
-      });
-    }
-
-    // Cleanup on unmount
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -119,43 +92,161 @@ const NewRequestNotification = () => {
     };
   }, []);
 
-  const setupJobListeners = () => {
-    // Check if listeners already set up
-    if (wsListenersRef.current[jobRequest.id]) return;
+  const initializeFromParams = () => {
+    console.log('📱 NewRequestNotification - Initializing from params:', params);
     
-    // Listen for updates on this specific job using both patterns
-    providerWebSocket.on(`job_${jobRequest.id}_updated`, handleJobUpdate);
-    providerWebSocket.on(`job_${jobRequest.bookingId || jobRequest.id}_updated`, handleJobUpdate);
-    providerWebSocket.on(`job_${jobRequest.id}_cancelled`, handleJobCancelled);
-    providerWebSocket.on(`job_${jobRequest.bookingId || jobRequest.id}_cancelled`, handleJobCancelled);
+    // Check if we have job data in params
+    const hasJobData = params.jobId || params.bookingId;
+    
+    if (hasJobData) {
+      // Parse issues and photos if they exist
+      let issues: string[] = [];
+      let photos: string[] = [];
+      
+      try {
+        if (params.issues) {
+          issues = JSON.parse(params.issues as string);
+        }
+      } catch (e) {
+        console.log('Error parsing issues:', e);
+      }
+      
+      try {
+        if (params.photos) {
+          photos = JSON.parse(params.photos as string);
+        }
+      } catch (e) {
+        console.log('Error parsing photos:', e);
+      }
+
+      const jobData: JobRequest = {
+        // Core identifiers
+        id: (params.jobId as string) || (params.bookingId as string) || '',
+        bookingId: params.bookingId as string || params.jobId as string,
+        
+        // Customer info
+        customerName: (params.customerName as string) || 'Customer',
+        customerId: params.customerId as string,
+        customerPhone: params.customerPhone as string,
+        customerRating: params.customerRating ? parseFloat(params.customerRating as string) : undefined,
+        
+        // Service details
+        serviceType: (params.serviceType as string) || 'Service Request',
+        serviceName: (params.serviceName as string) || (params.serviceType as string) || '',
+        serviceId: params.serviceId as string,
+        
+        // Pickup location
+        pickupLocation: (params.pickupLocation as string) || 'Location pending',
+        pickupLat: params.pickupLat ? parseFloat(params.pickupLat as string) : undefined,
+        pickupLng: params.pickupLng ? parseFloat(params.pickupLng as string) : undefined,
+        
+        // Dropoff location
+        dropoffLocation: (params.dropoffLocation as string) || '',
+        dropoffLat: params.dropoffLat ? parseFloat(params.dropoffLat as string) : undefined,
+        dropoffLng: params.dropoffLng ? parseFloat(params.dropoffLng as string) : undefined,
+        
+        // Job details
+        distance: (params.distance as string) || 'Calculating...',
+        estimatedDistance: params.estimatedDistance ? parseFloat(params.estimatedDistance as string) : undefined,
+        estimatedEarnings: parseFloat(params.estimatedEarnings as string) || 0,
+        price: parseFloat(params.price as string) || parseFloat(params.estimatedEarnings as string) || 0,
+        urgency: (params.urgency as 'normal' | 'urgent' | 'emergency') || 'normal',
+        timestamp: (params.timestamp as string) || new Date().toISOString(),
+        
+        // Additional details
+        description: params.description as string || '',
+        
+        // Vehicle details - construct from flattened params
+        vehicleDetails: {
+          type: params.vehicleType as string,
+          makeModel: params.vehicleMakeModel as string,
+          year: params.vehicleYear as string,
+          color: params.vehicleColor as string,
+          licensePlate: params.vehicleLicensePlate as string,
+        },
+        
+        // Issues and photos
+        issues: issues,
+        photos: photos,
+      };
+      
+      console.log('✅ Job data initialized:', jobData);
+      setJobRequest(jobData);
+    } else {
+      console.log('⚠️ No job data in params');
+    }
+    
+    setIsLoading(false);
+  };
+
+  const setupWebSocketAndListeners = async () => {
+    // Check if WebSocket is connected, if not try to connect
+    if (!providerWebSocket.isConnected()) {
+      const connected = await providerWebSocket.connect('provider');
+      setWsConnected(connected);
+    } else {
+      setWsConnected(true);
+    }
+
+    // If we have a job ID, setup listeners
+    const jobId = (params.jobId as string) || (params.bookingId as string);
+    if (jobId) {
+      setupJobListeners(jobId);
+      
+      // Send "viewing" status to backend
+      if (providerWebSocket.isConnected()) {
+        providerWebSocket.send('job_viewing', { 
+          jobId: jobId,
+          bookingId: params.bookingId || jobId
+        });
+      }
+    }
+
+    // Start timer after we have job data
+    startTimer();
+    
+    // Vibrate on new request
+    if (Platform.OS !== 'web') {
+      Vibration.vibrate(500);
+    }
+  };
+
+  const setupJobListeners = (jobId: string) => {
+    // Check if listeners already set up
+    if (wsListenersRef.current[jobId]) return;
+    
+    // Listen for updates on this specific job
+    providerWebSocket.on(`job_${jobId}_updated`, handleJobUpdate);
+    providerWebSocket.on(`job_${params.bookingId || jobId}_updated`, handleJobUpdate);
+    providerWebSocket.on(`job_${jobId}_cancelled`, handleJobCancelled);
+    providerWebSocket.on(`job_${params.bookingId || jobId}_cancelled`, handleJobCancelled);
     providerWebSocket.on('job_update', handleJobUpdate);
     providerWebSocket.on('job_cancelled', handleJobCancelled);
     providerWebSocket.on('connection_change', handleConnectionChange);
     providerWebSocket.on('viewer_count', handleViewerCount);
     
-    // Check WebSocket connection status
-    setWsConnected(providerWebSocket.isConnected());
-    
-    wsListenersRef.current[jobRequest.id] = true;
+    wsListenersRef.current[jobId] = true;
   };
 
   const removeJobListeners = () => {
-    providerWebSocket.off(`job_${jobRequest.id}_updated`, handleJobUpdate);
-    providerWebSocket.off(`job_${jobRequest.bookingId || jobRequest.id}_updated`, handleJobUpdate);
-    providerWebSocket.off(`job_${jobRequest.id}_cancelled`, handleJobCancelled);
-    providerWebSocket.off(`job_${jobRequest.bookingId || jobRequest.id}_cancelled`, handleJobCancelled);
-    providerWebSocket.off('job_update', handleJobUpdate);
-    providerWebSocket.off('job_cancelled', handleJobCancelled);
-    providerWebSocket.off('connection_change', handleConnectionChange);
-    providerWebSocket.off('viewer_count', handleViewerCount);
-    
-    delete wsListenersRef.current[jobRequest.id];
+    const jobId = (params.jobId as string) || (params.bookingId as string);
+    if (jobId) {
+      providerWebSocket.off(`job_${jobId}_updated`, handleJobUpdate);
+      providerWebSocket.off(`job_${params.bookingId || jobId}_updated`, handleJobUpdate);
+      providerWebSocket.off(`job_${jobId}_cancelled`, handleJobCancelled);
+      providerWebSocket.off(`job_${params.bookingId || jobId}_cancelled`, handleJobCancelled);
+      providerWebSocket.off('job_update', handleJobUpdate);
+      providerWebSocket.off('job_cancelled', handleJobCancelled);
+      providerWebSocket.off('connection_change', handleConnectionChange);
+      providerWebSocket.off('viewer_count', handleViewerCount);
+      
+      delete wsListenersRef.current[jobId];
+    }
   };
 
   const handleConnectionChange = (isConnected: boolean) => {
     setWsConnected(isConnected);
     if (!isConnected) {
-      // Show warning but don't disconnect user
       console.log('WebSocket disconnected, but you can still respond');
     }
   };
@@ -163,15 +254,20 @@ const NewRequestNotification = () => {
   const handleJobUpdate = (data: JobUpdateData) => {
     console.log('Job updated:', data);
     
+    const jobId = (params.jobId as string) || (params.bookingId as string);
+    
     // Check if this update is for our job
-    const jobIdMatch = data.jobId === jobRequest.id || data.bookingId === jobRequest.bookingId;
+    const jobIdMatch = data.jobId === jobId || data.bookingId === jobId;
     if (!jobIdMatch && data.jobId && data.bookingId) return;
     
     // Update job details if something changes
-    setJobRequest(prev => ({
-      ...prev,
-      ...data
-    }));
+    setJobRequest(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        ...data
+      };
+    });
     
     // If job was accepted by another provider, show message
     if (data.status === 'accepted' && data.providerId) {
@@ -191,8 +287,10 @@ const NewRequestNotification = () => {
   const handleJobCancelled = (data: { jobId?: string; bookingId?: string; reason?: string }) => {
     console.log('Job cancelled:', data);
     
+    const jobId = (params.jobId as string) || (params.bookingId as string);
+    
     // Check if this cancellation is for our job
-    const jobIdMatch = data.jobId === jobRequest.id || data.bookingId === jobRequest.bookingId;
+    const jobIdMatch = data.jobId === jobId || data.bookingId === jobId;
     if (!jobIdMatch && data.jobId && data.bookingId) return;
     
     Alert.alert(
@@ -210,8 +308,9 @@ const NewRequestNotification = () => {
   };
 
   const handleViewerCount = (data: { jobId: string; count: number }) => {
-    if (data.jobId === jobRequest.id || data.jobId === jobRequest.bookingId) {
-      setOtherProviders(data.count - 1); // Subtract ourselves
+    const jobId = (params.jobId as string) || (params.bookingId as string);
+    if (data.jobId === jobId) {
+      setOtherProviders(Math.max(0, data.count - 1)); // Subtract ourselves
     }
   };
 
@@ -236,13 +335,13 @@ const NewRequestNotification = () => {
     // Progress bar animation
     Animated.timing(progress, {
       toValue: 0,
-      duration: 30000, // 30 seconds
+      duration: 30000,
       useNativeDriver: false,
     }).start();
   };
 
   const handleAutoDecline = () => {
-    if (responseSentRef.current) return;
+    if (responseSentRef.current || !jobRequest) return;
     
     responseSentRef.current = true;
     
@@ -268,7 +367,7 @@ const NewRequestNotification = () => {
   };
 
   const handleAccept = () => {
-    if (responseSentRef.current || isProcessing) return;
+    if (responseSentRef.current || isProcessing || !jobRequest) return;
     
     setIsProcessing(true);
     responseSentRef.current = true;
@@ -286,7 +385,7 @@ const NewRequestNotification = () => {
       providerWebSocket.send('accept_job', { 
         jobId: jobRequest.id,
         bookingId: jobRequest.bookingId,
-        responseTime: 30 - timeLeft // How fast they responded
+        responseTime: 30 - timeLeft
       });
       
       // Navigate to job details with full data
@@ -318,7 +417,6 @@ const NewRequestNotification = () => {
         });
       }, 500);
     } else {
-      // Fallback if WebSocket not connected
       Alert.alert(
         'Connection Issue',
         'Unable to connect to server. Please check your internet and try again.',
@@ -336,7 +434,7 @@ const NewRequestNotification = () => {
   };
 
   const handleDecline = () => {
-    if (responseSentRef.current || isProcessing) return;
+    if (responseSentRef.current || isProcessing || !jobRequest) return;
     
     Alert.alert(
       'Decline Request',
@@ -378,17 +476,46 @@ const NewRequestNotification = () => {
     );
   };
 
+  // Loading state
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#87CEFA" />
+          <Text style={styles.loadingText}>Loading request details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // No job data state
+  if (!jobRequest) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.errorContainer}>
+          <Feather name="alert-circle" size={48} color="#9CA3AF" />
+          <Text style={styles.errorTitle}>No Request Found</Text>
+          <Text style={styles.errorText}>There are no service requests available at this time.</Text>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const progressWidth = progress.interpolate({
     inputRange: [0, 1],
     outputRange: ["0%", "100%"],
   });
 
-  // Format currency
   const formatPrice = (price: number): string => {
     return typeof price === 'number' ? price.toFixed(2) : parseFloat(price || '0').toFixed(2);
   };
 
-  // Get urgency color
   const getUrgencyColor = (): string => {
     switch(jobRequest.urgency) {
       case 'emergency': return '#DC2626';
@@ -455,8 +582,22 @@ const NewRequestNotification = () => {
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>CUSTOMER</Text>
                 <Text style={styles.infoValue}>{jobRequest.customerName}</Text>
+                {jobRequest.customerRating ? (
+                  <Text style={styles.customerRating}>★ {jobRequest.customerRating.toFixed(1)}</Text>
+                ) : null}
               </View>
             </View>
+
+            {/* Customer Phone (if available) */}
+            {jobRequest.customerPhone ? (
+              <View style={styles.infoRow}>
+                <Feather name="phone" size={16} color="#87CEFA" />
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>CONTACT</Text>
+                  <Text style={styles.infoValue}>{jobRequest.customerPhone}</Text>
+                </View>
+              </View>
+            ) : null}
 
             {/* Pickup Location */}
             <View style={styles.infoRow}>
@@ -464,6 +605,11 @@ const NewRequestNotification = () => {
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>PICKUP LOCATION</Text>
                 <Text style={styles.infoValue}>{jobRequest.pickupLocation}</Text>
+                {jobRequest.pickupLat && jobRequest.pickupLng ? (
+                  <Text style={styles.coordinates}>
+                    📍 {jobRequest.pickupLat.toFixed(6)}, {jobRequest.pickupLng.toFixed(6)}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
@@ -474,6 +620,11 @@ const NewRequestNotification = () => {
                 <View style={styles.infoContent}>
                   <Text style={styles.infoLabel}>DROPOFF LOCATION</Text>
                   <Text style={styles.infoValue}>{jobRequest.dropoffLocation}</Text>
+                  {jobRequest.dropoffLat && jobRequest.dropoffLng ? (
+                    <Text style={styles.coordinates}>
+                      📍 {jobRequest.dropoffLat.toFixed(6)}, {jobRequest.dropoffLng.toFixed(6)}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
             ) : null}
@@ -498,15 +649,38 @@ const NewRequestNotification = () => {
             </View>
 
             {/* Vehicle Details (if available) */}
-            {jobRequest.vehicleDetails?.makeModel && (
+            {jobRequest.vehicleDetails && (
               <View style={styles.vehicleContainer}>
                 <Feather name="truck" size={14} color="#9CA3AF" />
                 <Text style={styles.vehicleText}>
-                  {jobRequest.vehicleDetails.makeModel}
-                  {jobRequest.vehicleDetails.licensePlate && ` · ${jobRequest.vehicleDetails.licensePlate}`}
+                  {jobRequest.vehicleDetails.makeModel || jobRequest.vehicleDetails.type || 'Vehicle'}
+                  {jobRequest.vehicleDetails.year ? ` · ${jobRequest.vehicleDetails.year}` : ''}
+                  {jobRequest.vehicleDetails.color ? ` · ${jobRequest.vehicleDetails.color}` : ''}
+                  {jobRequest.vehicleDetails.licensePlate ? ` · ${jobRequest.vehicleDetails.licensePlate}` : ''}
                 </Text>
               </View>
             )}
+
+            {/* Description (if available) */}
+            {jobRequest.description ? (
+              <View style={styles.descriptionContainer}>
+                <Text style={styles.descriptionLabel}>DESCRIPTION</Text>
+                <Text style={styles.descriptionText}>{jobRequest.description}</Text>
+              </View>
+            ) : null}
+
+            {/* Issues (if available) */}
+            {jobRequest.issues && jobRequest.issues.length > 0 ? (
+              <View style={styles.issuesContainer}>
+                <Text style={styles.issuesLabel}>ISSUES REPORTED</Text>
+                {jobRequest.issues.map((issue, index) => (
+                  <View key={index} style={styles.issueItem}>
+                    <Feather name="alert-circle" size={12} color="#EF4444" />
+                    <Text style={styles.issueText}>{issue}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
 
           {/* Timer Card */}
@@ -568,7 +742,7 @@ const NewRequestNotification = () => {
                   description: jobRequest.description || '',
                   vehicleMakeModel: jobRequest.vehicleDetails?.makeModel || '',
                   vehicleLicensePlate: jobRequest.vehicleDetails?.licensePlate || '',
-                  preview: 'true' // Mark as preview only
+                  preview: 'true'
                 }
               });
             }}
@@ -584,6 +758,7 @@ const NewRequestNotification = () => {
           {/* Processing indicator */}
           {isProcessing && (
             <View style={styles.processingOverlay}>
+              <ActivityIndicator size="large" color="#53b2e6" />
               <Text style={styles.processingText}>Processing...</Text>
             </View>
           )}
@@ -731,6 +906,17 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#000",
   },
+  customerRating: {
+    fontSize: 12,
+    color: "#F59E0B",
+    marginTop: 2,
+  },
+  coordinates: {
+    fontSize: 10,
+    color: "#9CA3AF",
+    marginTop: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   detailsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -762,10 +948,51 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#F3F4F6',
+    flexWrap: 'wrap',
   },
   vehicleText: {
     fontSize: 12,
     color: '#6B7280',
+    marginLeft: 6,
+    flex: 1,
+  },
+  descriptionContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  descriptionLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    marginBottom: 4,
+    letterSpacing: 0.5,
+  },
+  descriptionText: {
+    fontSize: 13,
+    color: "#4B5563",
+    lineHeight: 18,
+  },
+  issuesContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  issuesLabel: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  issueItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  issueText: {
+    fontSize: 12,
+    color: '#EF4444',
     marginLeft: 6,
   },
   timerCard: {
@@ -882,6 +1109,49 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#53b2e6',
+    marginTop: 12,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 24,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  backButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  backButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
   },
 });
 

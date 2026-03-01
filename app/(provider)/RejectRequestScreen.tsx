@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Alert,
   SafeAreaView,
@@ -321,96 +321,184 @@ export default function MakeYourDecisionScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   
+  // Log all params when screen loads
+  console.log('📱📱📱 ===== MAKE YOUR DECISION SCREEN LOADED =====');
+  console.log('📱 Timestamp:', new Date().toISOString());
+  console.log('📱 All params received:', JSON.stringify(params, null, 2));
+  console.log('📱 jobId:', params.jobId);
+  console.log('📱 bookingId:', params.bookingId);
+  console.log('📱 customerName:', params.customerName);
+  console.log('📱 serviceType:', params.serviceType);
+  console.log('📱 price:', params.price);
+  console.log('📱 pickupLocation:', params.pickupLocation);
+  console.log('📱 distance:', params.distance);
+  
   const [loading, setLoading] = useState(false);
   const [jobData, setJobData] = useState<JobData | null>(null);
   const [acceptanceRate, setAcceptanceRate] = useState(98);
+  
+  // Use ref to track if we've already initialized
+  const hasInitialized = useRef(false);
 
   // Extract job data from params
   const jobId = params.jobId as string;
   const bookingId = params.bookingId as string;
 
+  // Fixed useEffect with proper dependencies
   useEffect(() => {
-    // Load job data from params (passed from previous screen)
-    if (params) {
-      setJobData({
-        jobId: jobId,
-        bookingId: bookingId || jobId,
-        jobNumber: params.jobNumber as string || 'REQ-7891',
-        serviceType: params.serviceType as string || 'Towing',
-        title: params.title as string || params.serviceType as string || 'Service',
-        price: parseFloat(params.price as string) || 95,
-        estimatedEarnings: parseFloat(params.estimatedEarnings as string) || 81,
-        distance: params.distance as string || '2.5 KM',
-        customerName: params.customerName as string || 'Mohammed A.',
-        pickupLocation: params.pickupLocation as string || 'Main Street, Manama',
-        ...params
-      });
-    }
+    console.log('🔄 ===== MAKE YOUR DECISION USEFFECT TRIGGERED =====');
+    console.log('🔄 hasInitialized:', hasInitialized.current);
+    
+    // Only run once
+    if (!hasInitialized.current) {
+      console.log('🔄 First initialization - loading job data from params');
+      
+      // Load job data from params (passed from previous screen)
+      if (Object.keys(params).length > 0) {
+        console.log('📦 Creating jobData from params');
+        const newJobData = {
+          jobId: jobId,
+          bookingId: bookingId || jobId,
+          jobNumber: params.jobNumber as string || 'REQ-7891',
+          serviceType: params.serviceType as string || 'Towing',
+          title: params.title as string || params.serviceType as string || 'Service',
+          price: parseFloat(params.price as string) || 95,
+          estimatedEarnings: parseFloat(params.estimatedEarnings as string) || 81,
+          distance: params.distance as string || '2.5 KM',
+          customerName: params.customerName as string || 'Mohammed A.',
+          pickupLocation: params.pickupLocation as string || 'Main Street, Manama',
+          ...params
+        };
+        
+        console.log('📦 Job data created:', JSON.stringify(newJobData, null, 2));
+        setJobData(newJobData);
+      } else {
+        console.log('⚠️ No params received!');
+      }
 
-    // Fetch provider stats
-    fetchProviderStats();
-  }, [params]);
+      // Fetch provider stats
+      console.log('📊 Fetching provider stats...');
+      fetchProviderStats();
+      
+      hasInitialized.current = true;
+      console.log('✅ Initialization complete');
+    }
+  }, []); // Empty dependency array - only runs once on mount
 
   const fetchProviderStats = async () => {
+    console.log('📊 ===== FETCHING PROVIDER STATS =====');
     try {
       const token = await AsyncStorage.getItem('userToken');
       const userDataStr = await AsyncStorage.getItem('userData');
+      
+      console.log('📊 Token exists:', !!token);
+      console.log('📊 Token length:', token?.length || 0);
+      console.log('📊 User data exists:', !!userDataStr);
       
       if (token && userDataStr) {
         const userData = JSON.parse(userDataStr);
         const providerId = userData.firebaseUserId || userData.uid;
         
+        console.log('📊 Provider ID:', providerId);
+        
         // Fetch provider stats to get acceptance rate
-        const response = await fetch(`${API_BASE_URL}/provider/${providerId}/performance`, {
+        const url = `${API_BASE_URL}/provider/${providerId}/performance`;
+        console.log('📊 Fetching from URL:', url);
+        
+        const response = await fetch(url, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         });
         
+        console.log('📊 Response status:', response.status);
+        
         if (response.ok) {
           const data = await response.json();
+          console.log('📊 Provider stats response:', JSON.stringify(data, null, 2));
+          
           if (data.success && data.data) {
             // Calculate acceptance rate from stats
             const total = data.data.totalJobsOffered || 100;
             const accepted = data.data.totalJobsAccepted || 98;
-            setAcceptanceRate(Math.round((accepted / total) * 100));
+            const rate = Math.round((accepted / total) * 100);
+            console.log('📊 Calculated acceptance rate:', rate);
+            setAcceptanceRate(rate);
           }
+        } else {
+          console.log('📊 Failed to fetch provider stats, using default rate 98');
         }
+      } else {
+        console.log('📊 No token or user data, using default rate 98');
       }
     } catch (error) {
-      console.error('Error fetching provider stats:', error);
+      console.error('📊 Error fetching provider stats:', error);
     }
   };
 
   const handleAccept = async () => {
-    if (!jobData) return;
+    console.log('✅ ===== ACCEPT JOB BUTTON PRESSED =====');
+    console.log('✅ Job data:', jobData);
+    
+    if (!jobData) {
+      console.log('❌ No job data available, cannot accept');
+      return;
+    }
     
     setLoading(true);
+    console.log('✅ Loading state set to true');
     
     try {
-      // 1. Send acceptance via WebSocket (REALTIME)
+      console.log('✅ Sending accept_job via WebSocket');
+      console.log('✅ WebSocket payload:', { 
+        jobId: jobData.jobId,
+        bookingId: jobData.bookingId,
+        responseTime: 15
+      });
+      
+      // Send acceptance via WebSocket
       const wsSent = providerWebSocket.send('accept_job', { 
         jobId: jobData.jobId,
         bookingId: jobData.bookingId,
-        responseTime: 15 // You can calculate actual response time
+        responseTime: 15
       });
+      
+      console.log('✅ WebSocket send result:', wsSent);
 
-      // 2. Also call API as backup
+      // Also call API as backup
       const token = await AsyncStorage.getItem('userToken');
+      console.log('✅ Token for API call:', !!token);
       
       if (token) {
-        const response = await fetch(`${API_BASE_URL}/jobs/provider/job/${jobData.jobId}/accept`, {
+        const apiUrl = `${API_BASE_URL}/jobs/provider/${jobData.jobId}/accept`;
+        console.log('✅ Calling API:', apiUrl);
+        
+        const response = await fetch(apiUrl, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
-          }
+          },
+          body: JSON.stringify({
+            bookingId: jobData.bookingId
+          })
         });
 
+        console.log('✅ API response status:', response.status);
         const result = await response.json();
+        console.log('✅ API response data:', JSON.stringify(result, null, 2));
         
         if (result.success || wsSent) {
+          console.log('✅ Job accepted successfully, navigating to NavigateToCustomerScreen');
+          console.log('✅ Navigation params:', {
+            jobId: jobData.jobId,
+            bookingId: jobData.bookingId,
+            customerName: jobData.customerName,
+            pickupLocation: jobData.pickupLocation,
+            price: jobData.price.toString()
+          });
+          
           // Navigate to NavigateToCustomer page on success
           router.push({
             pathname: '/NavigateToCustomerScreen',
@@ -422,69 +510,118 @@ export default function MakeYourDecisionScreen() {
               price: jobData.price.toString()
             }
           });
+          console.log('✅ Navigation command executed');
         } else {
           throw new Error(result.message || 'Failed to accept job');
         }
+      } else {
+        console.log('❌ No token available for API call');
+        throw new Error('Authentication token not found');
       }
     } catch (error) {
-      console.error('Error accepting job:', error);
+      console.error('❌ Error accepting job:', error);
+      console.error('❌ Error details:', error instanceof Error ? error.stack : 'No stack');
       Alert.alert(
         'Error',
         'Failed to accept job. Please try again.',
         [{ text: 'OK' }]
       );
     } finally {
+      console.log('✅ Setting loading state to false');
       setLoading(false);
     }
   };
 
   const handleDecline = async (reason: string) => {
-    if (!jobData) return;
+    console.log('❌ ===== DECLINE JOB BUTTON PRESSED =====');
+    console.log('❌ Job data:', jobData);
+    console.log('❌ Decline reason:', reason);
+    
+    if (!jobData) {
+      console.log('❌ No job data available, cannot decline');
+      return;
+    }
     
     setLoading(true);
+    console.log('❌ Loading state set to true');
     
     try {
-      // 1. Send decline via WebSocket (REALTIME)
+      console.log('❌ Sending decline_job via WebSocket');
+      console.log('❌ WebSocket payload:', { 
+        jobId: jobData.jobId,
+        bookingId: jobData.bookingId,
+        reason: reason
+      });
+      
+      // Send decline via WebSocket
       const wsSent = providerWebSocket.send('decline_job', { 
         jobId: jobData.jobId,
         bookingId: jobData.bookingId,
         reason: reason
       });
+      
+      console.log('❌ WebSocket send result:', wsSent);
 
-      // 2. Also call API as backup (if you have this endpoint)
+      // Also call API as backup
       const token = await AsyncStorage.getItem('userToken');
+      console.log('❌ Token for API call:', !!token);
       
       if (token) {
-        // Optional: Call decline API if you have one
-        // If not, just rely on WebSocket
+        const apiUrl = `${API_BASE_URL}/jobs/provider/${jobData.jobId}/decline`;
+        console.log('❌ Calling API:', apiUrl);
+        
+        try {
+          const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              bookingId: jobData.bookingId,
+              reason: reason
+            })
+          });
+          
+          console.log('❌ API response status:', response.status);
+          const result = await response.json();
+          console.log('❌ API response data:', JSON.stringify(result, null, 2));
+        } catch (apiError) {
+          console.error('❌ API decline failed, but WebSocket may have worked:', apiError);
+        }
       }
 
       // Show success message and go back to home
+      console.log('❌ Job declined successfully, showing success message');
       Alert.alert(
         'Request Declined',
         `You've declined this job. Reason: ${reason}`,
         [
           {
             text: 'OK',
-            onPress: () => router.push('/(provider)/Home')
+            onPress: () => {
+              console.log('❌ Navigating back to provider home');
+              router.push('/(provider)/Home');
+            }
           }
         ]
       );
     } catch (error) {
-      console.error('Error declining job:', error);
+      console.error('❌ Error declining job:', error);
+      console.error('❌ Error details:', error instanceof Error ? error.stack : 'No stack');
       Alert.alert(
         'Error',
         'Failed to decline job. Please try again.',
         [{ text: 'OK' }]
       );
     } finally {
+      console.log('❌ Setting loading state to false');
       setLoading(false);
     }
   };
 
   const handleCancelDecline = () => {
-    // Just close the decline section - already handled in component
-    console.log('Decline cancelled');
+    console.log('🔄 Decline cancelled by user');
   };
 
   // Show loading if no job data
@@ -504,7 +641,10 @@ export default function MakeYourDecisionScreen() {
       <View style={styles.header}>
         <TouchableOpacity 
           style={styles.backButton}
-          onPress={() => router.back()}
+          onPress={() => {
+            console.log('⬅️ Back button pressed');
+            router.back();
+          }}
           disabled={loading}
         >
           <Feather name="arrow-left" size={24} color="#000" />

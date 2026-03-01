@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { customerWebSocket } from '../../services/websocket.service';
 
@@ -31,6 +31,11 @@ interface ProviderLocation {
   lastUpdate?: string;
 }
 
+interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
+
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -40,6 +45,8 @@ const ProviderAssignedScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [timeRemaining, setTimeRemaining] = useState<number>(0);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('connected');
+  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
+  const [eta, setEta] = useState<string>('');
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -60,6 +67,7 @@ const ProviderAssignedScreen = () => {
   const providerRating = getStringParam(params.providerRating) || '4.8';
   const providerImage = getStringParam(params.providerImage);
   const providerPhone = getStringParam(params.providerPhone) || '+973 3312 4567';
+  const providerId = getStringParam(params.providerId);
   const vehicleDetails = getStringParam(params.vehicleDetails) || 'White Flatbed Truck';
   const licensePlate = getStringParam(params.licensePlate) || 'BHR 5432';
   const estimatedArrival = getStringParam(params.estimatedArrival) || '15';
@@ -71,6 +79,7 @@ const ProviderAssignedScreen = () => {
   const pickupAddress = getStringParam(params.pickupAddress) || '123 Main Street, Manama';
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const totalAmount = getStringParam(params.totalAmount) || '89.25';
+  const token = getStringParam(params.token);
   
   // Get coordinates
   const pickupLat = getNumberParam(params.pickupLat) || 26.2285;
@@ -79,15 +88,34 @@ const ProviderAssignedScreen = () => {
   const providerLng = getNumberParam(params.providerLng);
   const dropoffLat = getNumberParam(params.dropoffLat);
   const dropoffLng = getNumberParam(params.dropoffLng);
+  
   const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
   // Check if this is a "no providers" scenario
   const noProviders = getStringParam(params.noProviders) === 'true';
 
+  // Set initial ETA
+  useEffect(() => {
+    setEta(`${estimatedArrival} min`);
+    const etaMinutes = parseInt(estimatedArrival);
+    if (!isNaN(etaMinutes)) {
+      setTimeRemaining(etaMinutes * 60);
+    }
+  }, [estimatedArrival]);
+
+  // Initialize WebSocket and request provider location
   useEffect(() => {
     if (!noProviders && bookingId) {
+      // First, ensure WebSocket is connected
+      ensureWebSocketConnected();
+      
       setupWebSocketListeners();
       startEtaCountdown();
+      
+      // Request provider location immediately
+      setTimeout(() => {
+        requestProviderLocation();
+      }, 2000);
     }
 
     return () => {
@@ -95,37 +123,193 @@ const ProviderAssignedScreen = () => {
     };
   }, [bookingId]);
 
-  const setupWebSocketListeners = () => {
-    // Listen for provider location updates
-    customerWebSocket.on('provider_location', handleProviderLocationUpdate);
-    customerWebSocket.on('provider_status_update', handleProviderStatusUpdate);
-    customerWebSocket.on('connection_change', handleConnectionChange);
+  const ensureWebSocketConnected = async () => {
+    if (!customerWebSocket.isConnected()) {
+      console.log('WebSocket not connected, connecting...');
+      const connected = await customerWebSocket.connect('customer');
+      if (connected) {
+        console.log('WebSocket connected successfully');
+        setConnectionStatus('connected');
+      } else {
+        console.log('Failed to connect WebSocket');
+        setConnectionStatus('disconnected');
+      }
+    }
+  };
 
-    // Request initial provider location
-    customerWebSocket.send('request_provider_location', { bookingId });
+  const requestProviderLocation = () => {
+    console.log('Requesting provider location for booking:', bookingId);
+    customerWebSocket.send('request_status', { 
+      bookingId,
+      type: 'provider_location'
+    });
+    
+    // Also try to subscribe to provider updates
+    if (providerId) {
+      customerWebSocket.send('subscribe', { 
+        room: `provider_${providerId}` 
+      });
+    }
+  };
+
+  // Decode Google Maps polyline
+  const decodePolyline = (t: string): Coordinates[] => {
+    let points: Coordinates[] = [];
+    let lat = 0;
+    let lng = 0;
+    let index = 0;
+    let shift = 0;
+    let result = 0;
+
+    while (index < t.length) {
+      let b = 0;
+      shift = 0;
+      result = 0;
+      
+      do {
+        b = t.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      
+      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+      
+      shift = 0;
+      result = 0;
+      
+      do {
+        b = t.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      
+      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+      
+      points.push({
+        latitude: lat / 1e5,
+        longitude: lng / 1e5
+      });
+    }
+    
+    return points;
+  };
+
+  // Fetch route from Google Maps
+  const fetchRoute = async (startLat: number, startLng: number, endLat: number, endLng: number) => {
+    try {
+      const apiKey = Platform.select({
+        android: ANDROID_API_KEY,
+        ios: IOS_API_KEY,
+      });
+
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&key=${apiKey}`;
+      
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.routes.length > 0) {
+        const points = decodePolyline(data.routes[0].overview_polyline.points);
+        setRouteCoordinates(points);
+      }
+    } catch (error) {
+      console.error('Error fetching route:', error);
+    }
+  };
+
+  // Get ETA from Google Maps
+  const getEtaFromGoogleMaps = async (originLat: number, originLng: number, destLat: number, destLng: number) => {
+    try {
+      const apiKey = Platform.select({
+        android: ANDROID_API_KEY,
+        ios: IOS_API_KEY,
+      });
+
+      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${apiKey}`;
+      
+      const response = await fetch(url);
+      const data = await response.json();
+
+      if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
+        const durationText = data.rows[0].elements[0].duration.text;
+        setEta(durationText);
+        
+        const durationInSeconds = data.rows[0].elements[0].duration.value;
+        setTimeRemaining(durationInSeconds);
+      }
+    } catch (error) {
+      console.error('Error getting ETA:', error);
+    }
+  };
+
+  const setupWebSocketListeners = () => {
+    // Listen for all possible provider update events
+    customerWebSocket.on('provider_location', handleProviderLocationUpdate);
+    customerWebSocket.on('provider_assigned', handleProviderAssigned);
+    customerWebSocket.on('job_accepted', handleJobAccepted);
+    customerWebSocket.on('status_update', handleStatusUpdate);
+    customerWebSocket.on('connection_change', handleConnectionChange);
+    
+    // Add connection change listener
+    customerWebSocket.onConnectionChange((isConnected) => {
+      handleConnectionChange({ isConnected });
+    });
   };
 
   const removeWebSocketListeners = () => {
     customerWebSocket.off('provider_location', handleProviderLocationUpdate);
-    customerWebSocket.off('provider_status_update', handleProviderStatusUpdate);
+    customerWebSocket.off('provider_assigned', handleProviderAssigned);
+    customerWebSocket.off('job_accepted', handleJobAccepted);
+    customerWebSocket.off('status_update', handleStatusUpdate);
     customerWebSocket.off('connection_change', handleConnectionChange);
   };
 
-  const handleProviderLocationUpdate = (data: any) => {
-    console.log('Provider location update:', data);
+  const handleProviderAssigned = (message: any) => {
+    console.log('Provider assigned message:', message);
+    const data = message.data || message;
     
-    if (data.latitude && data.longitude) {
+    if (data.providerLocation) {
+      handleProviderLocationUpdate({ data: data.providerLocation });
+    }
+  };
+
+  const handleJobAccepted = (message: any) => {
+    console.log('Job accepted message:', message);
+    const data = message.data || message;
+    
+    if (data.providerLocation) {
+      handleProviderLocationUpdate({ data: data.providerLocation });
+    }
+  };
+
+  const handleProviderLocationUpdate = (message: any) => {
+    console.log('Provider location update:', message);
+    
+    // Handle both { data: {...} } and direct object formats
+    const data = message.data || message;
+    
+    // Try different possible field names
+    const latitude = data.latitude || data.lat;
+    const longitude = data.longitude || data.lng;
+    
+    if (latitude && longitude) {
       const newLocation = {
-        latitude: data.latitude,
-        longitude: data.longitude,
+        latitude: typeof latitude === 'string' ? parseFloat(latitude) : latitude,
+        longitude: typeof longitude === 'string' ? parseFloat(longitude) : longitude,
         heading: data.heading,
         lastUpdate: data.timestamp || new Date().toISOString(),
       };
       
+      console.log('Setting provider location:', newLocation);
       setProviderLocation(newLocation);
       
+      // Fetch route and ETA
+      fetchRoute(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
+      getEtaFromGoogleMaps(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
+      
       // Center map to show both provider and pickup
-      if (mapRef.current && providerLat && providerLng) {
+      if (mapRef.current) {
         mapRef.current.fitToCoordinates(
           [
             { latitude: newLocation.latitude, longitude: newLocation.longitude },
@@ -142,8 +326,9 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  const handleProviderStatusUpdate = (data: any) => {
-    console.log('Provider status update:', data);
+  const handleStatusUpdate = (message: any) => {
+    console.log('Status update:', message);
+    const data = message.data || message;
     
     if (data.status === 'arrived') {
       Alert.alert(
@@ -157,17 +342,32 @@ const ProviderAssignedScreen = () => {
         setTimeRemaining(parseInt(data.estimatedArrival) * 60);
       }
     }
+    
+    // If location is included in status update
+    if (data.location) {
+      handleProviderLocationUpdate({ data: data.location });
+    }
   };
 
-  const handleConnectionChange = (isConnected: boolean) => {
+  const handleConnectionChange = (data: any) => {
+    const isConnected = data.isConnected || data;
     setConnectionStatus(isConnected ? 'connected' : 'disconnected');
     
     if (!isConnected) {
       // Try to reconnect
       setTimeout(() => {
         setConnectionStatus('reconnecting');
-        customerWebSocket.connect('customer');
+        customerWebSocket.connect('customer').then(connected => {
+          if (connected && bookingId) {
+            requestProviderLocation();
+          }
+        });
       }, 3000);
+    } else if (isConnected && bookingId) {
+      // Reconnected, request location again
+      setTimeout(() => {
+        requestProviderLocation();
+      }, 1000);
     }
   };
 
@@ -210,7 +410,7 @@ const ProviderAssignedScreen = () => {
       params: {
         providerName,
         bookingId,
-        providerId: getStringParam(params.providerId),
+        providerId,
       }
     });
   };
@@ -258,13 +458,15 @@ const ProviderAssignedScreen = () => {
           style: 'destructive',
           onPress: () => {
             // Send cancellation via WebSocket
-            customerWebSocket.send('cancel_booking', { bookingId });
+            if (customerWebSocket.isConnected()) {
+              customerWebSocket.send('cancel_booking', { bookingId });
+            }
             
             // API call to cancel booking
             fetch(`${API_BASE_URL}/api/jobs/customer/${bookingId}/cancel`, {
               method: 'POST',
               headers: {
-                'Authorization': `Bearer ${getStringParam(params.token)}`,
+                'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json',
               },
             }).catch(err => console.error('Cancel error:', err));
@@ -343,7 +545,7 @@ const ProviderAssignedScreen = () => {
           <View style={styles.etaBadge}>
             <Text style={styles.etaLabel}>ARRIVAL IN</Text>
             <Text style={styles.etaTime}>
-              {timeRemaining > 0 ? formatTime(timeRemaining) : `${estimatedArrival} min`}
+              {timeRemaining > 0 ? formatTime(timeRemaining) : eta}
             </Text>
           </View>
 
@@ -353,8 +555,8 @@ const ProviderAssignedScreen = () => {
             provider={PROVIDER_GOOGLE}
             style={styles.map}
             initialRegion={{
-              latitude: (providerLat || pickupLat),
-              longitude: (providerLng || pickupLng),
+              latitude: pickupLat,
+              longitude: pickupLng,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
@@ -397,6 +599,15 @@ const ProviderAssignedScreen = () => {
                   <Ionicons name="flag" size={20} color="#10B981" />
                 </View>
               </Marker>
+            )}
+
+            {/* Route Polyline */}
+            {routeCoordinates.length > 0 && (
+              <Polyline
+                coordinates={routeCoordinates}
+                strokeWidth={4}
+                strokeColor="#68bdee"
+              />
             )}
           </MapView>
 

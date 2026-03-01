@@ -10,11 +10,13 @@ import {
   StatusBar,
   Platform,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { providerWebSocket } from '../../services/websocket.service';
 
 // Google Maps API Keys
 const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
@@ -32,6 +34,11 @@ interface RouteStep {
   duration: string;
 }
 
+interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
+
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function NavigateToCustomerScreen() {
@@ -39,42 +46,143 @@ export default function NavigateToCustomerScreen() {
   const params = useLocalSearchParams();
   
   const mapRef = useRef<MapView>(null);
+  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
   
-  const [userLocation, setUserLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
-  
-  const [destination, setDestination] = useState({
-    latitude: parseFloat(params.pickupLat as string) || 26.2285,
-    longitude: parseFloat(params.pickupLng as string) || 50.5860,
-    address: params.pickupLocation as string || 'Main Street, Manama',
-  });
-  
-  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
+  const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
+  const [providerLocation, setProviderLocation] = useState<Coordinates | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [nextTurn, setNextTurn] = useState<RouteStep | null>(null);
-  const [eta, setEta] = useState('8 min');
-  const [distance, setDistance] = useState('2.5 km');
+  const [eta, setEta] = useState('-- min');
+  const [distance, setDistance] = useState('-- km');
   const [isLoading, setIsLoading] = useState(true);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
 
-  // Get customer info from params
+  // Get data from params
   const customerName = params.customerName as string || 'Mohammed A.';
   const customerPhone = params.customerPhone as string || '';
   const jobId = params.jobId as string;
+  const bookingId = params.bookingId as string;
+  
+  // Destination (pickup location)
+  const destination = {
+    latitude: parseFloat(params.pickupLat as string) || 26.2285,
+    longitude: parseFloat(params.pickupLng as string) || 50.5860,
+    address: params.pickupLocation as string || 'Main Street, Manama',
+  };
+
+  // Initial provider location (if passed)
+  const initialProviderLat = parseFloat(params.providerLat as string);
+  const initialProviderLng = parseFloat(params.providerLng as string);
 
   useEffect(() => {
+    console.log('🗺️ NavigateToCustomerScreen mounted');
+    console.log('Destination:', destination);
+    
+    // Initialize
     getUserLocation();
+    setupWebSocket();
+    
+    // Set initial provider location if available
+    if (initialProviderLat && initialProviderLng) {
+      setProviderLocation({
+        latitude: initialProviderLat,
+        longitude: initialProviderLng,
+      });
+    }
+
+    return () => {
+      // Cleanup location subscription
+      if (locationSubscription.current) {
+        locationSubscription.current.remove();
+      }
+      // Disconnect WebSocket
+      providerWebSocket.disconnect();
+    };
   }, []);
+
+  // Update route when locations change
+  useEffect(() => {
+    if (userLocation && destination) {
+      getRoute(userLocation, destination);
+    }
+  }, [userLocation]);
+
+  // Fit map to show both points
+  useEffect(() => {
+    if (mapReady && userLocation && destination && mapRef.current) {
+      mapRef.current.fitToCoordinates(
+        [userLocation, destination],
+        {
+          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
+          animated: true,
+        }
+      );
+    }
+  }, [mapReady, userLocation, destination]);
+
+  const setupWebSocket = () => {
+    // Listen for provider location updates
+    providerWebSocket.on('provider_location', handleProviderLocation);
+    providerWebSocket.on('connection_change', (connected) => {
+      setWsConnected(connected);
+    });
+
+    // Request provider location
+    if (providerWebSocket.isConnected()) {
+      providerWebSocket.send('request_provider_location', { jobId, bookingId });
+    }
+  };
+
+  const handleProviderLocation = (data: any) => {
+    console.log('📍 Provider location update:', data);
+    
+    const location = data.data || data;
+    
+    if (location.latitude && location.longitude) {
+      const newLocation = {
+        latitude: location.latitude,
+        longitude: location.longitude,
+      };
+      
+      setProviderLocation(newLocation);
+      
+      // If we have both provider and destination, show route from provider
+      if (newLocation && destination) {
+        getRoute(newLocation, destination);
+      }
+      
+      // Fit map to show all points
+      if (mapRef.current && userLocation) {
+        mapRef.current.fitToCoordinates(
+          [newLocation, userLocation, destination],
+          {
+            edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
+            animated: true,
+          }
+        );
+      }
+    }
+  };
 
   const getUserLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location permission is required for navigation');
+        Alert.alert(
+          'Permission Denied',
+          'Location permission is required for navigation',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Settings', onPress: () => Linking.openSettings() }
+          ]
+        );
+        setIsLoading(false);
         return;
       }
 
+      // Get current location
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
@@ -84,24 +192,34 @@ export default function NavigateToCustomerScreen() {
         longitude: location.coords.longitude,
       };
 
+      console.log('📍 User location:', userLoc);
       setUserLocation(userLoc);
-      
-      // Get route after we have user location
-      if (destination) {
-        await getRoute(userLoc, destination);
-      }
 
-      // Center map on user location
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({
-          ...userLoc,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }, 1000);
-      }
-
-      // Start location tracking
-      startLocationTracking();
+      // Start watching position for real-time updates
+      locationSubscription.current = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Highest,
+          timeInterval: 5000,
+          distanceInterval: 10,
+        },
+        (newLocation) => {
+          const updatedLoc = {
+            latitude: newLocation.coords.latitude,
+            longitude: newLocation.coords.longitude,
+          };
+          setUserLocation(updatedLoc);
+          
+          // Update provider with our location
+          if (providerWebSocket.isConnected()) {
+            providerWebSocket.send('provider_location_update', {
+              jobId,
+              bookingId,
+              latitude: updatedLoc.latitude,
+              longitude: updatedLoc.longitude,
+            });
+          }
+        }
+      );
       
     } catch (error) {
       console.error('Error getting location:', error);
@@ -111,38 +229,11 @@ export default function NavigateToCustomerScreen() {
     }
   };
 
-  const startLocationTracking = () => {
-    // Update location every 5 seconds
-    const interval = setInterval(async () => {
-      try {
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Highest,
-        });
-        
-        const newLocation = {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        };
-        
-        setUserLocation(newLocation);
-        
-        // Update route in real-time
-        if (destination) {
-          await getRoute(newLocation, destination);
-        }
-        
-      } catch (error) {
-        console.error('Error updating location:', error);
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  };
-
-  const getRoute = async (origin: { latitude: number; longitude: number }, dest: { latitude: number; longitude: number }) => {
+  const getRoute = async (origin: Coordinates, dest: Coordinates) => {
     try {
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
       
+      console.log('📍 Fetching route...');
       const response = await fetch(url);
       const data = await response.json();
 
@@ -168,6 +259,8 @@ export default function NavigateToCustomerScreen() {
           setEta(route.legs[0].duration.text);
           setDistance(route.legs[0].distance.text);
         }
+        
+        console.log('📍 Route found:', route.legs[0].duration.text);
       }
     } catch (error) {
       console.error('Error getting route:', error);
@@ -175,13 +268,14 @@ export default function NavigateToCustomerScreen() {
   };
 
   // Function to decode Google Maps polyline
-  const decodePolyline = (t: string, e: number = 5) => {
+  const decodePolyline = (t: string, precision: number = 5) => {
     let points = [];
     let lat = 0;
     let lng = 0;
     let index = 0;
     let shift = 0;
     let result = 0;
+    let factor = Math.pow(10, precision);
 
     while (index < t.length) {
       let b = 0;
@@ -210,8 +304,8 @@ export default function NavigateToCustomerScreen() {
       lng += dlng;
       
       points.push({
-        latitude: lat / 1e5,
-        longitude: lng / 1e5
+        latitude: lat / factor,
+        longitude: lng / factor
       });
     }
     
@@ -225,6 +319,18 @@ export default function NavigateToCustomerScreen() {
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       }, 1000);
+    }
+  };
+
+  const handleFitAll = () => {
+    if (mapRef.current && userLocation && destination) {
+      const coordinates = [userLocation, destination];
+      if (providerLocation) coordinates.push(providerLocation);
+      
+      mapRef.current.fitToCoordinates(coordinates, {
+        edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
+        animated: true,
+      });
     }
   };
 
@@ -254,10 +360,20 @@ export default function NavigateToCustomerScreen() {
   };
 
   const handleArrived = () => {
+    // Notify backend via WebSocket
+    if (providerWebSocket.isConnected()) {
+      providerWebSocket.send('provider_arrived', {
+        jobId,
+        bookingId,
+        location: userLocation,
+      });
+    }
+
     router.push({
       pathname: '/ServiceInProgressScreen',
       params: {
         jobId,
+        bookingId,
         customerName,
         pickupLocation: destination.address,
       }
@@ -265,12 +381,31 @@ export default function NavigateToCustomerScreen() {
   };
 
   const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
-  const handleCancelService = () => Alert.alert('Cancel Service', 'Are you sure you want to cancel?');
+  const handleCancelService = () => {
+    Alert.alert(
+      'Cancel Service',
+      'Are you sure you want to cancel this service?',
+      [
+        { text: 'No', style: 'cancel' },
+        { 
+          text: 'Yes, Cancel', 
+          style: 'destructive',
+          onPress: () => {
+            if (providerWebSocket.isConnected()) {
+              providerWebSocket.send('cancel_job', { jobId, bookingId });
+            }
+            router.back();
+          }
+        }
+      ]
+    );
+  };
 
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4eafe4" />
           <Text style={styles.loadingText}>Loading navigation...</Text>
         </View>
       </SafeAreaView>
@@ -288,27 +423,52 @@ export default function NavigateToCustomerScreen() {
           provider={PROVIDER_GOOGLE}
           style={styles.map}
           initialRegion={{
-            latitude: userLocation?.latitude || 26.2285,
-            longitude: userLocation?.longitude || 50.5860,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
+            latitude: userLocation?.latitude || destination.latitude,
+            longitude: userLocation?.longitude || destination.longitude,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
           }}
           showsUserLocation={true}
           showsMyLocationButton={false}
           showsTraffic={true}
+          onMapReady={() => setMapReady(true)}
         >
-          {/* Destination Marker */}
-          {destination && (
+          {/* User/Provider Location Marker */}
+          {userLocation && (
             <Marker
-              coordinate={destination}
-              title="Pickup Location"
-              description={destination.address}
+              coordinate={userLocation}
+              title="Your Location"
+              description="You are here"
             >
-              <View style={styles.destinationMarker}>
-                <Feather name="map-pin" size={24} color="#EF4444" />
+              <View style={styles.userMarker}>
+                <Feather name="navigation" size={20} color="#4eafe4" />
               </View>
             </Marker>
           )}
+
+          {/* Provider Location Marker (if available) */}
+          {providerLocation && (
+            <Marker
+              coordinate={providerLocation}
+              title="Provider Location"
+              description="Other provider"
+            >
+              <View style={styles.providerMarker}>
+                <Feather name="truck" size={20} color="#F59E0B" />
+              </View>
+            </Marker>
+          )}
+
+          {/* Destination Marker */}
+          <Marker
+            coordinate={destination}
+            title="Pickup Location"
+            description={destination.address}
+          >
+            <View style={styles.destinationMarker}>
+              <Feather name="map-pin" size={24} color="#EF4444" />
+            </View>
+          </Marker>
 
           {/* Route Polyline */}
           {routeCoordinates.length > 0 && (
@@ -316,6 +476,7 @@ export default function NavigateToCustomerScreen() {
               coordinates={routeCoordinates}
               strokeWidth={4}
               strokeColor="#4eafe4"
+              lineDashPattern={[0]}
             />
           )}
         </MapView>
@@ -330,10 +491,29 @@ export default function NavigateToCustomerScreen() {
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
 
+        {/* Fit All Button */}
+        <TouchableOpacity style={styles.fitAllBtn} onPress={handleFitAll} activeOpacity={0.8}>
+          <Feather name="maximize-2" size={20} color="#8fd1fb" />
+        </TouchableOpacity>
+
         {/* Open in Google Maps Button */}
         <TouchableOpacity style={styles.mapsBtn} onPress={handleOpenMaps} activeOpacity={0.8}>
           <Feather name="external-link" size={20} color="#8fd1fb" />
         </TouchableOpacity>
+
+        {/* WebSocket Status */}
+        <View style={[
+          styles.wsStatus,
+          wsConnected ? styles.wsConnected : styles.wsDisconnected
+        ]}>
+          <View style={[
+            styles.wsDot,
+            wsConnected ? styles.wsDotConnected : styles.wsDotDisconnected
+          ]} />
+          <Text style={styles.wsText}>
+            {wsConnected ? 'Live' : 'Reconnecting...'}
+          </Text>
+        </View>
 
         {/* Navigation Card */}
         {nextTurn && (
@@ -344,7 +524,9 @@ export default function NavigateToCustomerScreen() {
               </View>
               <View style={styles.navCardTextBlock}>
                 <Text style={styles.navCardLabel}>NEXT TURN</Text>
-                <Text style={styles.navCardTurn}>{nextTurn.instruction}</Text>
+                <Text style={styles.navCardTurn} numberOfLines={1}>
+                  {nextTurn.instruction}
+                </Text>
               </View>
             </View>
             <View style={styles.navCardDivider} />
@@ -443,7 +625,7 @@ export default function NavigateToCustomerScreen() {
 
           {/* Arrived Button */}
           <TouchableOpacity style={styles.arrivedBtn} onPress={handleArrived} activeOpacity={0.85}>
-            <Feather name="play" size={16} color="#fff" style={{ marginRight: 8 }} />
+            <Feather name="check-circle" size={16} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.arrivedBtnText}>I've Arrived at Location</Text>
           </TouchableOpacity>
 
@@ -464,67 +646,19 @@ export default function NavigateToCustomerScreen() {
   );
 }
 
-// Add these new styles
-const additionalStyles = {
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F7F7F7',
-  },
-  loadingText: {
-    fontSize: 16,
-    color: '#666666',
-  },
-  destinationMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#EF4444',
-  },
-  mapsBtn: {
-    position: 'absolute',
-    top: 87,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-};
-
-// Merge with existing styles
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#D6EAF8',
-  },
-  header: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingTop: 40,
-    paddingBottom: 14,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
   },
   mapArea: {
     flex: 1,
     backgroundColor: '#f9fafb',
     position: 'relative',
     minHeight: 260,
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
   },
   backBtn: {
     position: 'absolute',
@@ -562,7 +696,7 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 10,
   },
-  mapsBtn: {
+  fitAllBtn: {
     position: 'absolute',
     top: 87,
     right: 16,
@@ -579,9 +713,65 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 10,
   },
+  mapsBtn: {
+    position: 'absolute',
+    top: 147,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 10,
+  },
+  wsStatus: {
+    position: 'absolute',
+    top: 27,
+    left: 70,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 10,
+  },
+  wsConnected: {
+    backgroundColor: '#E8F5E9',
+  },
+  wsDisconnected: {
+    backgroundColor: '#FFEBEE',
+  },
+  wsDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  wsDotConnected: {
+    backgroundColor: '#4CAF50',
+  },
+  wsDotDisconnected: {
+    backgroundColor: '#F44336',
+  },
+  wsText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
   navCard: {
     position: 'absolute',
-    top: 88,
+    top: 207,
     left: 16,
     right: 16,
     backgroundColor: '#FFFFFF',
@@ -595,6 +785,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 4,
+    zIndex: 5,
   },
   navCardTop: {
     flexDirection: 'row',
@@ -879,9 +1070,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6a7282',
   },
-  // Additional styles
-  map: {
-    ...StyleSheet.absoluteFillObject,
+  userMarker: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#4eafe4',
+  },
+  providerMarker: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+  },
+  destinationMarker: {
+    backgroundColor: 'white',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#EF4444',
   },
   loadingContainer: {
     flex: 1,
@@ -890,14 +1098,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#F7F7F7',
   },
   loadingText: {
-    fontSize: 16,
+    marginTop: 12,
+    fontSize: 14,
     color: '#666666',
-  },
-  destinationMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#EF4444',
   },
 });

@@ -1,5 +1,4 @@
 // services/websocket.service.ts
-import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Types
@@ -9,12 +8,12 @@ type ConnectionCallback = (isConnected: boolean) => void;
 
 interface PendingMessage {
   type: string;
-  data: any;
+  payload: any;
 }
 
 interface WebSocketMessage {
   type: string;
-  data: any;
+  data: any; // Backend sends { type: string, data: any }
 }
 
 class WebSocketService {
@@ -27,10 +26,15 @@ class WebSocketService {
   private pendingMessages: PendingMessage[] = [];
   private userId: string | null = null;
   private userType: UserType | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
-  // Initialize WebSocket connection
   async connect(userType: UserType): Promise<boolean> {
     try {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+
       const token = await AsyncStorage.getItem('userToken');
       const userDataStr = await AsyncStorage.getItem('userData');
       
@@ -40,7 +44,7 @@ class WebSocketService {
       }
 
       const userData = JSON.parse(userDataStr);
-      this.userId = userData.firebaseUserId || userData.uid;
+      this.userId = userData.firebaseUserId || userData.uid || userData.id;
       this.userType = userType;
 
       if (!this.userId) {
@@ -48,45 +52,47 @@ class WebSocketService {
         return false;
       }
 
-      // Close existing connection
       if (this.socket) {
         this.socket.close();
       }
 
-      // Construct WebSocket URL with query params
       const wsUrl = `wss://yhiw-backend.onrender.com/ws?userId=${this.userId}&userType=${userType}&token=${token}`;
       
-      console.log(`Connecting WebSocket as ${userType}:`, wsUrl);
+      console.log(`🔌 Connecting WebSocket as ${userType}:`, wsUrl);
 
       this.socket = new WebSocket(wsUrl);
 
       this.socket.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('✅ WebSocket connected');
         this.reconnectAttempts = 0;
         this.notifyConnectionListeners(true);
         
-        // Send any pending messages
+        // Send subscription to job updates if we're a customer with a booking
+        if (userType === 'customer') {
+          // We'll subscribe after getting booking ID
+        }
+        
         this.pendingMessages.forEach(msg => {
-          this.send(msg.type, msg.data);
+          this.send(msg.type, msg.payload);
         });
         this.pendingMessages = [];
       };
 
-      this.socket.onmessage = (event: WebSocketMessageEvent) => {
+      this.socket.onmessage = (event) => {
         this.handleMessage(event.data);
       };
 
-      this.socket.onerror = (error: Event) => {
-        console.error('WebSocket error:', error);
-        this.notifyConnectionListeners(false);
+      this.socket.onerror = (error) => {
+        console.error('❌ WebSocket error:', error);
       };
 
-      this.socket.onclose = (event: WebSocketCloseEvent) => {
-        console.log('WebSocket disconnected:', event.code, event.reason);
+      this.socket.onclose = (event) => {
+        console.log('🔌 WebSocket disconnected:', event.code, event.reason || 'No reason');
         this.notifyConnectionListeners(false);
         
-        // Attempt to reconnect
-        this.attemptReconnect(userType);
+        if (event.code !== 1000 && event.code !== 1001) {
+          this.attemptReconnect(userType);
+        }
       };
 
       return true;
@@ -96,17 +102,16 @@ class WebSocketService {
     }
   }
 
-  // Handle incoming messages
   private handleMessage(data: string): void {
     try {
       const message: WebSocketMessage = JSON.parse(data);
-      console.log('WebSocket message received:', message.type, message);
+      console.log('📨 WebSocket message received:', message.type, JSON.stringify(message.data, null, 2));
 
       // Notify specific listeners for this message type
       const listeners = this.listeners.get(message.type) || [];
       listeners.forEach(callback => {
         try {
-          callback(message.data);
+          callback(message);
         } catch (error) {
           console.error(`Error in listener for ${message.type}:`, error);
         }
@@ -127,17 +132,19 @@ class WebSocketService {
     }
   }
 
-  // Send a message
-  send(type: string, data: any): boolean {
+  // Send a message - matches backend expected format { type, payload }
+  send(type: string, payload: any): boolean {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      console.log('WebSocket not connected, queueing message:', type);
-      this.pendingMessages.push({ type, data });
+      console.log('📤 WebSocket not connected, queueing message:', type);
+      this.pendingMessages.push({ type, payload });
       return false;
     }
 
     try {
-      const message = JSON.stringify({ type, data });
+      // Backend expects { type, payload }
+      const message = JSON.stringify({ type, payload });
       this.socket.send(message);
+      console.log('📤 WebSocket message sent:', type, payload);
       return true;
     } catch (error) {
       console.error('Error sending WebSocket message:', error);
@@ -145,50 +152,61 @@ class WebSocketService {
     }
   }
 
-  // Attempt to reconnect
+  // Subscribe to a room
+  subscribe(room: string): void {
+    this.send('subscribe', { room });
+  }
+
   private attemptReconnect(userType: UserType): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('Max reconnection attempts reached');
+      console.log('⚠️ Max reconnection attempts reached');
       return;
     }
 
     this.reconnectAttempts++;
     const delay = this.reconnectTimeout * Math.pow(2, this.reconnectAttempts - 1);
     
-    console.log(`Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    console.log(`🔄 Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
     
-    setTimeout(() => {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    
+    this.reconnectTimer = setTimeout(() => {
       this.connect(userType);
     }, delay);
   }
 
-  // Add event listener
   on(eventType: string, callback: MessageCallback): void {
     if (!this.listeners.has(eventType)) {
       this.listeners.set(eventType, []);
     }
     this.listeners.get(eventType)?.push(callback);
+    console.log(`👂 Listener added for event: ${eventType}`);
   }
 
-  // Remove event listener
   off(eventType: string, callback: MessageCallback): void {
     if (!this.listeners.has(eventType)) return;
     
     const callbacks = this.listeners.get(eventType)?.filter(cb => cb !== callback) || [];
-    this.listeners.set(eventType, callbacks);
+    
+    if (callbacks.length > 0) {
+      this.listeners.set(eventType, callbacks);
+    } else {
+      this.listeners.delete(eventType);
+    }
+    
+    console.log(`👂 Listener removed for event: ${eventType}`);
   }
 
-  // Add connection state listener
   onConnectionChange(callback: ConnectionCallback): void {
     this.connectionListeners.push(callback);
   }
 
-  // Remove connection state listener
   offConnectionChange(callback: ConnectionCallback): void {
     this.connectionListeners = this.connectionListeners.filter(cb => cb !== callback);
   }
 
-  // Notify connection listeners
   private notifyConnectionListeners(isConnected: boolean): void {
     this.connectionListeners.forEach(callback => {
       try {
@@ -199,30 +217,48 @@ class WebSocketService {
     });
   }
 
-  // Disconnect
   disconnect(): void {
+    console.log('🔌 Disconnecting WebSocket...');
+    
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
     if (this.socket) {
-      this.socket.close();
+      this.socket.close(1000, 'Normal closure');
       this.socket = null;
     }
+    
     this.listeners.clear();
     this.connectionListeners = [];
     this.pendingMessages = [];
     this.reconnectAttempts = 0;
   }
 
-  // Get connection status
   isConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
-  // Get socket ready state
   getReadyState(): number | null {
     return this.socket ? this.socket.readyState : null;
   }
+
+  getReadyStateString(): string {
+    const state = this.getReadyState();
+    if (state === null) return 'CLOSED';
+    
+    switch (state) {
+      case WebSocket.CONNECTING: return 'CONNECTING';
+      case WebSocket.OPEN: return 'OPEN';
+      case WebSocket.CLOSING: return 'CLOSING';
+      case WebSocket.CLOSED: return 'CLOSED';
+      default: return 'UNKNOWN';
+    }
+  }
 }
 
-// Create singleton instances for customer and provider
+// Create singleton instances
 export const customerWebSocket = new WebSocketService();
 export const providerWebSocket = new WebSocketService();
 
