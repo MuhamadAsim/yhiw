@@ -480,32 +480,31 @@ const FindingProviderScreen = () => {
       console.log('ℹ️ Unknown status:', messageData.status);
     }
   };
-// In findingprovider.tsx, update the handleJobAccepted function:
 
-const handleJobAccepted = (message: any) => {
-  console.log('🎉 ===== JOB ACCEPTED MESSAGE RECEIVED =====');
-  console.log('🎉 Raw message:', JSON.stringify(message, null, 2));
-  
-  // Extract data from the message structure
-  // Message comes as { type: 'job_accepted', data: {...} }
-  const messageData = message.data || message;
-  
-  console.log('🎉 Extracted data:', JSON.stringify(messageData, null, 2));
-  
-  // Create provider data object
-  const providerData = {
-    bookingId: messageData.bookingId || messageData.jobId,
-    providerName: messageData.providerName || 'Provider',
-    providerRating: messageData.providerRating || 4.5,
-    providerImage: messageData.providerImage || '',
-    estimatedArrival: messageData.estimatedArrival || '10-15 minutes',
-    vehicleDetails: messageData.vehicleDetails || '',
-    provider: messageData.provider || null
+  const handleJobAccepted = (message: any) => {
+    console.log('🎉 ===== JOB ACCEPTED MESSAGE RECEIVED =====');
+    console.log('🎉 Raw message:', JSON.stringify(message, null, 2));
+    
+    // Extract data from the message structure
+    // Message comes as { type: 'job_accepted', data: {...} }
+    const messageData = message.data || message;
+    
+    console.log('🎉 Extracted data:', JSON.stringify(messageData, null, 2));
+    
+    // Create provider data object
+    const providerData = {
+      bookingId: messageData.bookingId || messageData.jobId,
+      providerName: messageData.providerName || 'Provider',
+      providerRating: messageData.providerRating || 4.5,
+      providerImage: messageData.providerImage || '',
+      estimatedArrival: messageData.estimatedArrival || '10-15 minutes',
+      vehicleDetails: messageData.vehicleDetails || '',
+      provider: messageData.provider || null
+    };
+    
+    console.log('🎉 Provider data for navigation:', providerData);
+    handleProviderFound(providerData);
   };
-  
-  console.log('🎉 Provider data for navigation:', providerData);
-  handleProviderFound(providerData);
-};
 
   const sendBookingRequest = async () => {
     console.log('📤 ===== SENDING BOOKING REQUEST =====');
@@ -852,25 +851,46 @@ const handleJobAccepted = (message: any) => {
     console.log('❌ Set connection status to: no_providers');
     console.log('❌ Set navigation in progress to: true');
 
-    // Navigate to no providers screen
+    console.log('❌ ===== NAVIGATING TO NO PROVIDERS AVAILABLE SCREEN =====');
+    console.log('❌ Navigation target: /(customer)/NoProvidersAvailableScreen');
+    console.log('❌ Reason for no provider:', reason);
+    console.log('❌ Navigation scheduled in 1500ms');
+
+    // Navigate to no providers available screen
     setTimeout(() => {
       try {
-        console.log('❌ Navigating to no providers screen');
+        console.log('❌ EXECUTING NAVIGATION TO NO PROVIDERS SCREEN NOW...');
+        
+        const navigationParams = {
+          reason: reason,
+          serviceId: serviceId,
+          serviceName: serviceName,
+          pickupAddress: pickupAddress,
+          dropoffAddress: dropoffAddress,
+          totalAmount: totalAmount,
+          pickupLat: pickupLat?.toString() || '',
+          pickupLng: pickupLng?.toString() || '',
+        };
+        
+        console.log('❌ Navigation params:', JSON.stringify(navigationParams, null, 2));
+        
         router.push({
-          pathname: '/(customer)/ProviderAssigned',
-          params: {
-            ...params,
-            noProviders: 'true',
-            reason: reason,
-            pickupLat: pickupLat?.toString() || '',
-            pickupLng: pickupLng?.toString() || '',
-            dropoffLat: dropoffLat?.toString() || '',
-            dropoffLng: dropoffLng?.toString() || '',
-          },
+          pathname: '/(customer)/NoProvidersAvailableScreen',
+          params: navigationParams,
         });
+        
+        console.log('✅ Navigation to NoProvidersAvailableScreen executed successfully');
       } catch (navError) {
-        console.error('❌ Navigation error:', navError);
+        console.error('❌ Navigation error to NoProvidersAvailableScreen:', navError);
+        console.error('❌ Error stack:', navError instanceof Error ? navError.stack : 'No stack');
         navigationInProgress.current = false;
+        
+        // Fallback to home
+        Alert.alert(
+          'Error',
+          'Failed to navigate. Please try again.',
+          [{ text: 'OK', onPress: () => router.push('/customer/home') }]
+        );
       }
     }, 1500);
   };

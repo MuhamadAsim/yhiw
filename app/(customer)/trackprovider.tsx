@@ -57,20 +57,8 @@ const TrackProviderScreen = () => {
   const [distance, setDistance] = useState<string>('1.2 km');
   const [providerName, setProviderName] = useState<string>('Ahmed Al-Khalifa');
   const [providerPhone, setProviderPhone] = useState<string>('');
-  const [updates, setUpdates] = useState<UpdateEvent[]>([
-    {
-      id: '1',
-      type: 'accepted',
-      message: 'Provider accepted request',
-      timestamp: new Date(Date.now() - 2 * 60000),
-    },
-    {
-      id: '2',
-      type: 'en-route',
-      message: 'Provider started journey',
-      timestamp: new Date(Date.now() - 1 * 60000),
-    },
-  ]);
+  const [providerId, setProviderId] = useState<string>('');
+  const [updates, setUpdates] = useState<UpdateEvent[]>([]);
 
   const [region, setRegion] = useState<Region>({
     latitude: 26.2285,
@@ -88,10 +76,18 @@ const TrackProviderScreen = () => {
   const dropoffLat = parseFloat(params.dropoffLat as string);
   const dropoffLng = parseFloat(params.dropoffLng as string);
   const providerNameParam = params.providerName as string;
+  const providerIdParam = params.providerId as string;
+  const providerPhoneParam = params.providerPhone as string;
   const estimatedArrival = params.estimatedArrival as string;
+  const serviceType = params.serviceType as string || 'Towing Service';
+  const vehicleType = params.vehicleType as string || 'Sedan';
+  const pickupAddress = params.pickupAddress as string || 'Pickup Location';
+  const totalAmount = params.totalAmount as string || '89.25';
 
   useEffect(() => {
     if (providerNameParam) setProviderName(providerNameParam);
+    if (providerIdParam) setProviderId(providerIdParam);
+    if (providerPhoneParam) setProviderPhone(providerPhoneParam);
     
     // Set initial locations from params
     if (!isNaN(providerLat) && !isNaN(providerLng)) {
@@ -113,6 +109,22 @@ const TrackProviderScreen = () => {
     if (estimatedArrival) {
       setEta(estimatedArrival);
     }
+
+    // Add initial update
+    setUpdates([
+      {
+        id: '1',
+        type: 'accepted',
+        message: 'Provider accepted your request',
+        timestamp: new Date(Date.now() - 2 * 60000),
+      },
+      {
+        id: '2',
+        type: 'en-route',
+        message: 'Provider is on the way',
+        timestamp: new Date(Date.now() - 1 * 60000),
+      },
+    ]);
 
     // Setup WebSocket listeners
     setupWebSocketListeners();
@@ -147,13 +159,15 @@ const TrackProviderScreen = () => {
   const handleProviderLocationUpdate = (data: any) => {
     console.log('Provider location update:', data);
     
-    if (data.latitude && data.longitude) {
+    const locationData = data.data || data;
+    
+    if (locationData.latitude && locationData.longitude) {
       const newLocation = {
-        latitude: data.latitude,
-        longitude: data.longitude,
-        heading: data.heading,
-        speed: data.speed,
-        lastUpdate: data.timestamp || new Date().toISOString(),
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        heading: locationData.heading,
+        speed: locationData.speed,
+        lastUpdate: locationData.timestamp || new Date().toISOString(),
       };
       
       setProviderLocation(newLocation);
@@ -164,7 +178,9 @@ const TrackProviderScreen = () => {
       }
 
       // Fit map to show both provider and pickup
-      fitMapToCoordinates(newLocation, pickupLocation || newLocation);
+      if (pickupLocation) {
+        fitMapToCoordinates(newLocation, pickupLocation);
+      }
       
       setIsLoading(false);
     }
@@ -173,28 +189,30 @@ const TrackProviderScreen = () => {
   const handleProviderStatusUpdate = (data: any) => {
     console.log('Provider status update:', data);
     
+    const statusData = data.data || data;
+    
     // Add new update to the list
     const newUpdate: UpdateEvent = {
       id: Date.now().toString(),
-      type: data.status,
-      message: data.message || getStatusMessage(data.status),
+      type: statusData.status,
+      message: statusData.message || getStatusMessage(statusData.status),
       timestamp: new Date(),
     };
     
     setUpdates(prev => [newUpdate, ...prev]);
     
     // Update ETA if provided
-    if (data.eta) {
-      setEta(data.eta);
+    if (statusData.eta) {
+      setEta(statusData.eta);
     }
     
     // Update distance if provided
-    if (data.distance) {
-      setDistance(data.distance);
+    if (statusData.distance) {
+      setDistance(statusData.distance);
     }
     
     // Show alert for important status changes
-    if (data.status === 'arrived') {
+    if (statusData.status === 'arrived') {
       Alert.alert(
         'Provider Arrived',
         `${providerName} has arrived at your location.`,
@@ -212,12 +230,16 @@ const TrackProviderScreen = () => {
         setConnectionStatus('reconnecting');
         customerWebSocket.connect('customer');
       }, 3000);
+    } else if (isConnected && bookingId) {
+      // Reconnected, request location again
+      customerWebSocket.send('request_provider_location', { bookingId });
     }
   };
 
   const handleEtaUpdate = (data: any) => {
-    if (data.eta) setEta(data.eta);
-    if (data.distance) setDistance(data.distance);
+    const etaData = data.data || data;
+    if (etaData.eta) setEta(etaData.eta);
+    if (etaData.distance) setDistance(etaData.distance);
   };
 
   const getStatusMessage = (status: string): string => {
@@ -352,6 +374,7 @@ const TrackProviderScreen = () => {
       pathname: '/(customer)/Chat',
       params: {
         providerName,
+        providerId,
         bookingId,
       }
     });
@@ -367,14 +390,24 @@ const TrackProviderScreen = () => {
           text: 'Yes, Start',
           onPress: () => {
             // Send start service via WebSocket
-            customerWebSocket.send('start_service', { bookingId });
+            if (customerWebSocket.isConnected()) {
+              customerWebSocket.send('start_service', { bookingId });
+            }
             
-            // Navigate to service in progress screen
+            // Navigate to service in progress screen with ALL data
             router.push({
               pathname: '/(customer)/ServiceInProgress',
               params: {
                 bookingId,
                 providerName,
+                providerId,
+                providerPhone,
+                serviceType,
+                vehicleType,
+                pickupLocation: pickupAddress,
+                pickupLat: pickupLat.toString(),
+                pickupLng: pickupLng.toString(),
+                totalAmount,
               }
             });
           }

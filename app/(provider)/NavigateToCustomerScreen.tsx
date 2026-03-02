@@ -49,7 +49,6 @@ export default function NavigateToCustomerScreen() {
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
   
   const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-  const [providerLocation, setProviderLocation] = useState<Coordinates | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [nextTurn, setNextTurn] = useState<RouteStep | null>(null);
   const [eta, setEta] = useState('-- min');
@@ -58,57 +57,46 @@ export default function NavigateToCustomerScreen() {
   const [wsConnected, setWsConnected] = useState(false);
   const [mapReady, setMapReady] = useState(false);
 
-  // Get data from params
-  const customerName = params.customerName as string || 'Mohammed A.';
+  // Get data from params (coming from MakeYourDecisionScreen)
+  const customerName = params.customerName as string || 'Customer';
   const customerPhone = params.customerPhone as string || '';
   const jobId = params.jobId as string;
   const bookingId = params.bookingId as string;
+  const serviceType = params.serviceType as string || 'Service';
+  const price = params.price as string || '0';
   
   // Destination (pickup location)
   const destination = {
     latitude: parseFloat(params.pickupLat as string) || 26.2285,
     longitude: parseFloat(params.pickupLng as string) || 50.5860,
-    address: params.pickupLocation as string || 'Main Street, Manama',
+    address: params.pickupLocation as string || 'Pickup Location',
   };
-
-  // Initial provider location (if passed)
-  const initialProviderLat = parseFloat(params.providerLat as string);
-  const initialProviderLng = parseFloat(params.providerLng as string);
 
   useEffect(() => {
     console.log('🗺️ NavigateToCustomerScreen mounted');
     console.log('Destination:', destination);
+    console.log('Customer:', customerName);
+    console.log('Job ID:', jobId);
     
-    // Initialize
     getUserLocation();
     setupWebSocket();
-    
-    // Set initial provider location if available
-    if (initialProviderLat && initialProviderLng) {
-      setProviderLocation({
-        latitude: initialProviderLat,
-        longitude: initialProviderLng,
-      });
-    }
 
     return () => {
-      // Cleanup location subscription
       if (locationSubscription.current) {
         locationSubscription.current.remove();
       }
-      // Disconnect WebSocket
       providerWebSocket.disconnect();
     };
   }, []);
 
-  // Update route when locations change
+  // Update route when location changes
   useEffect(() => {
     if (userLocation && destination) {
       getRoute(userLocation, destination);
     }
   }, [userLocation]);
 
-  // Fit map to show both points
+  // Fit map to show both points when ready
   useEffect(() => {
     if (mapReady && userLocation && destination && mapRef.current) {
       mapRef.current.fitToCoordinates(
@@ -122,46 +110,14 @@ export default function NavigateToCustomerScreen() {
   }, [mapReady, userLocation, destination]);
 
   const setupWebSocket = () => {
-    // Listen for provider location updates
-    providerWebSocket.on('provider_location', handleProviderLocation);
-    providerWebSocket.on('connection_change', (connected) => {
+    // Listen for connection changes
+    providerWebSocket.onConnectionChange((connected) => {
       setWsConnected(connected);
     });
 
-    // Request provider location
+    // Request any updates for this job
     if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('request_provider_location', { jobId, bookingId });
-    }
-  };
-
-  const handleProviderLocation = (data: any) => {
-    console.log('📍 Provider location update:', data);
-    
-    const location = data.data || data;
-    
-    if (location.latitude && location.longitude) {
-      const newLocation = {
-        latitude: location.latitude,
-        longitude: location.longitude,
-      };
-      
-      setProviderLocation(newLocation);
-      
-      // If we have both provider and destination, show route from provider
-      if (newLocation && destination) {
-        getRoute(newLocation, destination);
-      }
-      
-      // Fit map to show all points
-      if (mapRef.current && userLocation) {
-        mapRef.current.fitToCoordinates(
-          [newLocation, userLocation, destination],
-          {
-            edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-            animated: true,
-          }
-        );
-      }
+      providerWebSocket.send('subscribe_to_job', { jobId, bookingId });
     }
   };
 
@@ -192,8 +148,18 @@ export default function NavigateToCustomerScreen() {
         longitude: location.coords.longitude,
       };
 
-      console.log('📍 User location:', userLoc);
+      console.log('📍 Current location:', userLoc);
       setUserLocation(userLoc);
+
+      // Send initial location to backend
+      if (providerWebSocket.isConnected()) {
+        providerWebSocket.send('provider_location_update', {
+          jobId,
+          bookingId,
+          latitude: userLoc.latitude,
+          longitude: userLoc.longitude,
+        });
+      }
 
       // Start watching position for real-time updates
       locationSubscription.current = await Location.watchPositionAsync(
@@ -209,7 +175,7 @@ export default function NavigateToCustomerScreen() {
           };
           setUserLocation(updatedLoc);
           
-          // Update provider with our location
+          // Update provider location to backend
           if (providerWebSocket.isConnected()) {
             providerWebSocket.send('provider_location_update', {
               jobId,
@@ -324,13 +290,13 @@ export default function NavigateToCustomerScreen() {
 
   const handleFitAll = () => {
     if (mapRef.current && userLocation && destination) {
-      const coordinates = [userLocation, destination];
-      if (providerLocation) coordinates.push(providerLocation);
-      
-      mapRef.current.fitToCoordinates(coordinates, {
-        edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-        animated: true,
-      });
+      mapRef.current.fitToCoordinates(
+        [userLocation, destination],
+        {
+          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
+          animated: true,
+        }
+      );
     }
   };
 
@@ -338,12 +304,19 @@ export default function NavigateToCustomerScreen() {
     if (customerPhone) {
       Linking.openURL(`tel:${customerPhone}`);
     } else {
-      Alert.alert('Call', `Calling ${customerName}...`);
+      Alert.alert('Call Customer', `Calling ${customerName}...`);
     }
   };
 
   const handleMessage = () => {
-    Alert.alert('Message', 'Opening message...');
+    router.push({
+      pathname: '/(provider)/Chat',
+      params: {
+        customerName,
+        jobId,
+        bookingId,
+      }
+    });
   };
 
   const handleOpenMaps = () => {
@@ -376,11 +349,14 @@ export default function NavigateToCustomerScreen() {
         bookingId,
         customerName,
         pickupLocation: destination.address,
+        serviceType,
+        price,
       }
     });
   };
 
   const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
+  
   const handleCancelService = () => {
     Alert.alert(
       'Cancel Service',
@@ -433,33 +409,20 @@ export default function NavigateToCustomerScreen() {
           showsTraffic={true}
           onMapReady={() => setMapReady(true)}
         >
-          {/* User/Provider Location Marker */}
+          {/* Provider Location Marker (self) */}
           {userLocation && (
             <Marker
               coordinate={userLocation}
               title="Your Location"
               description="You are here"
             >
-              <View style={styles.userMarker}>
+              <View style={styles.providerMarker}>
                 <Feather name="navigation" size={20} color="#4eafe4" />
               </View>
             </Marker>
           )}
 
-          {/* Provider Location Marker (if available) */}
-          {providerLocation && (
-            <Marker
-              coordinate={providerLocation}
-              title="Provider Location"
-              description="Other provider"
-            >
-              <View style={styles.providerMarker}>
-                <Feather name="truck" size={20} color="#F59E0B" />
-              </View>
-            </Marker>
-          )}
-
-          {/* Destination Marker */}
+          {/* Destination Marker (pickup) */}
           <Marker
             coordinate={destination}
             title="Pickup Location"
@@ -616,7 +579,6 @@ export default function NavigateToCustomerScreen() {
               <View style={styles.tipsTextBlock}>
                 <Text style={styles.tipsTitle}>Navigation Tips</Text>
                 <Text style={styles.tipsText}>
-                  Located in underground parking.{'\n'}
                   Call customer upon arrival for exact location.
                 </Text>
               </View>
@@ -1070,19 +1032,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6a7282',
   },
-  userMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#4eafe4',
-  },
   providerMarker: {
     backgroundColor: 'white',
     padding: 8,
     borderRadius: 20,
     borderWidth: 2,
-    borderColor: '#F59E0B',
+    borderColor: '#4eafe4',
   },
   destinationMarker: {
     backgroundColor: 'white',
@@ -1103,3 +1058,4 @@ const styles = StyleSheet.create({
     color: '#666666',
   },
 });
+

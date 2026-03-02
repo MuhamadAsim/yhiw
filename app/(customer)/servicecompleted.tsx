@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import {
   View,
@@ -8,25 +7,108 @@ import {
   TouchableOpacity,
   Dimensions,
   Image,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { height } = Dimensions.get('window');
 
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
 const ServiceCompletedScreen = () => {
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  
   const [rating, setRating] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Get data from params (passed from ServiceInProgressScreen)
+  const bookingId = params.bookingId as string;
+  const providerName = params.providerName as string || 'Ahmed Al-Khalifa';
+  const providerId = params.providerId as string;
+  const serviceType = params.serviceType as string || 'Quick Tow (Flatbed)';
+  const totalAmount = params.totalAmount as string || '99.75';
+  const duration = params.duration as string || '35 minutes';
+  const pickupLocation = params.pickupLocation as string || '23 Main Street, Manama';
+  
+  // Calculate completion time
+  const completionTime = new Date().toLocaleTimeString([], { 
+    hour: '2-digit', 
+    minute: '2-digit' 
+  });
+
+  // Generate booking reference
+  const bookingRef = `#YHIW-${bookingId?.slice(-5) || '96931'}`;
 
   const handleStarPress = (starIndex: number) => {
     setRating(starIndex);
   };
 
+  const handleSubmitRating = async () => {
+    if (rating === 0) {
+      Alert.alert('Rating Required', 'Please rate your experience before continuing.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (!token) {
+        Alert.alert('Error', 'Authentication token not found');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Submit rating to backend
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          rating,
+          providerId,
+          bookingId,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        Alert.alert(
+          'Thank You!',
+          'Your feedback has been submitted successfully.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        throw new Error(result.message || 'Failed to submit rating');
+      }
+    } catch (error) {
+      console.error('Error submitting rating:', error);
+      Alert.alert('Error', 'Failed to submit rating. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleDownloadReceipt = () => {
-    console.log('Download receipt');
+    Alert.alert('Download Receipt', 'Receipt will be downloaded to your device.');
   };
 
   const handleBackToHome = () => {
-    console.log('Back to home');
+    router.push('/(customer)/home');
   };
+
+  // Calculate receipt breakdown
+  const baseFee = parseFloat(totalAmount) * 0.75;
+  const distanceFee = parseFloat(totalAmount) * 0.15;
+  const serviceFee = parseFloat(totalAmount) * 0.10;
 
   return (
     <View style={styles.container}>
@@ -49,37 +131,37 @@ const ServiceCompletedScreen = () => {
           <Text style={styles.subtitle}>Thank you for using YHIW</Text>
         </View>
 
-        {/* Service Summary Card - Added light black border */}
+        {/* Service Summary Card */}
         <View style={[styles.summaryCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>SERVICE SUMMARY</Text>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Service</Text>
-            <Text style={styles.summaryValue}>Quick Tow (Flatbed)</Text>
+            <Text style={styles.summaryValue}>{serviceType}</Text>
           </View>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Provider</Text>
-            <Text style={styles.summaryValue}>Ahmed Al-Khalifa</Text>
+            <Text style={styles.summaryValue}>{providerName}</Text>
           </View>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Duration</Text>
-            <Text style={styles.summaryValue}>35 minutes</Text>
+            <Text style={styles.summaryValue}>{duration}</Text>
           </View>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Completed</Text>
-            <Text style={styles.summaryValue}>3:20 PM</Text>
+            <Text style={styles.summaryValue}>{completionTime}</Text>
           </View>
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Location</Text>
-            <Text style={styles.summaryValue}>23 Main Street, Manama</Text>
+            <Text style={styles.summaryValue}>{pickupLocation}</Text>
           </View>
         </View>
 
-        {/* Payment Card - Light blue background */}
+        {/* Payment Card */}
         <View style={styles.paymentCard}>
           <View style={styles.totalAmountRow}>
             <View style={styles.totalAmountLeft}>
@@ -90,7 +172,7 @@ const ServiceCompletedScreen = () => {
               />
               <Text style={styles.totalAmountLabel}>Total Amount</Text>
             </View>
-            <Text style={styles.totalAmountValue}>99.75 BHD</Text>
+            <Text style={styles.totalAmountValue}>{parseFloat(totalAmount).toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.paymentDivider} />
@@ -109,7 +191,7 @@ const ServiceCompletedScreen = () => {
           </View>
         </View>
 
-        {/* Rate Your Experience Card - Added light black border */}
+        {/* Rate Your Experience Card */}
         <View style={[styles.ratingCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>RATE YOUR EXPERIENCE</Text>
           <View style={styles.starsContainer}>
@@ -118,6 +200,7 @@ const ServiceCompletedScreen = () => {
                 key={star}
                 onPress={() => handleStarPress(star)}
                 activeOpacity={0.7}
+                disabled={isSubmitting}
               >
                 <Ionicons
                   name={star <= rating ? 'star' : 'star-outline'}
@@ -127,32 +210,45 @@ const ServiceCompletedScreen = () => {
               </TouchableOpacity>
             ))}
           </View>
+          
+          {rating > 0 && (
+            <TouchableOpacity
+              style={[styles.submitRatingButton, isSubmitting && styles.disabledButton]}
+              onPress={handleSubmitRating}
+              disabled={isSubmitting}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.submitRatingText}>
+                {isSubmitting ? 'Submitting...' : 'Submit Rating'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Receipt Card - Added light black border */}
+        {/* Receipt Card */}
         <View style={[styles.receiptCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>RECEIPT</Text>
 
           <View style={styles.receiptRow}>
             <Text style={styles.receiptLabel}>Base Fee</Text>
-            <Text style={styles.receiptValue}>75 BHD</Text>
+            <Text style={styles.receiptValue}>{baseFee.toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.receiptRow}>
             <Text style={styles.receiptLabel}>Distance Fee</Text>
-            <Text style={styles.receiptValue}>15 BHD</Text>
+            <Text style={styles.receiptValue}>{distanceFee.toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.receiptRow}>
             <Text style={styles.receiptLabel}>Service Fee</Text>
-            <Text style={styles.receiptValue}>5 BHD</Text>
+            <Text style={styles.receiptValue}>{serviceFee.toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.receiptDivider} />
 
           <View style={styles.receiptTotalRow}>
             <Text style={styles.receiptTotalLabel}>Total</Text>
-            <Text style={styles.receiptTotalValue}>99.75 BHD</Text>
+            <Text style={styles.receiptTotalValue}>{parseFloat(totalAmount).toFixed(2)} BHD</Text>
           </View>
 
           <TouchableOpacity
@@ -166,7 +262,7 @@ const ServiceCompletedScreen = () => {
         </View>
 
         {/* Booking ID */}
-        <Text style={styles.bookingId}>Booking ID: #YHIW-96931</Text>
+        <Text style={styles.bookingId}>Booking ID: {bookingRef}</Text>
 
         <View style={{ height: 20 }} />
       </ScrollView>
@@ -177,6 +273,7 @@ const ServiceCompletedScreen = () => {
           style={styles.homeButton}
           onPress={handleBackToHome}
           activeOpacity={0.8}
+          disabled={isSubmitting}
         >
           <Image
             source={require('../../assets/customer/dollar_icon.png')}
@@ -206,9 +303,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
     marginBottom: 20,
-    // No left/right margin - full width
-    marginHorizontal: -20, // This extends the border to full width
-    paddingHorizontal: 20, // Keeps content aligned
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
   },
   checkIconContainer: {
     marginBottom: 15,
@@ -242,7 +338,7 @@ const styles = StyleSheet.create({
   },
   cardWithBorder: {
     borderWidth: 1,
-    borderColor: '#e0e0e0', // Light black border
+    borderColor: '#e0e0e0',
   },
   summaryCard: {
     backgroundColor: '#FFFFFF',
@@ -256,7 +352,6 @@ const styles = StyleSheet.create({
     color: '#3c3c3c',
     marginBottom: 15,
     letterSpacing: 0.5,
-    // Remove any margin/padding that might affect the line
   },
   summaryRow: {
     flexDirection: 'row',
@@ -280,7 +375,7 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   paymentCard: {
-    backgroundColor: '#e3f5ff', // Light blue background
+    backgroundColor: '#e3f5ff',
     borderRadius: 12,
     padding: 20,
     marginBottom: 15,
@@ -308,7 +403,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   totalAmountValue: {
-    fontSize: 22, // Reduced from 28 to 22
+    fontSize: 22,
     color: '#68bdee',
     fontWeight: 'bold',
   },
@@ -316,9 +411,8 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#e0e0e0',
     marginBottom: 15,
-    // Full width divider
-    marginHorizontal: -20, // This extends to full width
-    width: 'auto', // Ensures it extends
+    marginHorizontal: -20,
+    width: 'auto',
   },
   paymentDetailRow: {
     flexDirection: 'row',
@@ -359,6 +453,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     marginTop: 10,
+    marginBottom: 15,
+  },
+  submitRatingButton: {
+    backgroundColor: '#68bdee',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 8,
+    marginTop: 5,
+  },
+  submitRatingText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  disabledButton: {
+    backgroundColor: '#A0A0A0',
+    opacity: 0.5,
   },
   receiptCard: {
     backgroundColor: '#FFFFFF',
@@ -385,9 +498,8 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#e0e0e0',
     marginVertical: 12,
-    // Full width divider
-    marginHorizontal: -20, // This extends to full width
-    width: 'auto', // Ensures it extends
+    marginHorizontal: -20,
+    width: 'auto',
   },
   receiptTotalRow: {
     flexDirection: 'row',
@@ -429,7 +541,6 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     letterSpacing: 0.3,
   },
-  // Bottom Container Styles (Footer)
   bottomContainer: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,

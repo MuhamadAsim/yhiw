@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -7,29 +6,101 @@ import {
   ScrollView,
   TouchableOpacity,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 const { height } = Dimensions.get('window');
 
 const ServiceInProgressScreen = () => {
-  const [duration, setDuration] = useState('18:24');
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  
+  const [duration, setDuration] = useState('00:00');
+  const [startTime] = useState(new Date());
+
+  // Get data from params
+  const bookingId = params.bookingId as string;
+  const providerName = params.providerName as string || 'Ahmed Al-Khalifa';
+  const providerId = params.providerId as string;
+  const providerPhone = params.providerPhone as string;
+  const serviceType = params.serviceType as string || 'Quick Tow (Flatbed)';
+  const vehicleType = params.vehicleType as string || 'SUV';
+  const pickupLocation = params.pickupLocation as string || '23 Main Street, Manama';
+  const pickupLat = params.pickupLat as string;
+  const pickupLng = params.pickupLng as string;
+  const totalAmount = params.totalAmount as string || '99.75';
+
+  // Timer effect
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      const diff = Math.floor((now.getTime() - startTime.getTime()) / 1000);
+      const mins = Math.floor(diff / 60);
+      const secs = diff % 60;
+      setDuration(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   const handleCall = () => {
-    console.log('Call provider');
+    if (providerPhone) {
+      Alert.alert('Call', `Calling ${providerName} at ${providerPhone}...`);
+    } else {
+      Alert.alert('Call', `Calling ${providerName}...`);
+    }
   };
 
   const handleMessage = () => {
-    console.log('Message provider');
+    router.push({
+      pathname: '/(customer)/Chat',
+      params: { 
+        providerName, 
+        providerId,
+        bookingId 
+      }
+    });
   };
 
   const handleMarkComplete = () => {
-    console.log('Mark as complete');
+    Alert.alert(
+      'Complete Service',
+      'Are you sure the service is complete?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes, Complete',
+          onPress: () => {
+            // Navigate to rating/review screen
+            router.push({
+              pathname: '/(customer)/RateService',
+              params: {
+                bookingId,
+                providerName,
+                providerId,
+                serviceType,
+                totalAmount,
+                duration,
+                pickupLocation,
+                pickupLat,
+                pickupLng,
+              }
+            });
+          }
+        }
+      ]
+    );
   };
 
   const handleReportIssue = () => {
-    console.log('Report issue');
+    Alert.alert('Report Issue', 'Opening report form...');
+  };
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
@@ -53,15 +124,15 @@ const ServiceInProgressScreen = () => {
         <View style={styles.durationCard}>
           <Text style={styles.durationLabel}>DURATION</Text>
           <Text style={styles.durationTime}>{duration}</Text>
-          <Text style={styles.startedTime}>Started at 2:45 PM</Text>
+          <Text style={styles.startedTime}>Started at {formatTime(startTime)}</Text>
         </View>
 
-        {/* Provider Card - Added light black border */}
+        {/* Provider Card */}
         <View style={[styles.providerCard, styles.cardWithBorder]}>
           <View style={styles.providerHeader}>
             <View style={styles.providerTextContainer}>
               <Text style={styles.providerLabel}>Provider</Text>
-              <Text style={styles.providerName}>Ahmed Al-Khalifa</Text>
+              <Text style={styles.providerName}>{providerName}</Text>
             </View>
             <View style={styles.profileIcon}>
               <Ionicons name="person" size={28} color="#68bdee" />
@@ -90,32 +161,27 @@ const ServiceInProgressScreen = () => {
           </View>
         </View>
 
-        {/* Service Details Card - Added light black border */}
+        {/* Service Details Card */}
         <View style={[styles.detailsCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>SERVICE DETAILS</Text>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Service</Text>
-            <Text style={styles.detailValue}>Quick Tow (Flatbed)</Text>
+            <Text style={styles.detailValue}>{serviceType}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Vehicle</Text>
-            <Text style={styles.detailValue}>SUV</Text>
+            <Text style={styles.detailValue}>{vehicleType}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Location</Text>
-            <Text style={styles.detailValue}>23 Main Street, Manama</Text>
-          </View>
-
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Destination</Text>
-            <Text style={styles.detailValue}>Bahrain</Text>
+            <Text style={styles.detailValue}>{pickupLocation}</Text>
           </View>
         </View>
 
-        {/* Progress Card - Added light black border */}
+        {/* Progress Card */}
         <View style={[styles.progressCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>PROGRESS</Text>
 
@@ -126,22 +192,11 @@ const ServiceInProgressScreen = () => {
             </View>
             <View style={styles.progressTextContainer}>
               <Text style={styles.progressTextCompleted}>Provider Arrived</Text>
-              <Text style={styles.progressTimeCompleted}>2:45 PM</Text>
+              <Text style={styles.progressTimeCompleted}>{formatTime(startTime)}</Text>
             </View>
           </View>
 
-          {/* Progress Item 2 - Completed */}
-          <View style={styles.progressItem}>
-            <View style={styles.progressIconCompleted}>
-              <View style={styles.progressDotCompleted} />
-            </View>
-            <View style={styles.progressTextContainer}>
-              <Text style={styles.progressTextCompleted}>Service Started</Text>
-              <Text style={styles.progressTimeCompleted}>2 min ago</Text>
-            </View>
-          </View>
-
-          {/* Progress Item 3 - Active */}
+          {/* Progress Item 2 - Active */}
           <View style={styles.progressItem}>
             <View style={styles.progressIconActive}>
               <View style={styles.progressDotActive} />
@@ -152,7 +207,7 @@ const ServiceInProgressScreen = () => {
             </View>
           </View>
 
-          {/* Progress Item 4 - Inactive */}
+          {/* Progress Item 3 - Inactive */}
           <View style={styles.progressItem}>
             <View style={styles.progressIconInactive}>
               <View style={styles.progressDotInactive} />
@@ -170,23 +225,22 @@ const ServiceInProgressScreen = () => {
             <Text style={styles.updateTitle}>Service Update</Text>
           </View>
           <Text style={styles.updateText}>
-            The provider is currently working on your quick tow (flatbed). You'll be
-            notified when the service is complete.
+            The provider is currently working on your {serviceType.toLowerCase()}. 
+            You'll be notified when the service is complete.
           </Text>
         </View>
 
-        {/* Estimated Cost Card - Added light black border */}
+        {/* Estimated Cost Card */}
         <View style={[styles.costCard, styles.cardWithBorder]}>
           <View style={styles.costRow}>
             <View>
               <Text style={styles.costLabel}>Estimated Cost</Text>
               <Text style={styles.costNote}>Final cost may vary</Text>
             </View>
-            <Text style={styles.costValue}>99.75 BHD</Text>
+            <Text style={styles.costValue}>{totalAmount} BHD</Text>
           </View>
         </View>
 
-        {/* Add some spacing at the bottom of scroll content */}
         <View style={{ height: 20 }} />
       </ScrollView>
 
@@ -203,9 +257,7 @@ const ServiceInProgressScreen = () => {
             end={{ x: 1, y: 0 }}
             style={styles.gradientButton}
           >
-            <Text style={styles.completeButtonText}>
-              Mark as Complete (For Demo)
-            </Text>
+            <Text style={styles.completeButtonText}>Service Complete</Text>
           </LinearGradient>
         </TouchableOpacity>
 
@@ -296,7 +348,7 @@ const styles = StyleSheet.create({
   },
   cardWithBorder: {
     borderWidth: 1,
-    borderColor: '#e0e0e0', // Light black border
+    borderColor: '#e0e0e0',
   },
   providerCard: {
     backgroundColor: '#FFFFFF',
@@ -551,7 +603,6 @@ const styles = StyleSheet.create({
     color: '#68bdee',
     fontWeight: 'bold',
   },
-  // Bottom Container Styles (Footer)
   bottomContainer: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,

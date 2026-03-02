@@ -1,5 +1,5 @@
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   Alert,
@@ -14,13 +14,12 @@ import {
 
 // ─── Timer Hook ───────────────────────────────────────────────────────────────
 
-const useTimer = () => {
-  const [seconds, setSeconds] = useState(0); // Start from 0
-  const [paused, setPaused] = useState(false);
-  const [startTime, setStartTime] = useState(null);
+const useTimer = (initialSeconds: number = 0) => {
+  const [seconds, setSeconds] = useState<number>(initialSeconds);
+  const [paused, setPaused] = useState<boolean>(false);
+  const [startTime, setStartTime] = useState<Date | null>(null);
 
   useEffect(() => {
-    // Set start time when timer initializes
     const now = new Date();
     setStartTime(now);
   }, []);
@@ -31,14 +30,14 @@ const useTimer = () => {
     return () => clearInterval(interval);
   }, [paused]);
 
-  const format = (s) => {
+  const format = (s: number): string => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0');
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
     const sec = String(s % 60).padStart(2, '0');
     return `${h}:${m}:${sec}`;
   };
 
-  const getStartTimeString = () => {
+  const getStartTimeString = (): string => {
     if (!startTime) return 'Just now';
     return startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
@@ -54,7 +53,7 @@ const useTimer = () => {
 
 // ─── Checklist Items ──────────────────────────────────────────────────────────
 
-const CHECKLIST = [
+const CHECKLIST: string[] = [
   'Inspect vehicle condition',
   'Secure vehicle on flatbed',
   'Document pre-service photos',
@@ -66,15 +65,41 @@ const CHECKLIST = [
 
 export default function ServiceInProgressScreen() {
   const router = useRouter();
-  const { display, paused, setPaused, startTimeString, elapsedSeconds } = useTimer();
-  const [completedItems, setCompletedItems] = useState([]);
+  const params = useLocalSearchParams();
+  
+  const { display, paused, setPaused, startTimeString, elapsedSeconds } = useTimer(0);
+  const [completedItems, setCompletedItems] = useState<number[]>([]);
+
+  // Get data from params (passed from NavigateToCustomerScreen)
+  const jobId = params.jobId as string;
+  const bookingId = params.bookingId as string;
+  const customerName = params.customerName as string || 'Mohammed A.';
+  const customerPhone = params.customerPhone as string || '+973 3XXX XXXX';
+  const serviceType = params.serviceType as string || 'Towing Service';
+  const vehicleType = params.vehicleType as string || 'Sedan';
+  const licensePlate = params.licensePlate as string || 'ABC 1234';
+  const vehicleModel = params.vehicleModel as string || 'Toyota Camry 2020';
+  const price = params.price as string || '81';
+  const requestId = params.requestId as string || 'REQ-7891';
+  const pickupLocation = params.pickupLocation as string || 'Main Street, Manama';
 
   const handleCall = () => {
-    Alert.alert('Call', 'Calling Mohammed A...');
+    if (customerPhone) {
+      Alert.alert('Call', `Calling ${customerName} at ${customerPhone}...`);
+    } else {
+      Alert.alert('Call', `Calling ${customerName}...`);
+    }
   };
   
   const handleMessage = () => {
-    Alert.alert('Message', 'Opening message...');
+    router.push({
+      pathname: '/(provider)/Chat',
+      params: {
+        customerName,
+        jobId,
+        bookingId,
+      }
+    });
   };
   
   const handleAddPhoto = () => {
@@ -84,19 +109,23 @@ export default function ServiceInProgressScreen() {
   const handleAddTime = () => {
     Alert.alert(
       'Add Extra Time',
-      'Enter additional time for this service:',
+      'Select additional time for this service:',
       [
         {
           text: 'Cancel',
           style: 'cancel'
         },
         {
-          text: 'Add 15 min',
+          text: '15 minutes',
           onPress: () => Alert.alert('Success', '15 minutes added to service time')
         },
         {
-          text: 'Add 30 min',
+          text: '30 minutes',
           onPress: () => Alert.alert('Success', '30 minutes added to service time')
+        },
+        {
+          text: '45 minutes',
+          onPress: () => Alert.alert('Success', '45 minutes added to service time')
         }
       ]
     );
@@ -106,7 +135,7 @@ export default function ServiceInProgressScreen() {
     Alert.alert('Report Issue', 'Opening report form...');
   };
 
-  const toggleChecklistItem = (index) => {
+  const toggleChecklistItem = (index: number) => {
     if (completedItems.includes(index)) {
       setCompletedItems(completedItems.filter(item => item !== index));
     } else {
@@ -115,62 +144,89 @@ export default function ServiceInProgressScreen() {
   };
 
   const handleComplete = () => {
-  // First confirmation
-  Alert.alert(
-    'Complete Service',
-    'Are you sure you want to complete this service?',
-    [
-      {
-        text: 'Cancel',
-        style: 'cancel'
-      },
-      {
-        text: 'Continue',
-        onPress: () => {
-          // Check if checklist is incomplete
-          if (completedItems.length < CHECKLIST.length) {
-            // Show warning about incomplete checklist
-            Alert.alert(
-              'Incomplete Checklist',
-              `You have completed ${completedItems.length} out of ${CHECKLIST.length} items. Complete anyway?`,
-              [
-                {
-                  text: 'Go Back',
-                  style: 'cancel'
-                },
-                {
-                  text: 'Complete Service',
-                  onPress: () => {
-                    // Navigate to Service Complete screen
-                    router.push({
-                      pathname: '/ServiceCompletedScreen',
-                      params: {
-                        serviceTime: display,
-                        earnings: '81',
-                        requestId: 'REQ-7891'
-                      }
-                    });
+    // First confirmation
+    Alert.alert(
+      'Complete Service',
+      'Are you sure you want to complete this service?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Continue',
+          onPress: () => {
+            // Check if checklist is incomplete
+            if (completedItems.length < CHECKLIST.length) {
+              // Show warning about incomplete checklist
+              Alert.alert(
+                'Incomplete Checklist',
+                `You have completed ${completedItems.length} out of ${CHECKLIST.length} items. Complete anyway?`,
+                [
+                  {
+                    text: 'Go Back',
+                    style: 'cancel'
                   },
-                  style: 'destructive'
+                  {
+                    text: 'Complete Service',
+                    onPress: () => {
+                      // Navigate to Service Complete screen with ALL data
+                      router.push({
+                        pathname: '/ServiceCompletedScreen',
+                        params: {
+                          // Timer data
+                          serviceTime: display,
+                          elapsedSeconds: elapsedSeconds.toString(),
+                          startTime: startTimeString,
+                          
+                          // Job data
+                          jobId: jobId,
+                          bookingId: bookingId,
+                          customerName: customerName,
+                          
+                          // Earnings
+                          earnings: price,
+                          
+                          // Checklist data
+                          completedItems: JSON.stringify(completedItems),
+                          totalItems: CHECKLIST.length.toString(),
+                          
+                          // Request info
+                          requestId: requestId,
+                          serviceType: serviceType,
+                          pickupLocation: pickupLocation
+                        }
+                      });
+                    },
+                    style: 'destructive'
+                  }
+                ]
+              );
+            } else {
+              // Checklist complete - go straight to completion with ALL data
+              router.push({
+                pathname: '/ServiceCompletedScreen',
+                params: {
+                  serviceTime: display,
+                  elapsedSeconds: elapsedSeconds.toString(),
+                  startTime: startTimeString,
+                  jobId: jobId,
+                  bookingId: bookingId,
+                  customerName: customerName,
+                  earnings: price,
+                  completedItems: JSON.stringify(completedItems),
+                  totalItems: CHECKLIST.length.toString(),
+                  requestId: requestId,
+                  serviceType: serviceType,
+                  pickupLocation: pickupLocation
                 }
-              ]
-            );
-          } else {
-            // Checklist complete - go straight to completion
-            router.push({
-              pathname: '/ServiceCompletedScreen',
-              params: {
-                serviceTime: display,
-                earnings: '81',
-                requestId: 'REQ-7891'
-              }
-            });
+              });
+            }
           }
         }
-      }
-    ]
-  );
-};
+      ]
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -196,7 +252,7 @@ export default function ServiceInProgressScreen() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Service In Progress</Text>
-          <Text style={styles.headerSub}>REQ-7891</Text>
+          <Text style={styles.headerSub}>{requestId}</Text>
         </View>
         <View style={styles.headerRight} />
       </View>
@@ -238,10 +294,11 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.cardSectionLabel}>SERVICE DETAILS</Text>
           <View style={styles.detailsDivider} />
           {[
-            { label: 'Service Type:', value: 'Towing Service' },
-            { label: 'Vehicle:', value: 'Sedan' },
-            { label: 'License Plate:', value: 'ABC 1234' },
-            { label: 'Model:', value: 'Toyota Camry 2020' },
+            { label: 'Service Type:', value: serviceType },
+            { label: 'Vehicle:', value: vehicleType },
+            { label: 'License Plate:', value: licensePlate },
+            { label: 'Model:', value: vehicleModel },
+            { label: 'Pickup:', value: pickupLocation },
           ].map((item, i) => (
             <View key={i} style={styles.detailRow}>
               <Text style={styles.detailLabel}>{item.label}</Text>
@@ -258,8 +315,8 @@ export default function ServiceInProgressScreen() {
               <Feather name="user" size={24} color="#9dd7fb" />
             </View>
             <View style={styles.customerText}>
-              <Text style={styles.customerName}>Mohammed A.</Text>
-              <Text style={styles.customerPhone}>+973 3XXX XXXX</Text>
+              <Text style={styles.customerName}>{customerName}</Text>
+              <Text style={styles.customerPhone}>{customerPhone}</Text>
             </View>
           </View>
           <View style={styles.contactBtnRow}>
@@ -320,7 +377,7 @@ export default function ServiceInProgressScreen() {
           <View style={styles.earningsRow}>
             <View>
               <Text style={styles.earningsLabel}>Estimated Earnings</Text>
-              <Text style={styles.earningsValue}>81 BHD</Text>
+              <Text style={styles.earningsValue}>{price} BHD</Text>
             </View>
             <View>
               <Text style={styles.earningsStatusLabel}>Status</Text>
