@@ -19,20 +19,27 @@ interface WebSocketMessage {
 class WebSocketService {
   private socket: WebSocket | null = null;
   private reconnectAttempts: number = 0;
-  private readonly maxReconnectAttempts: number = 5;
-  private readonly reconnectTimeout: number = 3000;
+  private readonly maxReconnectAttempts: number = 10;
+  private readonly reconnectTimeout: number = 2000;
   private listeners: Map<string, MessageCallback[]> = new Map();
   private connectionListeners: ConnectionCallback[] = [];
   private pendingMessages: PendingMessage[] = [];
   private userId: string | null = null;
   private userType: UserType | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
+  private bookingId: string | undefined = undefined; // Changed from null to undefined
 
-  async connect(userType: UserType): Promise<boolean> {
+  async connect(userType: UserType, bookingId?: string): Promise<boolean> {
     try {
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
+      }
+
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+        this.pingInterval = null;
       }
 
       const token = await AsyncStorage.getItem('userToken');
@@ -47,18 +54,25 @@ class WebSocketService {
       this.userId = userData.firebaseUserId || userData.uid || userData.id;
       this.userType = userType;
 
+      // Handle bookingId - convert null to undefined
+      if (bookingId) {
+        this.bookingId = bookingId;
+      } else {
+        this.bookingId = undefined;
+      }
+
       if (!this.userId) {
         console.error('No user ID for WebSocket connection');
         return false;
       }
 
       if (this.socket) {
-        this.socket.close();
+        this.socket.close(1000, 'Reconnecting');
       }
 
       const wsUrl = `wss://yhiw-backend.onrender.com/ws?userId=${this.userId}&userType=${userType}&token=${token}`;
       
-      console.log(`🔌 Connecting WebSocket as ${userType}:`, wsUrl);
+      console.log(`🔌 Connecting WebSocket as ${userType} with userId: ${this.userId}`);
 
       this.socket = new WebSocket(wsUrl);
 
@@ -67,15 +81,30 @@ class WebSocketService {
         this.reconnectAttempts = 0;
         this.notifyConnectionListeners(true);
         
-        // Send subscription to job updates if we're a customer with a booking
-        if (userType === 'customer') {
-          // We'll subscribe after getting booking ID
+        // Send subscription to job updates
+        if (userType === 'customer' && this.bookingId) {
+          console.log(`🔔 Subscribing to job updates for booking: ${this.bookingId}`);
+          this.send('subscribe_to_job', { bookingId: this.bookingId });
+        } else if (userType === 'provider') {
+          console.log('🔔 Provider ready to receive job requests');
+          this.send('provider_ready', { 
+            isOnline: true,
+            timestamp: new Date().toISOString()
+          });
         }
         
+        // Send any pending messages
         this.pendingMessages.forEach(msg => {
           this.send(msg.type, msg.payload);
         });
         this.pendingMessages = [];
+        
+        // Set up ping interval to keep connection alive
+        this.pingInterval = setInterval(() => {
+          if (this.isConnected()) {
+            this.send('ping', { timestamp: new Date().toISOString() });
+          }
+        }, 30000);
       };
 
       this.socket.onmessage = (event) => {
@@ -90,8 +119,14 @@ class WebSocketService {
         console.log('🔌 WebSocket disconnected:', event.code, event.reason || 'No reason');
         this.notifyConnectionListeners(false);
         
+        if (this.pingInterval) {
+          clearInterval(this.pingInterval);
+          this.pingInterval = null;
+        }
+        
+        // Attempt reconnect for abnormal closures
         if (event.code !== 1000 && event.code !== 1001) {
-          this.attemptReconnect(userType);
+          this.attemptReconnect(userType, this.bookingId);
         }
       };
 
@@ -105,7 +140,18 @@ class WebSocketService {
   private handleMessage(data: string): void {
     try {
       const message: WebSocketMessage = JSON.parse(data);
-      console.log('📨 WebSocket message received:', message.type, JSON.stringify(message.data, null, 2));
+      console.log('📨 WebSocket message received:', message.type);
+      
+      // Log full message for debugging (can be commented out in production)
+      if (__DEV__) {
+        console.log('📨 Message data:', JSON.stringify(message.data, null, 2));
+      }
+
+      // Handle ping responses
+      if (message.type === 'pong') {
+        console.log('🏓 Pong received');
+        return;
+      }
 
       // Notify specific listeners for this message type
       const listeners = this.listeners.get(message.type) || [];
@@ -144,7 +190,7 @@ class WebSocketService {
       // Backend expects { type, payload }
       const message = JSON.stringify({ type, payload });
       this.socket.send(message);
-      console.log('📤 WebSocket message sent:', type, payload);
+      console.log('📤 WebSocket message sent:', type);
       return true;
     } catch (error) {
       console.error('Error sending WebSocket message:', error);
@@ -152,19 +198,55 @@ class WebSocketService {
     }
   }
 
-  // Subscribe to a room
-  subscribe(room: string): void {
-    this.send('subscribe', { room });
+  // Subscribe to a job as a customer
+  subscribeToJob(bookingId: string): boolean {
+    this.bookingId = bookingId;
+    return this.send('subscribe_to_job', { bookingId });
   }
 
-  private attemptReconnect(userType: UserType): void {
+  // Provider accepts a job
+  acceptJob(jobId: string, bookingId?: string): boolean {
+    return this.send('accept_job', { 
+      jobId, 
+      bookingId,
+      acceptedAt: new Date().toISOString()
+    });
+  }
+
+  // Provider declines a job
+  declineJob(jobId: string, bookingId?: string): boolean {
+    return this.send('decline_job', { 
+      jobId, 
+      bookingId,
+      declinedAt: new Date().toISOString()
+    });
+  }
+
+  // Provider sends location update
+  updateLocation(location: { latitude: number; longitude: number; address?: string }): boolean {
+    return this.send('location_update', {
+      ...location,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Provider updates status
+  updateStatus(isOnline: boolean): boolean {
+    return this.send('provider_status', {
+      isOnline,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  private attemptReconnect(userType: UserType, bookingId?: string): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('⚠️ Max reconnection attempts reached');
+      this.notifyConnectionListeners(false);
       return;
     }
 
     this.reconnectAttempts++;
-    const delay = this.reconnectTimeout * Math.pow(2, this.reconnectAttempts - 1);
+    const delay = this.reconnectTimeout * Math.pow(1.5, this.reconnectAttempts - 1);
     
     console.log(`🔄 Attempting to reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
     
@@ -173,7 +255,7 @@ class WebSocketService {
     }
     
     this.reconnectTimer = setTimeout(() => {
-      this.connect(userType);
+      this.connect(userType, bookingId);
     }, delay);
   }
 
@@ -225,6 +307,11 @@ class WebSocketService {
       this.reconnectTimer = null;
     }
     
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    
     if (this.socket) {
       this.socket.close(1000, 'Normal closure');
       this.socket = null;
@@ -234,6 +321,9 @@ class WebSocketService {
     this.connectionListeners = [];
     this.pendingMessages = [];
     this.reconnectAttempts = 0;
+    this.bookingId = undefined; // Changed from null to undefined
+    this.userId = null;
+    this.userType = null;
   }
 
   isConnected(): boolean {
@@ -255,6 +345,19 @@ class WebSocketService {
       case WebSocket.CLOSED: return 'CLOSED';
       default: return 'UNKNOWN';
     }
+  }
+
+  // Get current connection info
+  getConnectionInfo(): object {
+    return {
+      userId: this.userId,
+      userType: this.userType,
+      bookingId: this.bookingId,
+      isConnected: this.isConnected(),
+      readyState: this.getReadyStateString(),
+      reconnectAttempts: this.reconnectAttempts,
+      pendingMessages: this.pendingMessages.length
+    };
   }
 }
 

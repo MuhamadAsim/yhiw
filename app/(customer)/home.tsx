@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Image,
   ScrollView,
@@ -9,7 +9,13 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Modal,
+  TouchableWithoutFeedback,
+  Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { auth } from '../../constants/firebase';
+import { signOut } from 'firebase/auth';
 
 // Define types for our data structures
 type Service = {
@@ -38,6 +44,25 @@ const HomeScreen = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filteredServices, setFilteredServices] = useState<Service[]>([]);
   const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
+  const [dropdownVisible, setDropdownVisible] = useState<boolean>(false);
+  const [userName, setUserName] = useState<string>('User');
+
+  // Load user data on mount
+  useEffect(() => {
+    loadUserData();
+  }, []);
+
+  const loadUserData = async () => {
+    try {
+      const userDataStr = await AsyncStorage.getItem('userData');
+      if (userDataStr) {
+        const userData = JSON.parse(userDataStr);
+        setUserName(userData.fullName || userData.name || 'User');
+      }
+    } catch (error) {
+      console.error('Error loading user data:', error);
+    }
+  };
 
   // EXACTLY 12 SERVICES as per SRS v1.1 Detailed Supplement
   const services: Service[] = [
@@ -257,12 +282,63 @@ const HomeScreen = () => {
   };
 
   const handleMenuPress = () => {
-    console.log('Menu pressed');
+    setDropdownVisible(!dropdownVisible);
+  };
+
+  const handleProfilePress = () => {
+    setDropdownVisible(false);
+    router.push('/(customer)/ProfileScreen');
+  };
+
+  const handleLogout = async () => {
+    setDropdownVisible(false);
+    
+    try {
+      // Show confirmation alert
+      Alert.alert(
+        'Logout',
+        'Are you sure you want to logout?',
+        [
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+          {
+            text: 'Logout',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                // Sign out from Firebase
+                await signOut(auth);
+                
+                // Clear ALL AsyncStorage data
+                await AsyncStorage.multiRemove([
+                  'userToken',
+                  'userData',
+                  'rememberMe',
+                  'savedEmail',
+                  'providerData',
+                  'customerData'
+                ]);
+                
+                // Navigate to role selection
+                router.replace('/(auth)/role_selection');
+              } catch (error) {
+                console.error('Logout error:', error);
+                Alert.alert('Error', 'Failed to logout. Please try again.');
+              }
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header with Dropdown */}
       <View style={styles.header}>
         <View style={styles.headerTopRow}>
           <View style={styles.iconBox}>
@@ -272,15 +348,76 @@ const HomeScreen = () => {
               resizeMode="contain"
             />
           </View>
-          <TouchableOpacity style={styles.menuButton} onPress={handleMenuPress}>
-            <Ionicons name="menu" size={24} color="#3c3c3c" />
-          </TouchableOpacity>
+          
+          {/* Profile Menu Button */}
+          <View style={styles.menuContainer}>
+            <TouchableOpacity 
+              style={styles.profileButton} 
+              onPress={handleMenuPress}
+              activeOpacity={0.7}
+            >
+              <View style={styles.avatarContainer}>
+                <Text style={styles.avatarText}>
+                  {userName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <Ionicons 
+                name={dropdownVisible ? "chevron-up" : "chevron-down"} 
+                size={20} 
+                color="#3c3c3c" 
+              />
+            </TouchableOpacity>
+          </View>
         </View>
+        
         <View style={styles.logoSection}>
           <Text style={styles.logoText}>YHIW</Text>
           <Text style={styles.tagline}>YOUR HELP IN WAY</Text>
         </View>
       </View>
+
+      {/* Dropdown Menu Modal */}
+      <Modal
+        visible={dropdownVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setDropdownVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setDropdownVisible(false)}>
+          <View style={styles.modalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.dropdownMenu}>
+                <View style={styles.dropdownHeader}>
+                  <Text style={styles.dropdownUserName} numberOfLines={1}>
+                    {userName}
+                  </Text>
+                  <Text style={styles.dropdownUserEmail}>
+                    {userName.toLowerCase().replace(' ', '.')}@example.com
+                  </Text>
+                </View>
+                
+                <TouchableOpacity 
+                  style={styles.dropdownItem}
+                  onPress={handleProfilePress}
+                >
+                  <Ionicons name="person-outline" size={20} color="#3c3c3c" />
+                  <Text style={styles.dropdownItemText}>Profile</Text>
+                </TouchableOpacity>
+                
+                <View style={styles.dropdownDivider} />
+                
+                <TouchableOpacity 
+                  style={[styles.dropdownItem, styles.logoutItem]}
+                  onPress={handleLogout}
+                >
+                  <Ionicons name="log-out-outline" size={20} color="#ff4444" />
+                  <Text style={[styles.dropdownItemText, styles.logoutText]}>Logout</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
 
       <ScrollView
         style={styles.scrollView}
@@ -481,8 +618,32 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
   },
-  menuButton: {
-    padding: 4,
+  menuContainer: {
+    position: 'relative',
+  },
+  profileButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 25,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  avatarContainer: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#68bdee',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  avatarText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   logoSection: {
     justifyContent: 'center',
@@ -715,6 +876,69 @@ const styles = StyleSheet.create({
     color: '#8c8c8c',
     marginTop: 2,
     letterSpacing: 0.3,
+  },
+  // Dropdown Menu Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  dropdownMenu: {
+    position: 'absolute',
+    top: 110,
+    right: 20,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 8,
+    width: 220,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  dropdownHeader: {
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    marginBottom: 4,
+  },
+  dropdownUserName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3c3c3c',
+    marginBottom: 2,
+  },
+  dropdownUserEmail: {
+    fontSize: 11,
+    color: '#8c8c8c',
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 8,
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    color: '#3c3c3c',
+    marginLeft: 12,
+    fontWeight: '500',
+  },
+  dropdownDivider: {
+    height: 1,
+    backgroundColor: '#f0f0f0',
+    marginVertical: 4,
+  },
+  logoutItem: {
+    marginTop: 2,
+  },
+  logoutText: {
+    color: '#ff4444',
   },
 });
 

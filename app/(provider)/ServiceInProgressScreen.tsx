@@ -10,7 +10,9 @@ import {
   Text,
   TouchableOpacity,
   View,
+  TextInput,
 } from 'react-native';
+import { providerWebSocket } from '../../services/websocket.service';
 
 // ─── Timer Hook ───────────────────────────────────────────────────────────────
 
@@ -69,6 +71,9 @@ export default function ServiceInProgressScreen() {
   
   const { display, paused, setPaused, startTimeString, elapsedSeconds } = useTimer(0);
   const [completedItems, setCompletedItems] = useState<number[]>([]);
+  const [serviceNotes, setServiceNotes] = useState('');
+  const [wsConnected, setWsConnected] = useState(false);
+  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
 
   // Get data from params (passed from NavigateToCustomerScreen)
   const jobId = params.jobId as string;
@@ -82,6 +87,86 @@ export default function ServiceInProgressScreen() {
   const price = params.price as string || '81';
   const requestId = params.requestId as string || 'REQ-7891';
   const pickupLocation = params.pickupLocation as string || 'Main Street, Manama';
+
+  // ─── WebSocket Setup ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    console.log('🔌 Setting up WebSocket for ServiceInProgress');
+    console.log('Job ID:', jobId);
+    console.log('Booking ID:', bookingId);
+
+    // Check initial connection
+    setWsConnected(providerWebSocket.isConnected());
+
+    // Listen for connection changes
+    providerWebSocket.onConnectionChange((connected) => {
+      console.log('WebSocket connection changed:', connected);
+      setWsConnected(connected);
+      
+      // Re-join room if connection restored
+      if (connected && jobId && !hasJoinedRoom) {
+        joinJobRoom();
+      }
+    });
+
+    // Join job room and notify service started
+    if (jobId) {
+      joinJobRoom();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      // No need to leave room as service is completing
+    };
+  }, []);
+
+  const joinJobRoom = () => {
+    if (!jobId || hasJoinedRoom) return;
+
+    console.log('🚪 Joining job room:', jobId);
+    providerWebSocket.send('join_job_room', {
+      jobId,
+      role: 'provider'
+    });
+    
+    // Notify that service has started
+    console.log('▶️ Notifying service started');
+    providerWebSocket.send('start_service', {
+      jobId,
+      bookingId,
+      timestamp: new Date().toISOString()
+    });
+    
+    setHasJoinedRoom(true);
+  };
+
+  const notifyServiceCompleted = () => {
+    if (providerWebSocket.isConnected()) {
+      console.log('✅ Notifying service completed');
+      providerWebSocket.send('complete_service', {
+        jobId,
+        bookingId,
+        completedAt: new Date().toISOString(),
+        duration: elapsedSeconds,
+        notes: serviceNotes,
+        completedItems: completedItems.length
+      });
+    }
+  };
+
+  const notifyTimeAdded = (minutes: number) => {
+    if (providerWebSocket.isConnected()) {
+      providerWebSocket.send('service_time_updated', {
+        jobId,
+        bookingId,
+        additionalMinutes: minutes,
+        newTotal: elapsedSeconds + (minutes * 60),
+        timestamp: new Date().toISOString()
+      });
+    }
+  };
+
+  // ─── Handlers ───────────────────────────────────────────────────────────────
 
   const handleCall = () => {
     if (customerPhone) {
@@ -117,15 +202,24 @@ export default function ServiceInProgressScreen() {
         },
         {
           text: '15 minutes',
-          onPress: () => Alert.alert('Success', '15 minutes added to service time')
+          onPress: () => {
+            notifyTimeAdded(15);
+            Alert.alert('Success', '15 minutes added to service time');
+          }
         },
         {
           text: '30 minutes',
-          onPress: () => Alert.alert('Success', '30 minutes added to service time')
+          onPress: () => {
+            notifyTimeAdded(30);
+            Alert.alert('Success', '30 minutes added to service time');
+          }
         },
         {
           text: '45 minutes',
-          onPress: () => Alert.alert('Success', '45 minutes added to service time')
+          onPress: () => {
+            notifyTimeAdded(45);
+            Alert.alert('Success', '45 minutes added to service time');
+          }
         }
       ]
     );
@@ -170,6 +264,9 @@ export default function ServiceInProgressScreen() {
                   {
                     text: 'Complete Service',
                     onPress: () => {
+                      // ✅ Notify via WebSocket
+                      notifyServiceCompleted();
+                      
                       // Navigate to Service Complete screen with ALL data
                       router.push({
                         pathname: '/ServiceCompletedScreen',
@@ -191,6 +288,9 @@ export default function ServiceInProgressScreen() {
                           completedItems: JSON.stringify(completedItems),
                           totalItems: CHECKLIST.length.toString(),
                           
+                          // Service notes
+                          serviceNotes: serviceNotes,
+                          
                           // Request info
                           requestId: requestId,
                           serviceType: serviceType,
@@ -203,7 +303,10 @@ export default function ServiceInProgressScreen() {
                 ]
               );
             } else {
-              // Checklist complete - go straight to completion with ALL data
+              // Checklist complete - go straight to completion
+              // ✅ Notify via WebSocket
+              notifyServiceCompleted();
+              
               router.push({
                 pathname: '/ServiceCompletedScreen',
                 params: {
@@ -216,6 +319,7 @@ export default function ServiceInProgressScreen() {
                   earnings: price,
                   completedItems: JSON.stringify(completedItems),
                   totalItems: CHECKLIST.length.toString(),
+                  serviceNotes: serviceNotes,
                   requestId: requestId,
                   serviceType: serviceType,
                   pickupLocation: pickupLocation
@@ -254,7 +358,14 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.headerTitle}>Service In Progress</Text>
           <Text style={styles.headerSub}>{requestId}</Text>
         </View>
-        <View style={styles.headerRight} />
+        <View style={styles.headerRight}>
+          {/* WebSocket Status Indicator */}
+          {wsConnected && hasJoinedRoom && (
+            <View style={styles.wsIndicator}>
+              <View style={styles.wsDot} />
+            </View>
+          )}
+        </View>
       </View>
 
       <ScrollView
@@ -266,6 +377,11 @@ export default function ServiceInProgressScreen() {
         <View style={styles.activeBadge}>
           <View style={styles.activeDot} />
           <Text style={styles.activeBadgeText}>Service Active</Text>
+          {wsConnected && hasJoinedRoom && (
+            <View style={styles.liveBadge}>
+              <Text style={styles.liveBadgeText}>LIVE</Text>
+            </View>
+          )}
         </View>
 
         {/* ── TIMER CARD ── */}
@@ -339,7 +455,21 @@ export default function ServiceInProgressScreen() {
             <Feather name="camera" size={28} color="#AAAAAA" />
             <Text style={styles.photoAddText}>Add Photos</Text>
           </TouchableOpacity>
-          <Text style={styles.photoHint}>Document before/after and any issues found (0 photos added)</Text>
+          <Text style={styles.photoHint}>Photos will be saved with service record (0 photos added)</Text>
+        </View>
+
+        {/* ── SERVICE NOTES ── */}
+        <View style={styles.card}>
+          <Text style={styles.cardSectionLabel}>SERVICE NOTES</Text>
+          <TextInput
+            style={styles.notesInput}
+            placeholder="Add notes about the service..."
+            value={serviceNotes}
+            onChangeText={setServiceNotes}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+          />
         </View>
 
         {/* ── SERVICE CHECKLIST ── */}
@@ -467,7 +597,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerRight: {
-    width: 38,
+    width: 40,
+    alignItems: 'flex-end',
+  },
+  wsIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4CAF50',
+  },
+  wsDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#4CAF50',
   },
 
   // ── Scroll ──
@@ -489,6 +632,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     backgroundColor: '#FFFFFF',
     gap: 8,
+    position: 'relative',
   },
   activeDot: {
     width: 10,
@@ -502,6 +646,19 @@ const styles = StyleSheet.create({
     color: '#1A1A2E',
     letterSpacing: 1,
     textTransform: 'uppercase',
+  },
+  liveBadge: {
+    position: 'absolute',
+    right: 12,
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  liveBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // ── Timer Card ──
@@ -695,6 +852,18 @@ const styles = StyleSheet.create({
     color: '#AAAAAA',
     fontWeight: '500',
     letterSpacing: 0.2,
+  },
+
+  // ── Service Notes ──
+  notesInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 13,
+    color: '#1A1A2E',
+    minHeight: 80,
+    textAlignVertical: 'top',
   },
 
   // ── Checklist ──

@@ -9,8 +9,8 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { customerWebSocket } from '../../services/websocket.service';
 
 const { height } = Dimensions.get('window');
 
@@ -20,6 +20,8 @@ const ServiceInProgressScreen = () => {
   
   const [duration, setDuration] = useState('00:00');
   const [startTime] = useState(new Date());
+  const [wsConnected, setWsConnected] = useState(false);
+  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
 
   // Get data from params
   const bookingId = params.bookingId as string;
@@ -46,35 +48,81 @@ const ServiceInProgressScreen = () => {
     return () => clearInterval(timer);
   }, []);
 
-  const handleCall = () => {
-    if (providerPhone) {
-      Alert.alert('Call', `Calling ${providerName} at ${providerPhone}...`);
-    } else {
-      Alert.alert('Call', `Calling ${providerName}...`);
+  // WebSocket setup
+  useEffect(() => {
+    console.log('📱 Customer ServiceInProgress - Setting up WebSocket');
+    console.log('Booking ID:', bookingId);
+    console.log('Provider ID:', providerId);
+    
+    // Check initial connection
+    setWsConnected(customerWebSocket.isConnected());
+    
+    // Listen for connection changes
+    customerWebSocket.onConnectionChange((isConnected) => {
+      console.log('Connection changed:', isConnected);
+      setWsConnected(isConnected);
+      
+      // Re-join room if connection restored
+      if (isConnected && bookingId && !hasJoinedRoom) {
+        joinJobRoom();
+      }
+    });
+    
+    // Listen for provider status updates
+    customerWebSocket.on('provider_status_update', handleProviderStatus);
+    customerWebSocket.on('job_completed', handleJobCompleted);
+    
+    // Join job room
+    if (bookingId) {
+      joinJobRoom();
+    }
+
+    // Cleanup
+    return () => {
+      customerWebSocket.off('provider_status_update', handleProviderStatus);
+      customerWebSocket.off('job_completed', handleJobCompleted);
+      
+      // Leave job room
+      if (bookingId && hasJoinedRoom) {
+        customerWebSocket.send('leave_job_room', { bookingId });
+      }
+    };
+  }, []);
+
+  const joinJobRoom = () => {
+    if (!bookingId || hasJoinedRoom) return;
+    
+    console.log('🚪 Customer joining job room:', bookingId);
+    customerWebSocket.send('join_job_room', {
+      bookingId,
+      role: 'customer'
+    });
+    setHasJoinedRoom(true);
+  };
+
+  const handleProviderStatus = (data: any) => {
+    console.log('📨 Provider status update:', data);
+    const statusData = data.data || data;
+    
+    // You could update UI based on status if needed
+    if (statusData.status === 'started') {
+      // Service started - already on this screen
+    } else if (statusData.status === 'en-route') {
+      // Should not happen here, but handle gracefully
     }
   };
 
-  const handleMessage = () => {
-    router.push({
-      pathname: '/(customer)/Chat',
-      params: { 
-        providerName, 
-        providerId,
-        bookingId 
-      }
-    });
-  };
-
-  const handleMarkComplete = () => {
+  const handleJobCompleted = (data: any) => {
+    console.log('✅ Job completed event received:', data);
+    
+    // Auto-navigate to rating when provider completes
     Alert.alert(
-      'Complete Service',
-      'Are you sure the service is complete?',
+      'Service Completed',
+      'The provider has completed the service. Please rate your experience.',
       [
-        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Yes, Complete',
+          text: 'Rate Now',
           onPress: () => {
-            // Navigate to rating/review screen
             router.push({
               pathname: '/(customer)/RateService',
               params: {
@@ -95,6 +143,25 @@ const ServiceInProgressScreen = () => {
     );
   };
 
+  const handleCall = () => {
+    if (providerPhone) {
+      Alert.alert('Call', `Calling ${providerName} at ${providerPhone}...`);
+    } else {
+      Alert.alert('Call', `Calling ${providerName}...`);
+    }
+  };
+
+  const handleMessage = () => {
+    router.push({
+      pathname: '/(customer)/Chat',
+      params: { 
+        providerName, 
+        providerId,
+        bookingId 
+      }
+    });
+  };
+
   const handleReportIssue = () => {
     Alert.alert('Report Issue', 'Opening report form...');
   };
@@ -105,6 +172,14 @@ const ServiceInProgressScreen = () => {
 
   return (
     <View style={styles.container}>
+      {/* Connection Status Badge */}
+      {wsConnected && hasJoinedRoom && (
+        <View style={styles.connectionBadge}>
+          <View style={styles.connectionDot} />
+          <Text style={styles.connectionText}>Live Updates Active</Text>
+        </View>
+      )}
+
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -125,6 +200,12 @@ const ServiceInProgressScreen = () => {
           <Text style={styles.durationLabel}>DURATION</Text>
           <Text style={styles.durationTime}>{duration}</Text>
           <Text style={styles.startedTime}>Started at {formatTime(startTime)}</Text>
+          
+          {/* Live Indicator */}
+          <View style={styles.liveIndicator}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
         </View>
 
         {/* Provider Card */}
@@ -228,6 +309,14 @@ const ServiceInProgressScreen = () => {
             The provider is currently working on your {serviceType.toLowerCase()}. 
             You'll be notified when the service is complete.
           </Text>
+          
+          {/* Real-time status indicator */}
+          {wsConnected && (
+            <View style={styles.realtimeIndicator}>
+              <Ionicons name="radio-outline" size={14} color="#4CAF50" />
+              <Text style={styles.realtimeText}>Real-time updates active</Text>
+            </View>
+          )}
         </View>
 
         {/* Estimated Cost Card */}
@@ -244,23 +333,8 @@ const ServiceInProgressScreen = () => {
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* Bottom Buttons Footer */}
+      {/* Bottom Buttons Footer - ONLY Report Issue button remains */}
       <View style={styles.bottomContainer}>
-        <TouchableOpacity
-          style={styles.completeButton}
-          onPress={handleMarkComplete}
-          activeOpacity={0.8}
-        >
-          <LinearGradient
-            colors={['#68bdee', '#4a9fd6']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.gradientButton}
-          >
-            <Text style={styles.completeButtonText}>Service Complete</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-
         <TouchableOpacity
           style={styles.reportButton}
           onPress={handleReportIssue}
@@ -277,6 +351,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
+    position: 'relative',
+  },
+  connectionBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 20,
+    zIndex: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  connectionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4CAF50',
+    marginRight: 6,
+  },
+  connectionText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#2E7D32',
   },
   scrollContent: {
     paddingTop: height * 0.04,
@@ -324,6 +425,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     borderWidth: 2,
     borderColor: '#68bdee',
+    position: 'relative',
   },
   durationLabel: {
     fontSize: 10,
@@ -345,6 +447,29 @@ const styles = StyleSheet.create({
     color: '#8c8c8c',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
+  },
+  liveIndicator: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FFFFFF',
+    marginRight: 4,
+  },
+  liveText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   cardWithBorder: {
     borderWidth: 1,
@@ -574,6 +699,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#5c5c5c',
     lineHeight: 18,
+    marginBottom: 12,
+  },
+  realtimeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    alignSelf: 'flex-start',
+  },
+  realtimeText: {
+    fontSize: 10,
+    color: '#2E7D32',
+    fontWeight: '600',
+    marginLeft: 6,
   },
   costCard: {
     backgroundColor: '#FFFFFF',
@@ -618,23 +759,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 5,
-  },
-  completeButton: {
-    marginBottom: 10,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  gradientButton: {
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  completeButtonText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   reportButton: {
     backgroundColor: '#FFFFFF',

@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { customerWebSocket } from '../../services/websocket.service';
 
 const { height, width } = Dimensions.get('window');
@@ -40,6 +41,7 @@ const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
+  const locationInterval = useRef<NodeJS.Timeout | null>(null);
 
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -47,6 +49,7 @@ const ProviderAssignedScreen = () => {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('connected');
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [eta, setEta] = useState<string>('');
+  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -101,27 +104,34 @@ const ProviderAssignedScreen = () => {
     if (!isNaN(etaMinutes)) {
       setTimeRemaining(etaMinutes * 60);
     }
-  }, [estimatedArrival]);
 
-  // Initialize WebSocket and request provider location
+    // Set initial provider location if provided
+    if (providerLat && providerLng) {
+      setProviderLocation({
+        latitude: providerLat,
+        longitude: providerLng,
+        lastUpdate: new Date().toISOString(),
+      });
+      setIsLoading(false);
+    }
+  }, [estimatedArrival, providerLat, providerLng]);
+
+  // Initialize WebSocket and join job room
   useEffect(() => {
-    if (!noProviders && bookingId) {
-      // First, ensure WebSocket is connected
+    if (!noProviders && bookingId && providerId) {
       ensureWebSocketConnected();
-      
       setupWebSocketListeners();
       startEtaCountdown();
       
-      // Request provider location immediately
-      setTimeout(() => {
-        requestProviderLocation();
-      }, 2000);
+      return () => {
+        leaveJobRoom();
+        removeWebSocketListeners();
+        if (locationInterval.current) {
+          clearInterval(locationInterval.current);
+        }
+      };
     }
-
-    return () => {
-      removeWebSocketListeners();
-    };
-  }, [bookingId]);
+  }, [bookingId, providerId]);
 
   const ensureWebSocketConnected = async () => {
     if (!customerWebSocket.isConnected()) {
@@ -130,26 +140,67 @@ const ProviderAssignedScreen = () => {
       if (connected) {
         console.log('WebSocket connected successfully');
         setConnectionStatus('connected');
+        // Join job room after connection
+        setTimeout(() => joinJobRoom(), 1000);
       } else {
         console.log('Failed to connect WebSocket');
         setConnectionStatus('disconnected');
       }
+    } else {
+      // Already connected, join job room immediately
+      joinJobRoom();
+    }
+  };
+
+  // ✅ NEW: Join dedicated job room
+  const joinJobRoom = () => {
+    if (bookingId && providerId && !hasJoinedRoom) {
+      console.log('🚪 Joining job room:', bookingId);
+      
+      customerWebSocket.send('join_job_room', {
+        bookingId,
+        role: 'customer'
+      });
+      
+      setHasJoinedRoom(true);
+      
+      // Request initial location after joining
+      setTimeout(() => {
+        requestProviderLocation();
+      }, 1000);
+      
+      // Set up periodic location refresh (every 30 seconds)
+      locationInterval.current = setInterval(() => {
+        if (connectionStatus === 'connected') {
+          requestProviderLocation();
+        }
+      }, 30000);
+    }
+  };
+
+  // ✅ NEW: Leave job room
+  const leaveJobRoom = () => {
+    if (bookingId && hasJoinedRoom) {
+      console.log('🚪 Leaving job room:', bookingId);
+      customerWebSocket.send('leave_job_room', { bookingId });
+      setHasJoinedRoom(false);
     }
   };
 
   const requestProviderLocation = () => {
     console.log('Requesting provider location for booking:', bookingId);
-    customerWebSocket.send('request_status', { 
+    
+    // Use the job room to request location
+    customerWebSocket.send('send_to_job_room', {
       bookingId,
-      type: 'provider_location'
+      messageType: 'request_provider_location',
+      data: { requesterId: 'customer' }
     });
     
-    // Also try to subscribe to provider updates
-    if (providerId) {
-      customerWebSocket.send('subscribe', { 
-        room: `provider_${providerId}` 
-      });
-    }
+    // Also send direct request as backup
+    customerWebSocket.send('request_provider_location', { 
+      bookingId
+    });
   };
 
   // Decode Google Maps polyline
@@ -249,9 +300,14 @@ const ProviderAssignedScreen = () => {
     customerWebSocket.on('provider_assigned', handleProviderAssigned);
     customerWebSocket.on('job_accepted', handleJobAccepted);
     customerWebSocket.on('status_update', handleStatusUpdate);
-    customerWebSocket.on('connection_change', handleConnectionChange);
+    customerWebSocket.on('eta_update', handleEtaUpdate);
     
-    // Add connection change listener
+    // NEW: Job room events
+    customerWebSocket.on('joined_job_room', handleJoinedJobRoom);
+    customerWebSocket.on('user_joined', handleUserJoined);
+    customerWebSocket.on('user_left', handleUserLeft);
+    
+    // Connection change listener
     customerWebSocket.onConnectionChange((isConnected) => {
       handleConnectionChange({ isConnected });
     });
@@ -262,7 +318,31 @@ const ProviderAssignedScreen = () => {
     customerWebSocket.off('provider_assigned', handleProviderAssigned);
     customerWebSocket.off('job_accepted', handleJobAccepted);
     customerWebSocket.off('status_update', handleStatusUpdate);
-    customerWebSocket.off('connection_change', handleConnectionChange);
+    customerWebSocket.off('eta_update', handleEtaUpdate);
+    customerWebSocket.off('joined_job_room', handleJoinedJobRoom);
+    customerWebSocket.off('user_joined', handleUserJoined);
+    customerWebSocket.off('user_left', handleUserLeft);
+  };
+
+  // ✅ NEW: Handle joining job room confirmation
+  const handleJoinedJobRoom = (message: any) => {
+    console.log('✅ Joined job room:', message);
+    const data = message.data || message;
+    Alert.alert('Connected', `You are now connected with ${providerName}`);
+  };
+
+  // ✅ NEW: Handle other user joining
+  const handleUserJoined = (message: any) => {
+    console.log('👤 User joined:', message);
+    const data = message.data || message;
+    if (data.userType === 'provider') {
+      console.log('✅ Provider is now in the room');
+    }
+  };
+
+  // ✅ NEW: Handle user leaving
+  const handleUserLeft = (message: any) => {
+    console.log('👤 User left:', message);
   };
 
   const handleProviderAssigned = (message: any) => {
@@ -286,19 +366,27 @@ const ProviderAssignedScreen = () => {
   const handleProviderLocationUpdate = (message: any) => {
     console.log('Provider location update:', message);
     
-    // Handle both { data: {...} } and direct object formats
     const data = message.data || message;
     
     // Try different possible field names
-    const latitude = data.latitude || data.lat;
-    const longitude = data.longitude || data.lng;
+    let latitude, longitude;
+    
+    if (data.location) {
+      // Format: { location: { latitude, longitude } }
+      latitude = data.location.latitude || data.location.lat;
+      longitude = data.location.longitude || data.location.lng;
+    } else {
+      // Direct format
+      latitude = data.latitude || data.lat;
+      longitude = data.longitude || data.lng;
+    }
     
     if (latitude && longitude) {
       const newLocation = {
         latitude: typeof latitude === 'string' ? parseFloat(latitude) : latitude,
         longitude: typeof longitude === 'string' ? parseFloat(longitude) : longitude,
-        heading: data.heading,
-        lastUpdate: data.timestamp || new Date().toISOString(),
+        heading: data.heading || (data.location?.heading),
+        lastUpdate: data.timestamp || data.lastUpdate || new Date().toISOString(),
       };
       
       console.log('Setting provider location:', newLocation);
@@ -308,8 +396,8 @@ const ProviderAssignedScreen = () => {
       fetchRoute(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
       getEtaFromGoogleMaps(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
       
-      // Center map to show both provider and pickup
-      if (mapRef.current) {
+      // Center map to show both provider and pickup on first location
+      if (isLoading && mapRef.current) {
         mapRef.current.fitToCoordinates(
           [
             { latitude: newLocation.latitude, longitude: newLocation.longitude },
@@ -338,14 +426,27 @@ const ProviderAssignedScreen = () => {
       );
     } else if (data.status === 'en-route') {
       // Update ETA if provided
-      if (data.estimatedArrival) {
-        setTimeRemaining(parseInt(data.estimatedArrival) * 60);
+      if (data.eta) {
+        setEta(data.eta);
       }
     }
     
     // If location is included in status update
     if (data.location) {
       handleProviderLocationUpdate({ data: data.location });
+    }
+  };
+
+  const handleEtaUpdate = (message: any) => {
+    console.log('ETA update:', message);
+    const data = message.data || message;
+    
+    if (data.eta) {
+      setEta(data.eta);
+    }
+    
+    if (data.distance) {
+      // Could display distance if needed
     }
   };
 
@@ -358,16 +459,15 @@ const ProviderAssignedScreen = () => {
       setTimeout(() => {
         setConnectionStatus('reconnecting');
         customerWebSocket.connect('customer').then(connected => {
-          if (connected && bookingId) {
-            requestProviderLocation();
+          if (connected && bookingId && providerId) {
+            // Rejoin job room after reconnection
+            joinJobRoom();
           }
         });
       }, 3000);
-    } else if (isConnected && bookingId) {
-      // Reconnected, request location again
-      setTimeout(() => {
-        requestProviderLocation();
-      }, 1000);
+    } else if (isConnected && bookingId && providerId && !hasJoinedRoom) {
+      // Reconnected, join room again
+      joinJobRoom();
     }
   };
 
@@ -422,11 +522,15 @@ const ProviderAssignedScreen = () => {
         params: {
           bookingId,
           providerName,
+          providerId,
           providerLat: providerLocation.latitude.toString(),
           providerLng: providerLocation.longitude.toString(),
           pickupLat: pickupLat.toString(),
           pickupLng: pickupLng.toString(),
+          dropoffLat: dropoffLat?.toString() || '',
+          dropoffLng: dropoffLng?.toString() || '',
           estimatedArrival: timeRemaining.toString(),
+          eta: eta,
         }
       });
     } else {
@@ -456,22 +560,36 @@ const ProviderAssignedScreen = () => {
         { 
           text: 'Yes, Cancel', 
           style: 'destructive',
-          onPress: () => {
-            // Send cancellation via WebSocket
-            if (customerWebSocket.isConnected()) {
-              customerWebSocket.send('cancel_booking', { bookingId });
-            }
-            
-            // API call to cancel booking
-            fetch(`${API_BASE_URL}/api/jobs/customer/${bookingId}/cancel`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-            }).catch(err => console.error('Cancel error:', err));
+          onPress: async () => {
+            try {
+              // Leave job room first
+              leaveJobRoom();
+              
+              // Send cancellation via WebSocket
+              if (customerWebSocket.isConnected()) {
+                customerWebSocket.send('send_to_job_room', {
+                  bookingId,
+                  messageType: 'job_cancelled',
+                  data: { reason: 'customer_cancelled' }
+                });
+              }
+              
+              // API call to cancel booking
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/cancel`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ cancelledBy: 'customer' })
+              });
 
-            router.back();
+              router.back();
+            } catch (error) {
+              console.error('Cancel error:', error);
+              router.back();
+            }
           }
         }
       ]
@@ -539,13 +657,21 @@ const ProviderAssignedScreen = () => {
           </View>
         )}
 
+        {/* Job Room Status (optional) */}
+        {hasJoinedRoom && connectionStatus === 'connected' && (
+          <View style={styles.roomStatus}>
+            <Ionicons name="radio-outline" size={14} color="#4CAF50" />
+            <Text style={styles.roomStatusText}>Live connection active</Text>
+          </View>
+        )}
+
         {/* Map Section - Google Maps Integration */}
         <View style={styles.mapContainer}>
           {/* ETA Badge */}
           <View style={styles.etaBadge}>
             <Text style={styles.etaLabel}>ARRIVAL IN</Text>
             <Text style={styles.etaTime}>
-              {timeRemaining > 0 ? formatTime(timeRemaining) : eta}
+              {timeRemaining > 0 ? formatTime(timeRemaining) : eta || 'Calculating...'}
             </Text>
           </View>
 
@@ -850,7 +976,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    marginBottom: 12,
+    marginBottom: 8,
     width: '100%',
   },
   disconnectedStatus: {
@@ -869,6 +995,22 @@ const styles = StyleSheet.create({
   },
   reconnectingText: {
     color: '#F59E0B',
+  },
+  roomStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginBottom: 12,
+    alignSelf: 'center',
+  },
+  roomStatusText: {
+    fontSize: 11,
+    color: '#2E7D32',
+    marginLeft: 6,
+    fontWeight: '600',
   },
   mapContainer: {
     width: '100%',

@@ -1,4 +1,4 @@
-// HomePage.tsx - Fixed with proper navigation to job requests page
+// HomePage.tsx - WebSocket-only approach
 import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -102,6 +102,11 @@ interface JobRequest {
   photos?: string[];
 }
 
+// Queue for multiple job requests
+interface JobRequestQueue {
+  [key: string]: JobRequest; // Store by job ID
+}
+
 const HomePage = () => {
   const router = useRouter();
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -123,8 +128,10 @@ const HomePage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
   
-  // Store incoming job requests
-  const [incomingJobRequest, setIncomingJobRequest] = useState<JobRequest | null>(null);
+  // Store multiple incoming job requests in a queue
+  const [jobRequestQueue, setJobRequestQueue] = useState<JobRequestQueue>({});
+  const [currentJobRequest, setCurrentJobRequest] = useState<JobRequest | null>(null);
+  const [hasActiveJob, setHasActiveJob] = useState(false); // Track if provider accepted a job
 
   // Map picker states
   const mapRef = useRef<MapView>(null);
@@ -166,13 +173,6 @@ const HomePage = () => {
     }
   }, [providerData]);
 
-  // Refresh data when screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      refreshNotificationCount();
-    }, [])
-  );
-
   // Start/stop location tracking based on online status
   useEffect(() => {
     if (isOnline && locationPermission) {
@@ -182,12 +182,24 @@ const HomePage = () => {
     }
   }, [isOnline, locationPermission]);
 
+  // Update notification count based on queue size
+  useEffect(() => {
+    const queueSize = Object.keys(jobRequestQueue).length;
+    setNotificationCount(queueSize);
+    
+    // If there are jobs in queue and no current job showing, show the next one
+    if (queueSize > 0 && !currentJobRequest && !hasActiveJob) {
+      const nextJobId = Object.keys(jobRequestQueue)[0];
+      setCurrentJobRequest(jobRequestQueue[nextJobId]);
+    }
+  }, [jobRequestQueue, hasActiveJob]);
+
   const setupWebSocket = async () => {
     try {
       // Remove existing listeners
       removeWebSocketListeners();
 
-      // Add connection listener with proper type
+      // Add connection listener
       providerWebSocket.onConnectionChange((isConnected: boolean) => {
         console.log('Provider WebSocket connection changed:', isConnected);
         setWsConnected(isConnected);
@@ -203,9 +215,9 @@ const HomePage = () => {
 
       // Add message listeners for job requests
       providerWebSocket.on('new_job_request', handleNewJobRequest);
+      providerWebSocket.on('job_accepted_by_other', handleJobAcceptedByOther);
       providerWebSocket.on('job_cancelled', handleJobCancelled);
       providerWebSocket.on('job_updated', handleJobUpdated);
-      providerWebSocket.on('notification', handleNotification);
       providerWebSocket.on('provider_status_update', handleStatusUpdate);
       
       // Debug listener for all messages
@@ -218,19 +230,31 @@ const HomePage = () => {
       
       if (connected) {
         console.log('Provider WebSocket connected successfully');
+        
+        // If online, send status immediately
+        if (isOnline && currentLocation) {
+          providerWebSocket.send('provider_status', { 
+            isOnline: true,
+            location: currentLocation 
+          });
+        }
       } else {
         console.log('Provider WebSocket connection failed');
+        // Auto-reconnect after 5 seconds
+        setTimeout(() => setupWebSocket(), 5000);
       }
     } catch (error) {
       console.error('Error setting up provider WebSocket:', error);
+      // Auto-reconnect after 5 seconds
+      setTimeout(() => setupWebSocket(), 5000);
     }
   };
 
   const removeWebSocketListeners = () => {
     providerWebSocket.off('new_job_request', handleNewJobRequest);
+    providerWebSocket.off('job_accepted_by_other', handleJobAcceptedByOther);
     providerWebSocket.off('job_cancelled', handleJobCancelled);
     providerWebSocket.off('job_updated', handleJobUpdated);
-    providerWebSocket.off('notification', handleNotification);
     providerWebSocket.off('provider_status_update', handleStatusUpdate);
     providerWebSocket.off('*', () => {});
   };
@@ -240,11 +264,14 @@ const HomePage = () => {
     const jobData = message.data || message;
     console.log('📦 New job request received:', JSON.stringify(jobData, null, 2));
     
-    // Store the full job data
-    setIncomingJobRequest(jobData as JobRequest);
+    // Generate a unique ID if not provided
+    const jobId = jobData.id || jobData.bookingId || `job-${Date.now()}-${Math.random()}`;
     
-    // Increment notification count
-    setNotificationCount(prev => prev + 1);
+    // Add to queue
+    setJobRequestQueue(prev => ({
+      ...prev,
+      [jobId]: jobData as JobRequest
+    }));
     
     // Vibrate on new request
     if (Platform.OS !== 'web') {
@@ -257,15 +284,57 @@ const HomePage = () => {
     }
   };
 
+  const handleJobAcceptedByOther = (data: any) => {
+    console.log('Job accepted by another provider:', data);
+    
+    const jobId = data.jobId || data.bookingId;
+    
+    if (jobId) {
+      // Remove from queue
+      setJobRequestQueue(prev => {
+        const newQueue = { ...prev };
+        delete newQueue[jobId];
+        return newQueue;
+      });
+      
+      // Clear current job if it matches
+      if (currentJobRequest && (currentJobRequest.id === jobId || currentJobRequest.bookingId === jobId)) {
+        setCurrentJobRequest(null);
+        
+        // Show next job in queue if any
+        const remainingJobs = Object.keys(jobRequestQueue).filter(id => id !== jobId);
+        if (remainingJobs.length > 0) {
+          const nextJobId = remainingJobs[0];
+          setCurrentJobRequest(jobRequestQueue[nextJobId]);
+        }
+      }
+    }
+  };
+
   const handleJobCancelled = (data: any) => {
     console.log('Job cancelled:', data);
     
-    // Decrement notification count if appropriate
-    setNotificationCount(prev => Math.max(0, prev - 1));
+    const jobId = data.jobId || data.bookingId;
     
-    // Clear incoming job if it matches
-    if (incomingJobRequest && (incomingJobRequest.id === data.jobId || incomingJobRequest.bookingId === data.bookingId)) {
-      setIncomingJobRequest(null);
+    if (jobId) {
+      // Remove from queue
+      setJobRequestQueue(prev => {
+        const newQueue = { ...prev };
+        delete newQueue[jobId];
+        return newQueue;
+      });
+      
+      // Clear current job if it matches
+      if (currentJobRequest && (currentJobRequest.id === jobId || currentJobRequest.bookingId === jobId)) {
+        setCurrentJobRequest(null);
+        
+        // Show next job in queue if any
+        const remainingJobs = Object.keys(jobRequestQueue).filter(id => id !== jobId);
+        if (remainingJobs.length > 0) {
+          const nextJobId = remainingJobs[0];
+          setCurrentJobRequest(jobRequestQueue[nextJobId]);
+        }
+      }
     }
     
     // Show alert
@@ -274,20 +343,24 @@ const HomePage = () => {
 
   const handleJobUpdated = (data: any) => {
     console.log('Job updated:', data);
-    // Refresh jobs list if needed
-    if (providerData?.firebaseUserId && providerData?.token) {
-      fetchRecentJobs(providerData.firebaseUserId, providerData.token);
-    }
     
-    // Update incoming job if it matches
-    if (incomingJobRequest && (incomingJobRequest.id === data.jobId || incomingJobRequest.bookingId === data.bookingId)) {
-      setIncomingJobRequest(prev => prev ? { ...prev, ...data } : null);
+    const jobId = data.jobId || data.bookingId;
+    
+    if (jobId && jobRequestQueue[jobId]) {
+      // Update the job in queue
+      setJobRequestQueue(prev => ({
+        ...prev,
+        [jobId]: {
+          ...prev[jobId],
+          ...data
+        }
+      }));
+      
+      // Update current job if it matches
+      if (currentJobRequest && (currentJobRequest.id === jobId || currentJobRequest.bookingId === jobId)) {
+        setCurrentJobRequest(prev => prev ? { ...prev, ...data } : null);
+      }
     }
-  };
-
-  const handleNotification = (data: any) => {
-    console.log('Notification received:', data);
-    setNotificationCount(prev => prev + (data.count || 1));
   };
 
   const handleStatusUpdate = (data: any) => {
@@ -296,6 +369,18 @@ const HomePage = () => {
     if (data.isOnline !== undefined && data.isOnline !== isOnline) {
       setIsOnline(data.isOnline);
     }
+  };
+
+  const markJobAsActive = (jobId: string) => {
+    // Remove from queue
+    setJobRequestQueue(prev => {
+      const newQueue = { ...prev };
+      delete newQueue[jobId];
+      return newQueue;
+    });
+    
+    setHasActiveJob(true);
+    setCurrentJobRequest(null);
   };
 
   const checkLocationPermission = async () => {
@@ -362,7 +447,8 @@ const HomePage = () => {
           await fetchAllProviderData(firebaseUserId, token);
         }
       } else {
-        // Demo data for testing
+        console.log('No provider data found, using defaults');
+        // Keep default values
         setProviderData({
           id: 'PRV-001234',
           name: 'AHMED AL-KHALIFA',
@@ -379,31 +465,8 @@ const HomePage = () => {
           rating: 4.8,
         });
 
-        setRecentJobs([
-          {
-            id: '1',
-            title: 'TOWING SERVICE',
-            time: '2 HOURS AGO',
-            price: 75,
-            status: 'COMPLETED'
-          },
-          {
-            id: '2',
-            title: 'BATTERY JUMP',
-            time: '4 HOURS AGO',
-            price: 35,
-            status: 'COMPLETED'
-          },
-          {
-            id: '3',
-            title: 'FUEL DELIVERY',
-            time: '6 HOURS AGO',
-            price: 25,
-            status: 'COMPLETED'
-          }
-        ]);
-        
-        setNotificationCount(3);
+        setRecentJobs([]);
+        setNotificationCount(0);
       }
     } catch (error) {
       console.error('Error loading provider data:', error);
@@ -417,7 +480,7 @@ const HomePage = () => {
       await fetchProviderStatus(firebaseUserId, token);
       await fetchPerformanceData(firebaseUserId, token);
       await fetchRecentJobs(firebaseUserId, token);
-      await fetchNotificationCount(token);
+      // ❌ REMOVED: fetchNotificationCount
     } catch (error) {
       console.error('Error fetching provider data:', error);
     }
@@ -491,41 +554,7 @@ const HomePage = () => {
     }
   };
 
-  const fetchNotificationCount = async (token?: string) => {
-    try {
-      const authToken = token || await AsyncStorage.getItem('userToken');
-      const userDataStr = await AsyncStorage.getItem('userData');
-      
-      if (!authToken || !userDataStr) {
-        return;
-      }
-      
-      const notificationUrl = `${API_BASE_URL}/notifications/unread-count`;
-      
-      const response = await fetch(notificationUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setNotificationCount(data.count || 0);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching notification count:', error);
-    }
-  };
-
-  const refreshNotificationCount = () => {
-    if (providerData?.token) {
-      fetchNotificationCount(providerData.token);
-    }
-  };
+  // ❌ REMOVED ENTIRE fetchNotificationCount function
 
   const getCurrentLocation = async (isManualSelection: boolean = false) => {
     if (currentLocation?.isManual && !isManualSelection) {
@@ -890,7 +919,6 @@ const HomePage = () => {
           if (location) {
             setIsOnline(true);
             startLocationTracking();
-            refreshNotificationCount();
             
             if (providerData?.firebaseUserId && providerData?.token) {
               updateProviderStatus(true);
@@ -912,7 +940,6 @@ const HomePage = () => {
       
       setIsOnline(true);
       startLocationTracking();
-      refreshNotificationCount();
       
       if (providerData?.firebaseUserId && providerData?.token) {
         updateProviderStatus(true);
@@ -977,62 +1004,72 @@ const HomePage = () => {
   };
 
   const handleNotificationPress = () => {
-    console.log('🔔 Notification pressed, incoming job:', incomingJobRequest);
+    console.log('🔔 Notification pressed, current job:', currentJobRequest);
+    console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
     
-    if (incomingJobRequest) {
+    if (currentJobRequest) {
       // Navigate with all job data
       router.push({
         pathname: '/NewRequestNotification',
         params: {
           // Core identifiers
-          jobId: incomingJobRequest.id,
-          bookingId: incomingJobRequest.bookingId || incomingJobRequest.id,
+          jobId: currentJobRequest.id,
+          bookingId: currentJobRequest.bookingId || currentJobRequest.id,
           
           // Customer info
-          customerName: incomingJobRequest.customerName,
-          customerPhone: incomingJobRequest.customerPhone || '',
-          customerRating: incomingJobRequest.customerRating?.toString() || '',
+          customerName: currentJobRequest.customerName,
+          customerPhone: currentJobRequest.customerPhone || '',
+          customerRating: currentJobRequest.customerRating?.toString() || '',
           
           // Service details
-          serviceType: incomingJobRequest.serviceType,
-          serviceName: incomingJobRequest.serviceName || incomingJobRequest.serviceType,
+          serviceType: currentJobRequest.serviceType,
+          serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
           
           // Pickup location
-          pickupLocation: incomingJobRequest.pickupLocation,
-          pickupLat: incomingJobRequest.pickupLat?.toString() || '',
-          pickupLng: incomingJobRequest.pickupLng?.toString() || '',
+          pickupLocation: currentJobRequest.pickupLocation,
+          pickupLat: currentJobRequest.pickupLat?.toString() || '',
+          pickupLng: currentJobRequest.pickupLng?.toString() || '',
           
           // Dropoff location (if available)
-          dropoffLocation: incomingJobRequest.dropoffLocation || '',
-          dropoffLat: incomingJobRequest.dropoffLat?.toString() || '',
-          dropoffLng: incomingJobRequest.dropoffLng?.toString() || '',
+          dropoffLocation: currentJobRequest.dropoffLocation || '',
+          dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
+          dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
           
           // Job details
-          distance: incomingJobRequest.distance,
-          estimatedEarnings: incomingJobRequest.estimatedEarnings.toString(),
-          price: (incomingJobRequest.price || incomingJobRequest.estimatedEarnings).toString(),
-          urgency: incomingJobRequest.urgency || 'normal',
-          timestamp: incomingJobRequest.timestamp,
+          distance: currentJobRequest.distance,
+          estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
+          price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
+          urgency: currentJobRequest.urgency || 'normal',
+          timestamp: currentJobRequest.timestamp,
           
           // Additional details
-          description: incomingJobRequest.description || '',
+          description: currentJobRequest.description || '',
           
           // Vehicle details (flattened)
-          vehicleType: incomingJobRequest.vehicleDetails?.type || '',
-          vehicleMakeModel: incomingJobRequest.vehicleDetails?.makeModel || '',
-          vehicleYear: incomingJobRequest.vehicleDetails?.year || '',
-          vehicleColor: incomingJobRequest.vehicleDetails?.color || '',
-          vehicleLicensePlate: incomingJobRequest.vehicleDetails?.licensePlate || '',
+          vehicleType: currentJobRequest.vehicleDetails?.type || '',
+          vehicleMakeModel: currentJobRequest.vehicleDetails?.makeModel || '',
+          vehicleYear: currentJobRequest.vehicleDetails?.year || '',
+          vehicleColor: currentJobRequest.vehicleDetails?.color || '',
+          vehicleLicensePlate: currentJobRequest.vehicleDetails?.licensePlate || '',
           
           // Issues and photos (as JSON strings)
-          issues: JSON.stringify(incomingJobRequest.issues || []),
-          photos: JSON.stringify(incomingJobRequest.photos || []),
+          issues: JSON.stringify(currentJobRequest.issues || []),
+          photos: JSON.stringify(currentJobRequest.photos || []),
+          
+          // Queue info
+          queueSize: Object.keys(jobRequestQueue).length.toString(),
+          isLastInQueue: (Object.keys(jobRequestQueue).length === 1).toString(),
         }
       });
     } else {
-      // If no specific job, just go to the page (it will show "No Request Found")
-      console.log('No incoming job, going to empty notification page');
-      router.push('/NewRequestNotification');
+      // If no specific job, show message
+      Alert.alert(
+        'No Job Requests',
+        Object.keys(jobRequestQueue).length > 0 
+          ? 'Loading next request...' 
+          : 'No pending job requests at the moment.',
+        [{ text: 'OK' }]
+      );
     }
   };
 
@@ -1296,11 +1333,21 @@ const HomePage = () => {
           </TouchableOpacity>
         </View>
 
-        {/* WebSocket Status (optional) */}
+        {/* WebSocket Status */}
         {wsConnected && (
           <View style={styles.wsStatusContainer}>
             <View style={styles.wsStatusDot} />
             <Text style={styles.wsStatusText}>Connected to real-time updates</Text>
+          </View>
+        )}
+
+        {/* Active Job Queue Status */}
+        {Object.keys(jobRequestQueue).length > 0 && (
+          <View style={styles.queueStatusContainer}>
+            <Ionicons name="notifications" size={16} color="#68bdee" />
+            <Text style={styles.queueStatusText}>
+              {Object.keys(jobRequestQueue).length} pending job request(s)
+            </Text>
           </View>
         )}
 
@@ -1382,7 +1429,6 @@ const HomePage = () => {
               <Text style={styles.locationAddress} numberOfLines={1}>
                 {currentLocation?.address || 'Not set'}
               </Text>
-         
               <TouchableOpacity onPress={handleUpdateLocation}>
                 <Text style={styles.updateLocationText}>
                   {currentLocation?.isManual ? 'CHANGE LOCATION' : 'UPDATE LOCATION'}
@@ -1616,7 +1662,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     backgroundColor: '#F0F9FF',
     marginHorizontal: 24,
-    marginBottom: 16,
+    marginTop: 16,
+    marginBottom: 8,
     borderRadius: 8,
   },
   wsStatusDot: {
@@ -1630,6 +1677,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#2E7D32',
     fontWeight: '500',
+  },
+  queueStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 8,
+    backgroundColor: '#E8F0FE',
+    marginHorizontal: 24,
+    marginBottom: 8,
+    borderRadius: 8,
+  },
+  queueStatusText: {
+    fontSize: 12,
+    color: '#68bdee',
+    fontWeight: '600',
+    marginLeft: 8,
   },
   toggleSwitch: {
     width: 51,

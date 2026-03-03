@@ -1,4 +1,4 @@
-// findingprovider.tsx - Complete with debug logs and fixes
+// findingprovider.tsx - Complete with WebSocket-only approach
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -25,15 +25,27 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 // Define types
 type ConnectionStatus = 'connecting' | 'searching' | 'found' | 'error' | 'no_providers' | 'timeout';
 
-interface BookingData {
+interface ProviderData {
+  id: string;
+  name: string;
+  rating: number;
+  profileImage?: string;
+  vehicleDetails?: string;
+  phone?: string;
+}
+
+interface AcceptedJobData {
   bookingId: string;
-  providerName?: string;
-  providerRating?: number;
+  jobId?: string;
+  providerId: string;
+  providerName: string;
+  providerRating: number;
   providerImage?: string;
   estimatedArrival?: string;
   vehicleDetails?: string;
-  status?: string;
-  provider?: any;
+  provider?: ProviderData;
+  providerPhone?: string;
+  licensePlate?: string;
 }
 
 interface WebSocketData {
@@ -41,27 +53,15 @@ interface WebSocketData {
   status?: string;
   bookingId?: string;
   jobId?: string;
+  providerId?: string;
   providerName?: string;
   providerRating?: number;
   providerImage?: string;
   estimatedArrival?: string;
   vehicleDetails?: string;
-  provider?: any;
+  provider?: ProviderData;
   message?: string;
-  data?: {
-    jobId?: string;
-    bookingId?: string;
-    providerId?: string;
-    providerName?: string;
-    providerRating?: number;
-    providerImage?: string;
-    estimatedArrival?: string;
-    vehicleDetails?: string;
-    status?: string;
-    acceptedAt?: string;
-    responseTime?: number;
-    [key: string]: any;
-  };
+  data?: AcceptedJobData;
 }
 
 // Type guard to check if object has data property
@@ -75,14 +75,12 @@ const FindingProviderScreen = () => {
   const [error, setError] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [pollingActive, setPollingActive] = useState(false);
   
   const params = useLocalSearchParams();
   const router = useRouter();
   const appState = useRef(AppState.currentState);
   const timeoutTimer = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
-  const pollingTimer = useRef<NodeJS.Timeout | null>(null);
   const wsListenerRemoved = useRef(false);
   const navigationInProgress = useRef(false); // Prevent multiple navigation attempts
 
@@ -182,20 +180,8 @@ const FindingProviderScreen = () => {
   console.log('🔍 Dropoff location:', { dropoffAddress, dropoffLat, dropoffLng });
   console.log('🔍 Customer:', { fullName, phoneNumber, email });
 
-  // Check WebSocket connection periodically
-  const checkWebSocketConnection = () => {
-    console.log('🔌 WebSocket Status Check:', {
-      isConnected: customerWebSocket.isConnected(),
-      wsConnectedState: wsConnected,
-      bookingId,
-      connectionStatus,
-      hasUserSockets: !!(customerWebSocket as any).userSockets?.size
-    });
-  };
-
   useEffect(() => {
     console.log('🔄 ===== USEFFECT TRIGGERED =====');
-    console.log('🔄 App state at start:', appState.current);
     console.log('🔄 Starting animation and booking request');
     
     // Start spinning animation
@@ -223,70 +209,21 @@ const FindingProviderScreen = () => {
       }
     }, 120000); // 2 minutes
 
-    // Check WebSocket connection every 10 seconds
-    const wsCheckInterval = setInterval(checkWebSocketConnection, 10000);
-
     // Cleanup on unmount
     return () => {
       console.log('🧹 ===== CLEANING UP FINDING PROVIDER SCREEN =====');
-      console.log('🧹 Cleaning up timers and WebSocket connections');
       if (timeoutTimer.current) {
         clearTimeout(timeoutTimer.current);
-        console.log('🧹 Timeout timer cleared');
       }
       if (reconnectTimer.current) {
         clearTimeout(reconnectTimer.current);
-        console.log('🧹 Reconnect timer cleared');
       }
-      if (pollingTimer.current) {
-        clearInterval(pollingTimer.current);
-        console.log('🧹 Polling timer cleared');
-      }
-      clearInterval(wsCheckInterval);
       subscription.remove();
       removeWebSocketListeners();
       customerWebSocket.disconnect();
       wsListenerRemoved.current = true;
-      console.log('🧹 Cleanup complete');
     };
   }, []);
-
-  // Start polling when bookingId is set and we're searching
-  useEffect(() => {
-    if (bookingId && connectionStatus === 'searching' && !pollingActive) {
-      startPolling();
-    }
-  }, [bookingId, connectionStatus]);
-
-  const startPolling = () => {
-    console.log('🔄 Starting polling as WebSocket backup');
-    setPollingActive(true);
-    
-    pollingTimer.current = setInterval(async () => {
-      if (bookingId && connectionStatus === 'searching' && !navigationInProgress.current) {
-        try {
-          console.log('🔄 Polling job status for booking:', bookingId);
-          const token = await AsyncStorage.getItem('userToken');
-          
-          const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/status`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log('🔄 Poll response:', JSON.stringify(data, null, 2));
-            
-            if (data.status === 'accepted' || data.status === 'confirmed' || data.provider) {
-              console.log('✅ Polling detected job acceptance!');
-              handleProviderFound(data);
-            }
-          }
-        } catch (error) {
-          console.error('❌ Polling error:', error);
-        }
-      }
-    }, 5000); // Poll every 5 seconds
-  };
 
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
     console.log('📱 App state changed:', { from: appState.current, to: nextAppState });
@@ -314,48 +251,32 @@ const FindingProviderScreen = () => {
 
   const setupWebSocket = async () => {
     console.log('🔌 ===== SETTING UP WEBSOCKET =====');
-    console.log('🔌 Timestamp:', new Date().toISOString());
     console.log('🔌 Current bookingId:', bookingId);
-    console.log('🔌 Current connectionStatus:', connectionStatus);
     
     try {
       // Remove existing listeners first
-      console.log('🔌 Removing existing WebSocket listeners');
       removeWebSocketListeners();
 
       // Add connection listener
-      console.log('🔌 Adding connection change listener');
       customerWebSocket.onConnectionChange(handleConnectionChange);
 
       // Add message listeners for ALL possible acceptance events
-      console.log('🔌 Adding job_accepted listener (primary)');
       customerWebSocket.on('job_accepted', handleJobAccepted);
-      
-      console.log('🔌 Adding provider_assigned listener (fallback)');
       customerWebSocket.on('provider_assigned', handleProviderFound);
-      
-      console.log('🔌 Adding booking_confirmed listener');
       customerWebSocket.on('booking_confirmed', handleProviderFound);
-      
-      console.log('🔌 Adding booking_accepted listener');
       customerWebSocket.on('booking_accepted', handleProviderFound);
       
-      console.log('🔌 Adding booking_cancelled listener');
       customerWebSocket.on('booking_cancelled', () => {
         console.log('❌ Booking cancelled event received');
         handleNoProviders('cancelled');
       });
       
-      console.log('🔌 Adding booking_expired listener');
       customerWebSocket.on('booking_expired', () => {
         console.log('⏰ Booking expired event received');
         handleNoProviders('expired');
       });
       
-      console.log('🔌 Adding status_update listener');
       customerWebSocket.on('status_update', handleStatusUpdate);
-      
-      console.log('🔌 Adding error listener');
       customerWebSocket.on('error', handleWebSocketError);
 
       // Connect to WebSocket
@@ -407,8 +328,7 @@ const FindingProviderScreen = () => {
     console.log('🔌 WebSocket connection changed:', { 
       isConnected, 
       bookingId, 
-      connectionStatus,
-      timestamp: new Date().toISOString()
+      connectionStatus 
     });
     setWsConnected(isConnected);
     
@@ -428,7 +348,6 @@ const FindingProviderScreen = () => {
 
   const handleWebSocketError = (error?: any) => {
     console.error('❌ WebSocket error:', error || 'Unknown error');
-    console.error('❌ Error details:', JSON.stringify(error, null, 2));
     setWsConnected(false);
     
     if (connectionStatus === 'searching' || connectionStatus === 'connecting') {
@@ -451,16 +370,13 @@ const FindingProviderScreen = () => {
     customerWebSocket.off('booking_expired', () => handleNoProviders('expired'));
     customerWebSocket.off('status_update', handleStatusUpdate);
     customerWebSocket.off('error', handleWebSocketError);
-    console.log('🔌 All listeners removed');
   };
 
   const handleStatusUpdate = (data: any) => {
     console.log('📊 ===== STATUS UPDATE RECEIVED =====');
     console.log('📊 Raw data:', JSON.stringify(data, null, 2));
     
-    // Handle case where data is wrapped in a data field
     const messageData = hasDataProperty(data) ? data.data : data;
-    console.log('📊 Parsed message data:', JSON.stringify(messageData, null, 2));
     
     if (messageData.status === 'searching' || messageData.status === 'pending') {
       console.log('ℹ️ Status: Searching for providers');
@@ -468,216 +384,196 @@ const FindingProviderScreen = () => {
     } else if (
       messageData.status === 'accepted' || 
       messageData.status === 'confirmed' || 
-      messageData.status === 'provider_assigned' ||
-      messageData.bookingId // Sometimes just having a bookingId means it's accepted
+      messageData.status === 'provider_assigned'
     ) {
-      console.log('✅ Status indicates job accepted!', messageData);
+      console.log('✅ Status indicates job accepted!');
       handleProviderFound(messageData);
     } else if (messageData.status === 'cancelled' || messageData.status === 'expired') {
-      console.log('❌ Status indicates job cancelled/expired:', messageData.status);
+      console.log('❌ Status indicates job cancelled/expired');
       handleNoProviders(messageData.status);
-    } else {
-      console.log('ℹ️ Unknown status:', messageData.status);
     }
   };
 
   const handleJobAccepted = (message: any) => {
     console.log('🎉 ===== JOB ACCEPTED MESSAGE RECEIVED =====');
-    console.log('🎉 Raw message:', JSON.stringify(message, null, 2));
-    
-    // Extract data from the message structure
-    // Message comes as { type: 'job_accepted', data: {...} }
     const messageData = message.data || message;
     
-    console.log('🎉 Extracted data:', JSON.stringify(messageData, null, 2));
-    
-    // Create provider data object
     const providerData = {
       bookingId: messageData.bookingId || messageData.jobId,
+      providerId: messageData.providerId || messageData.userId || '',
       providerName: messageData.providerName || 'Provider',
       providerRating: messageData.providerRating || 4.5,
       providerImage: messageData.providerImage || '',
       estimatedArrival: messageData.estimatedArrival || '10-15 minutes',
       vehicleDetails: messageData.vehicleDetails || '',
+      providerPhone: messageData.providerPhone || '',
+      licensePlate: messageData.licensePlate || '',
       provider: messageData.provider || null
     };
     
-    console.log('🎉 Provider data for navigation:', providerData);
     handleProviderFound(providerData);
   };
-
-  const sendBookingRequest = async () => {
-    console.log('📤 ===== SENDING BOOKING REQUEST =====');
-    console.log('📤 Timestamp:', new Date().toISOString());
+const sendBookingRequest = async () => {
+  console.log('📤 ===== SENDING BOOKING REQUEST =====');
+  
+  try {
+    setConnectionStatus('connecting');
     
-    try {
-      setConnectionStatus('connecting');
-      console.log('📤 Connection status set to: connecting');
-      
-      const token = await AsyncStorage.getItem('userToken');
-      console.log('📤 Token retrieved:', token ? 'Yes (token exists)' : 'No (token missing)');
-      console.log('📤 Token length:', token?.length || 0);
-      console.log('📤 Token first 20 chars:', token?.substring(0, 20));
-
-      if (!token) {
-        throw new Error('Authentication token not found. Please sign in again.');
-      }
-
-      // Log all params for debugging
-      console.log('📤 All params received:', {
-        serviceId,
-        serviceName,
-        servicePrice,
-        pickupAddress,
-        dropoffAddress,
-        fullName,
-        phoneNumber,
-        totalAmount,
-        vehicleType,
-        makeModel
-      });
-
-      // Prepare booking data
-      const bookingData = {
-        pickup: {
-          address: pickupAddress,
-          coordinates: pickupLat && pickupLng ? {
-            lat: pickupLat,
-            lng: pickupLng
-          } : null
-        },
-        dropoff: {
-          address: dropoffAddress,
-          coordinates: dropoffLat && dropoffLng ? {
-            lat: dropoffLat,
-            lng: dropoffLng
-          } : null
-        },
-        serviceId,
-        serviceName,
-        servicePrice: parseFloat(servicePrice) || 0,
-        serviceCategory,
-        serviceType: serviceTime,
-        isCarRental,
-        isFuelDelivery,
-        isSpareParts,
-        vehicle: {
-          type: vehicleType,
-          makeModel,
-          year,
-          color,
-          licensePlate,
-        },
-        customer: {
-          name: fullName,
-          phone: phoneNumber,
-          email,
-          emergencyContact,
-        },
-        carRental: isCarRental ? {
-          licenseFront,
-          licenseBack,
-          hasInsurance,
-        } : null,
-        fuelDelivery: isFuelDelivery ? {
-          fuelType,
-        } : null,
-        spareParts: isSpareParts ? {
-          partDescription,
-        } : null,
-        additionalDetails: {
-          urgency,
-          issues: issues.length > 0 ? issues : null,
-          description,
-          photos: photos.length > 0 ? photos : null,
-          needSpecificTruck,
-          hasModifications,
-          needMultilingual,
-        },
-        schedule: {
-          type: serviceTime,
-          scheduledDateTime: serviceTime === 'schedule_later' ? {
-            date: scheduledDate,
-            timeSlot: scheduledTimeSlot,
-          } : null,
-        },
-        payment: {
-          totalAmount: parseFloat(totalAmount) || 0,
-          selectedTip,
-          baseServiceFee: parseFloat(servicePrice) || 0,
-          paymentMethod: 'cash',
-        },
-        locationSkipped,
-        timestamp: new Date().toISOString(),
-        platform: 'mobile',
-        version: '1.1',
-      };
-
-      console.log('📤 Sending booking data:', JSON.stringify(bookingData, null, 2));
-
-      const response = await fetch(`${API_BASE_URL}/api/jobs/customer/finding-provider`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(bookingData),
-      });
-
-      console.log('📤 Response status:', response.status);
-      console.log('📤 Response status text:', response.statusText);
-      console.log('📤 Response headers:', response.headers);
-      
-      const responseData = await response.json();
-      console.log('📤 Response data:', JSON.stringify(responseData, null, 2));
-
-      if (!response.ok) {
-        throw new Error(responseData.message || responseData.error || 'Failed to create booking');
-      }
-
-      console.log('✅ Booking created successfully with ID:', responseData.bookingId);
-      setBookingId(responseData.bookingId);
-      setConnectionStatus('searching');
-      console.log('📤 Connection status set to: searching');
-
-      // Setup WebSocket after getting booking ID
-      console.log('🔌 Setting up WebSocket with booking ID:', responseData.bookingId);
-      await setupWebSocket();
-
-    } catch (error: unknown) {
-      console.error('❌ Booking request error details:', {
-        error: error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      });
-      
-      setConnectionStatus('error');
-      setError(error instanceof Error ? error.message : 'An unknown error occurred');
-      
-      Alert.alert(
-        'Booking Failed',
-        error instanceof Error ? error.message : 'Failed to process request',
-        [
-          { text: 'Cancel', style: 'cancel', onPress: () => {
-            console.log('📤 User cancelled booking, navigating back');
-            router.back();
-          }},
-          { text: 'Retry', onPress: () => {
-            console.log('📤 User retrying booking request');
-            sendBookingRequest();
-          }}
-        ]
-      );
+    const token = await AsyncStorage.getItem('userToken');
+    if (!token) {
+      throw new Error('Authentication token not found. Please sign in again.');
     }
-  };
+
+    // Generate a temporary booking ID (backend will replace it)
+    const tempBookingId = `TEMP-${Date.now()}`;
+
+    // Prepare COMPLETE booking data with all necessary information
+    const bookingData = {
+      // ✅ ADD THIS - bookingId is required by the model
+      bookingId: tempBookingId,
+      
+      // Location information
+      pickup: {
+        address: pickupAddress,
+        coordinates: pickupLat && pickupLng ? {
+          lat: pickupLat,
+          lng: pickupLng
+        } : null
+      },
+      dropoff: {
+        address: dropoffAddress,
+        coordinates: dropoffLat && dropoffLng ? {
+          lat: dropoffLat,
+          lng: dropoffLng
+        } : null
+      },
+      
+      // Service information
+      serviceId,
+      serviceName,
+      servicePrice: parseFloat(servicePrice) || 0,
+      serviceCategory,
+      serviceType: serviceTime,
+      
+      // Service type flags
+      isCarRental,
+      isFuelDelivery,
+      isSpareParts,
+      
+      // Vehicle information
+      vehicle: {
+        type: vehicleType,
+        makeModel,
+        year,
+        color,
+        licensePlate,
+      },
+      
+      // Customer contact information
+      customer: {
+        name: fullName,
+        phone: phoneNumber,
+        email,
+        emergencyContact,
+      },
+      
+      // Service-specific details
+      carRental: isCarRental ? {
+        licenseFront,
+        licenseBack,
+        hasInsurance,
+      } : null,
+      
+      fuelDelivery: isFuelDelivery ? {
+        fuelType,
+      } : null,
+      
+      spareParts: isSpareParts ? {
+        partDescription,
+      } : null,
+      
+      // Additional details
+      additionalDetails: {
+        urgency,
+        issues: issues.length > 0 ? issues : null,
+        description,
+        photos: photos.length > 0 ? photos : null,
+        needSpecificTruck,
+        hasModifications,
+        needMultilingual,
+      },
+      
+      // Schedule information
+      schedule: {
+        type: serviceTime,
+        scheduledDateTime: serviceTime === 'schedule_later' ? {
+          date: scheduledDate,
+          timeSlot: scheduledTimeSlot,
+        } : null,
+      },
+      
+      // Payment information
+      payment: {
+        totalAmount: parseFloat(totalAmount) || 0,
+        selectedTip,
+        baseServiceFee: parseFloat(servicePrice) || 0,
+        paymentMethod: 'cash',
+      },
+      
+      // Additional flags
+      locationSkipped,
+      
+      // Metadata
+      timestamp: new Date().toISOString(),
+      platform: 'mobile',
+      version: '1.1',
+    };
+
+    console.log('📤 Sending COMPLETE booking data:', JSON.stringify(bookingData, null, 2));
+
+    const response = await fetch(`${API_BASE_URL}/api/jobs/customer/finding-provider`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(bookingData),
+    });
+
+    const responseData = await response.json();
+    console.log('📤 Response data:', JSON.stringify(responseData, null, 2));
+
+    if (!response.ok) {
+      throw new Error(responseData.message || responseData.error || 'Failed to create booking');
+    }
+
+    console.log('✅ Booking created successfully with ID:', responseData.bookingId);
+    setBookingId(responseData.bookingId);
+    setConnectionStatus('searching');
+
+    // Setup WebSocket after getting booking ID
+    await setupWebSocket();
+
+  } catch (error: unknown) {
+    console.error('❌ Booking request error:', error);
+    
+    setConnectionStatus('error');
+    setError(error instanceof Error ? error.message : 'An unknown error occurred');
+    
+    Alert.alert(
+      'Booking Failed',
+      error instanceof Error ? error.message : 'Failed to process request',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+        { text: 'Retry', onPress: sendBookingRequest }
+      ]
+    );
+  }
+};
 
   const handleProviderFound = (data: any) => {
     console.log('✅✅✅ ===== PROVIDER FOUND! =====');
     console.log('✅ Full data received:', JSON.stringify(data, null, 2));
-    console.log('✅ Data keys:', Object.keys(data));
-    console.log('✅ Navigation in progress flag:', navigationInProgress.current);
-    console.log('✅ Current connection status:', connectionStatus);
-    console.log('✅ Booking ID from state:', bookingId);
     
     // Prevent multiple navigation attempts
     if (navigationInProgress.current) {
@@ -687,128 +583,127 @@ const FindingProviderScreen = () => {
     
     // Clear timeout timer
     if (timeoutTimer.current) {
-      console.log('⏰ Clearing timeout timer');
       clearTimeout(timeoutTimer.current);
       timeoutTimer.current = null;
     }
 
     // Clear reconnect timer
     if (reconnectTimer.current) {
-      console.log('🔄 Clearing reconnect timer');
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
     }
 
-    // Clear polling timer
-    if (pollingTimer.current) {
-      console.log('🔄 Clearing polling timer');
-      clearInterval(pollingTimer.current);
-      pollingTimer.current = null;
-    }
-
     setConnectionStatus('found');
     navigationInProgress.current = true;
-    console.log('✅ Set connection status to: found');
-    console.log('✅ Set navigation in progress to: true');
 
-    // Extract provider data from various possible structures
+    // Extract ALL provider data from various possible structures
+    let providerId = '';
     let providerName = '';
     let providerRating = 0;
     let providerImage = '';
     let estimatedArrival = '10-15 minutes';
     let vehicleDetails = '';
+    let providerPhone = '';
+    let licensePlate = '';
     let finalBookingId = bookingId || '';
     let provider = null;
     
-    console.log('📦 Extracting provider data from message...');
-    
     // Try to extract from provider object if it exists
     if (data.provider) {
-      console.log('📦 Found provider object:', data.provider);
       provider = data.provider;
+      providerId = data.provider.id || data.provider.userId || '';
       providerName = data.provider.name || data.provider.fullName || '';
       providerRating = data.provider.rating || 0;
       providerImage = data.provider.profileImage || data.provider.image || '';
       vehicleDetails = data.provider.vehicleDetails || data.provider.vehicle || '';
+      providerPhone = data.provider.phone || data.provider.phoneNumber || '';
+      licensePlate = data.provider.licensePlate || '';
     }
     
-    // Fall back to direct fields
-    providerName = providerName || data.providerName || 'Provider';
-    providerRating = providerRating || data.providerRating || 4.5;
-    providerImage = providerImage || data.providerImage || '';
-    estimatedArrival = data.estimatedArrival || '10-15 minutes';
-    vehicleDetails = vehicleDetails || data.vehicleDetails || '';
+    // Fall back to direct fields (prioritize direct fields over provider object)
+    providerId = data.providerId || data.userId || providerId || '';
+    providerName = data.providerName || providerName || 'Provider';
+    providerRating = data.providerRating || providerRating || 4.5;
+    providerImage = data.providerImage || providerImage || '';
+    estimatedArrival = data.estimatedArrival || estimatedArrival || '10-15 minutes';
+    vehicleDetails = data.vehicleDetails || vehicleDetails || '';
+    providerPhone = data.providerPhone || data.phone || providerPhone || '';
+    licensePlate = data.licensePlate || licensePlate || '';
     finalBookingId = data.bookingId || data.jobId || bookingId || '';
-    
-    console.log('📦 Extracted values:', {
+
+    // CRITICAL: Validate that we have providerId
+    if (!providerId) {
+      console.error('❌ CRITICAL: No providerId found in the data!');
+      // Try to generate one from provider name as last resort (not ideal)
+      providerId = `prov_${Date.now()}`;
+    }
+
+    console.log('✅ Extracted provider data:', {
+      providerId,
       providerName,
       providerRating,
       providerImage,
       estimatedArrival,
       vehicleDetails,
-      finalBookingId,
-      hasProvider: !!provider
+      providerPhone,
+      licensePlate,
+      finalBookingId
     });
 
-    // Create a properly typed booking data object
-    const bookingData: BookingData = {
+    // Create navigation params with ALL data including providerId
+    const navigationParams = {
+      // Include ALL original params
+      ...params,
+      
+      // Override/add provider-specific data - CRITICAL FIELDS
       bookingId: finalBookingId,
-      providerName: providerName,
-      providerRating: providerRating,
-      providerImage: providerImage,
-      estimatedArrival: estimatedArrival,
-      vehicleDetails: vehicleDetails,
-      provider: provider
+      providerId: providerId,  // ✅ CRITICAL: This was missing!
+      providerName,
+      providerRating: providerRating.toString(),
+      providerImage,
+      estimatedArrival,
+      vehicleDetails,
+      providerPhone,
+      licensePlate,
+      
+      // Ensure coordinates are passed as strings
+      pickupLat: pickupLat?.toString() || '',
+      pickupLng: pickupLng?.toString() || '',
+      dropoffLat: dropoffLat?.toString() || '',
+      dropoffLng: dropoffLng?.toString() || '',
+      
+      // Ensure all critical data is passed
+      serviceId,
+      serviceName,
+      servicePrice,
+      pickupAddress,
+      dropoffAddress,
+      fullName,
+      phoneNumber,
+      totalAmount,
+      vehicleType,
+      makeModel,
     };
 
     console.log('🚀 ===== NAVIGATING TO PROVIDER ASSIGNED =====');
-    console.log('🚀 Booking data for navigation:', JSON.stringify(bookingData, null, 2));
-    console.log('🚀 Original params being passed:', JSON.stringify(params, null, 2));
-    console.log('🚀 Navigation target: /(customer)/ProviderAssigned');
-    console.log('🚀 Navigation scheduled in 1500ms');
+    console.log('🚀 Navigation params:', JSON.stringify(navigationParams, null, 2));
 
     // Navigate to provider assigned screen
     setTimeout(() => {
       try {
-        console.log('🚀 EXECUTING NAVIGATION NOW...');
-        console.log('🚀 Router push with pathname: /(customer)/ProviderAssigned');
-        
-        const navigationParams = {
-          ...params,
-          bookingId: bookingData.bookingId,
-          providerName: bookingData.providerName,
-          providerRating: bookingData.providerRating?.toString() || '4.5',
-          providerImage: bookingData.providerImage || '',
-          estimatedArrival: bookingData.estimatedArrival,
-          vehicleDetails: vehicleDetails || '',
-          pickupLat: pickupLat?.toString() || '',
-          pickupLng: pickupLng?.toString() || '',
-          dropoffLat: dropoffLat?.toString() || '',
-          dropoffLng: dropoffLng?.toString() || '',
-        };
-        
-        console.log('🚀 Navigation params:', JSON.stringify(navigationParams, null, 2));
-        
         router.push({
           pathname: '/(customer)/ProviderAssigned',
           params: navigationParams,
         });
-        
-        console.log('✅ Navigation command executed successfully');
+        console.log('✅ Navigation executed successfully with providerId:', providerId);
       } catch (navError) {
         console.error('❌ Navigation error:', navError);
-        console.error('❌ Error stack:', navError instanceof Error ? navError.stack : 'No stack');
-        // Reset navigation flag on error
         navigationInProgress.current = false;
         
-        // Show error alert
         Alert.alert(
           'Navigation Error',
-          'Failed to navigate to provider details. Please check your booking in the home screen.',
-          [{ text: 'OK', onPress: () => {
-            console.log('🔄 Navigating to home as fallback');
-            router.push('/customer/home');
-          }}]
+          'Failed to navigate. Please check your booking in the home screen.',
+          [{ text: 'OK', onPress: () => router.push('/customer/home') }]
         );
       }
     }, 1500);
@@ -817,75 +712,48 @@ const FindingProviderScreen = () => {
   const handleNoProviders = (reason: string = 'no_providers') => {
     console.log('❌ ===== NO PROVIDERS FOUND =====');
     console.log('❌ Reason:', reason);
-    console.log('❌ Navigation in progress flag:', navigationInProgress.current);
     
-    // Prevent multiple navigation attempts
     if (navigationInProgress.current) {
       console.log('⛔ Navigation already in progress, skipping...');
       return;
     }
     
-    // Clear timeout timer
+    // Clear timers
     if (timeoutTimer.current) {
-      console.log('⏰ Clearing timeout timer');
       clearTimeout(timeoutTimer.current);
       timeoutTimer.current = null;
     }
-
-    // Clear reconnect timer
     if (reconnectTimer.current) {
-      console.log('🔄 Clearing reconnect timer');
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
     }
 
-    // Clear polling timer
-    if (pollingTimer.current) {
-      console.log('🔄 Clearing polling timer');
-      clearInterval(pollingTimer.current);
-      pollingTimer.current = null;
-    }
-
     setConnectionStatus('no_providers');
     navigationInProgress.current = true;
-    console.log('❌ Set connection status to: no_providers');
-    console.log('❌ Set navigation in progress to: true');
-
-    console.log('❌ ===== NAVIGATING TO NO PROVIDERS AVAILABLE SCREEN =====');
-    console.log('❌ Navigation target: /(customer)/NoProvidersAvailableScreen');
-    console.log('❌ Reason for no provider:', reason);
-    console.log('❌ Navigation scheduled in 1500ms');
 
     // Navigate to no providers available screen
     setTimeout(() => {
       try {
-        console.log('❌ EXECUTING NAVIGATION TO NO PROVIDERS SCREEN NOW...');
-        
         const navigationParams = {
-          reason: reason,
-          serviceId: serviceId,
-          serviceName: serviceName,
-          pickupAddress: pickupAddress,
-          dropoffAddress: dropoffAddress,
-          totalAmount: totalAmount,
+          reason,
+          serviceId,
+          serviceName,
+          pickupAddress,
+          dropoffAddress,
+          totalAmount,
           pickupLat: pickupLat?.toString() || '',
           pickupLng: pickupLng?.toString() || '',
         };
-        
-        console.log('❌ Navigation params:', JSON.stringify(navigationParams, null, 2));
         
         router.push({
           pathname: '/(customer)/NoProvidersAvailableScreen',
           params: navigationParams,
         });
         
-        console.log('✅ Navigation to NoProvidersAvailableScreen executed successfully');
+        console.log('✅ Navigation to NoProvidersAvailableScreen executed');
       } catch (navError) {
-        console.error('❌ Navigation error to NoProvidersAvailableScreen:', navError);
-        console.error('❌ Error stack:', navError instanceof Error ? navError.stack : 'No stack');
+        console.error('❌ Navigation error:', navError);
         navigationInProgress.current = false;
-        
-        // Fallback to home
         Alert.alert(
           'Error',
           'Failed to navigate. Please try again.',
@@ -900,41 +768,6 @@ const FindingProviderScreen = () => {
     outputRange: ['0deg', '360deg'],
   });
 
-  // Format schedule display text
-  const getScheduleDisplay = () => {
-    if (serviceTime === 'right_now') {
-      return 'ASAP Service';
-    } else if (serviceTime === 'schedule_later') {
-      if (scheduledDate && scheduledTimeSlot) {
-        try {
-          const date = new Date(scheduledDate);
-          return `Scheduled: ${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
-        } catch {
-          return `Scheduled: ${scheduledDate} at ${scheduledTimeSlot}`;
-        }
-      }
-      return 'Scheduled Service';
-    } else {
-      return 'Not specified';
-    }
-  };
-
-  // Get service-specific display
-  const getServiceSpecificDisplay = () => {
-    if (isCarRental && licenseFront) {
-      return '✓ License verified';
-    }
-    if (isFuelDelivery && fuelType) {
-      const fuelLabel = fuelType === 'petrol' ? 'Petrol' : 
-                        fuelType === 'diesel' ? 'Diesel' : 'Premium';
-      return `Fuel: ${fuelLabel}`;
-    }
-    if (isSpareParts && partDescription) {
-      return 'Part details provided';
-    }
-    return null;
-  };
-
   // Render connection status message
   const renderStatusMessage = () => {
     switch (connectionStatus) {
@@ -942,8 +775,8 @@ const FindingProviderScreen = () => {
         return 'Connecting to server...';
       case 'searching':
         return wsConnected 
-          ? 'Searching for providers' 
-          : 'Connecting to server';
+          ? 'Searching for providers in your area...' 
+          : 'Connecting to server...';
       case 'found':
         return 'Provider found! Redirecting...';
       case 'no_providers':
@@ -975,7 +808,7 @@ const FindingProviderScreen = () => {
         {/* Title */}
         <Text style={styles.title}>Finding a Provider</Text>
 
-        {/* Subtitle with WebSocket indicator */}
+        {/* Subtitle with status */}
         <Text style={styles.subtitle}>
           {renderStatusMessage()}
         </Text>
@@ -1101,43 +934,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     paddingHorizontal: 10,
     fontWeight: '600',
-  },
-  wsIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: height * 0.02,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  wsConnected: {
-    backgroundColor: '#E8F5E9',
-  },
-  wsDisconnected: {
-    backgroundColor: '#FFEBEE',
-  },
-  wsDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  wsDotConnected: {
-    backgroundColor: '#4CAF50',
-  },
-  wsDotDisconnected: {
-    backgroundColor: '#F44336',
-  },
-  wsText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  wsTextConnected: {
-    color: '#2E7D32',
-  },
-  wsTextDisconnected: {
-    color: '#C62828',
   },
   stepsContainer: {
     width: '100%',

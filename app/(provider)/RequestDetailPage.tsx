@@ -1,8 +1,11 @@
 import { Feather } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import React from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Image,
+  Platform,
   SafeAreaView,
   ScrollView,
   StatusBar,
@@ -10,37 +13,104 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Linking,
 } from 'react-native';
+import { providerWebSocket } from '../../services/websocket.service';
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RequestDetails = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
+  const [isLoading, setIsLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [jobData, setJobData] = useState<any>(null);
+  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
 
-  // Extract all params with defaults
-  const jobId = params.jobId as string || '';
-  const bookingId = params.bookingId as string || '';
-  const customerName = params.customerName as string || 'MOHAMMED A.';
-  const customerPhone = params.customerPhone as string || '';
-  const serviceType = params.serviceType as string || 'TOWING SERVICE';
-  const serviceName = params.serviceName as string || serviceType;
-  const price = parseFloat(params.price as string) || 0;
-  const estimatedEarnings = parseFloat(params.estimatedEarnings as string) || price;
-  const pickupLocation = params.pickupLocation as string || 'MAIN STREET, MANAMA';
-  const pickupLat = params.pickupLat as string;
-  const pickupLng = params.pickupLng as string;
-  const dropoffLocation = params.dropoffLocation as string;
-  const dropoffLat = params.dropoffLat as string;
-  const dropoffLng = params.dropoffLng as string;
-  const distance = params.distance as string || '2.5 KM';
-  const urgency = params.urgency as string || 'normal';
-  const description = params.description as string || '';
-  const timestamp = params.timestamp as string;
-  
-  // Vehicle details
-  const vehicleMakeModel = params.vehicleMakeModel as string || 'TOYOTA CAMRY 2020';
-  const vehicleLicensePlate = params.vehicleLicensePlate as string || 'ABC 1234';
-  const vehicleColor = params.vehicleColor as string || 'WHITE';
-  const vehicleType = params.vehicleType as string || 'SEDAN';
+  useEffect(() => {
+    console.log('📱 RequestDetails - Params received:', params);
+    
+    // Check if we have the required data
+    const hasRequiredData = params.jobId || params.bookingId;
+    
+    if (!hasRequiredData) {
+      console.log('❌ No job data found');
+      Alert.alert(
+        'Error',
+        'No job data found',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+      return;
+    }
+
+    // Parse any JSON data if needed
+    let issues: string[] = [];
+    let photos: string[] = [];
+    
+    try {
+      if (params.issues) {
+        issues = JSON.parse(params.issues as string);
+      }
+    } catch (e) {
+      console.log('Error parsing issues:', e);
+    }
+    
+    try {
+      if (params.photos) {
+        photos = JSON.parse(params.photos as string);
+      }
+    } catch (e) {
+      console.log('Error parsing photos:', e);
+    }
+
+    // Set job data from params
+    setJobData({
+      jobId: params.jobId as string,
+      bookingId: params.bookingId as string,
+      customerName: (params.customerName as string) || 'MOHAMMED A.',
+      customerPhone: params.customerPhone as string,
+      serviceType: (params.serviceType as string) || 'TOWING SERVICE',
+      serviceName: (params.serviceName as string) || (params.serviceType as string) || 'TOWING SERVICE',
+      price: parseFloat(params.price as string) || 0,
+      estimatedEarnings: parseFloat(params.estimatedEarnings as string) || parseFloat(params.price as string) || 0,
+      pickupLocation: (params.pickupLocation as string) || 'MAIN STREET, MANAMA',
+      pickupLat: params.pickupLat as string,
+      pickupLng: params.pickupLng as string,
+      dropoffLocation: params.dropoffLocation as string,
+      dropoffLat: params.dropoffLat as string,
+      dropoffLng: params.dropoffLng as string,
+      distance: (params.distance as string) || '2.5 KM',
+      urgency: (params.urgency as string) || 'normal',
+      description: params.description as string,
+      vehicleMakeModel: (params.vehicleMakeModel as string) || 'TOYOTA CAMRY 2020',
+      vehicleLicensePlate: (params.vehicleLicensePlate as string) || 'ABC 1234',
+      vehicleColor: (params.vehicleColor as string) || 'WHITE',
+      vehicleType: (params.vehicleType as string) || 'SEDAN',
+      acceptedAt: params.acceptedAt as string,
+      status: params.status as string || 'accepted',
+      issues,
+      photos,
+    });
+
+    // ✅ Join job room if not already joined
+    joinJobRoom();
+
+    setIsLoading(false);
+  }, []);
+
+  // ✅ NEW: Join job room for real-time updates
+  const joinJobRoom = () => {
+    const jobId = params.jobId as string || params.bookingId as string;
+    if (jobId && !hasJoinedRoom && providerWebSocket.isConnected()) {
+      console.log('🚪 Joining job room:', jobId);
+      providerWebSocket.send('join_job_room', {
+        jobId,
+        role: 'provider'
+      });
+      setHasJoinedRoom(true);
+    }
+  };
 
   // Format price
   const formatPrice = (value: number) => {
@@ -48,7 +118,7 @@ const RequestDetails = () => {
   };
 
   // Calculate provider earnings (85% of job price)
-  const providerEarnings = price * 0.85;
+  const providerEarnings = jobData ? jobData.price * 0.85 : 0;
 
   // Format timestamp
   const getTimeAgo = (timestamp?: string) => {
@@ -64,7 +134,9 @@ const RequestDetails = () => {
 
   // Get urgency color and text
   const getUrgencyDetails = () => {
-    switch(urgency?.toLowerCase()) {
+    if (!jobData) return { color: '#6B7280', bgColor: '#F3F4F6', text: 'STANDARD' };
+    
+    switch(jobData.urgency?.toLowerCase()) {
       case 'emergency':
         return { color: '#DC2626', bgColor: '#FEE2E2', text: 'EMERGENCY' };
       case 'urgent':
@@ -76,32 +148,194 @@ const RequestDetails = () => {
 
   const urgencyDetails = getUrgencyDetails();
 
-  const handleAcceptReject = () => {
-    router.push({
-      pathname: '/RejectRequestScreen',
-      params: {
-        jobId,
-        bookingId,
-        customerName,
-        serviceType,
-        price: price.toString()
-      }
-    });
+  // ✅ FIXED: Handle en-route (heading to customer)
+  const handleEnRoute = () => {
+    Alert.alert(
+      'Start Journey',
+      'Are you on your way to the customer?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes, Start Journey',
+          onPress: async () => {
+            setIsProcessing(true);
+            
+            try {
+              // Update via REST API
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/api/jobs/${jobData.jobId}/en-route`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              // Send en-route status via WebSocket
+              if (providerWebSocket.isConnected()) {
+                providerWebSocket.send('en_route', {
+                  jobId: jobData.jobId,
+                  bookingId: jobData.bookingId,
+                  eta: '10-15 minutes'
+                });
+              }
+              
+              // Navigate to tracking screen
+              router.push({
+                pathname: '/(provider)/ActiveJobScreen',
+                params: {
+                  ...jobData,
+                  status: 'en-route'
+                }
+              });
+            } catch (error) {
+              console.error('Error updating status:', error);
+              Alert.alert('Error', 'Failed to update status');
+              setIsProcessing(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // ✅ FIXED: Handle arrived at location
+  const handleArrived = () => {
+    Alert.alert(
+      'Arrived at Location',
+      'Have you arrived at the pickup location?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes, Arrived',
+          onPress: async () => {
+            setIsProcessing(true);
+            
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/api/jobs/${jobData.jobId}/arrived`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (providerWebSocket.isConnected()) {
+                providerWebSocket.send('arrived', {
+                  jobId: jobData.jobId,
+                  bookingId: jobData.bookingId
+                });
+              }
+              
+              // Update local state
+              setJobData({...jobData, status: 'arrived'});
+              setIsProcessing(false);
+              
+              Alert.alert('Success', 'Customer notified of your arrival');
+            } catch (error) {
+              console.error('Error:', error);
+              setIsProcessing(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // ✅ FIXED: Handle start service
+  const handleStartService = () => {
+    Alert.alert(
+      'Start Service',
+      'Are you ready to begin the service?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Start Service',
+          onPress: async () => {
+            setIsProcessing(true);
+            
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/api/jobs/${jobData.jobId}/start-service`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (providerWebSocket.isConnected()) {
+                providerWebSocket.send('start_service', {
+                  jobId: jobData.jobId,
+                  bookingId: jobData.bookingId
+                });
+              }
+              
+              // Navigate to service screen
+              router.push({
+                pathname: '/(provider)/ServiceInProgress',
+                params: { ...jobData }
+              });
+            } catch (error) {
+              console.error('Error:', error);
+              setIsProcessing(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   const handleCallCustomer = () => {
-    if (customerPhone) {
-      // In a real app, you'd use Linking.openURL(`tel:${customerPhone}`)
-      console.log('Calling:', customerPhone);
+    if (jobData?.customerPhone) {
+      Linking.openURL(`tel:${jobData.customerPhone}`);
     }
   };
 
   const handleNavigate = () => {
-    if (pickupLat && pickupLng) {
-      // In a real app, you'd open maps with coordinates
-      console.log('Navigate to:', pickupLat, pickupLng);
+    if (jobData?.pickupLat && jobData?.pickupLng) {
+      const url = Platform.select({
+        ios: `maps://app?daddr=${jobData.pickupLat},${jobData.pickupLng}`,
+        android: `google.navigation:q=${jobData.pickupLat},${jobData.pickupLng}`,
+      });
+      
+      if (url) {
+        Linking.openURL(url);
+      }
     }
   };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#87CEFA" />
+          <Text style={styles.loadingText}>Loading job details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // No data state
+  if (!jobData) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.errorContainer}>
+          <Feather name="alert-circle" size={48} color="#9CA3AF" />
+          <Text style={styles.errorTitle}>No Job Data</Text>
+          <Text style={styles.errorText}>Unable to load job details.</Text>
+          <TouchableOpacity
+            style={styles.errorBackButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.errorBackButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -117,13 +351,22 @@ const RequestDetails = () => {
         </TouchableOpacity>
         
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>REQUEST DETAILS</Text>
-          <Text style={styles.requestId}>{bookingId ? bookingId.slice(-8) : 'REQ-7891'}</Text>
+          <Text style={styles.headerTitle}>JOB DETAILS</Text>
+          <Text style={styles.requestId}>
+            {jobData.bookingId ? jobData.bookingId.slice(-8) : jobData.jobId?.slice(-8) || 'REQ-7891'}
+          </Text>
         </View>
         
-        <View style={[styles.urgentBadge, { backgroundColor: urgencyDetails.bgColor }]}>
-          <Text style={[styles.urgentText, { color: urgencyDetails.color }]}>
-            {urgencyDetails.text}
+        {/* Status Badge */}
+        <View style={[styles.statusBadge, { 
+          backgroundColor: jobData.status === 'accepted' ? '#DBEAFE' : 
+                          jobData.status === 'en-route' ? '#FEF3C7' : '#F3F4F6'
+        }]}>
+          <Text style={[styles.statusText, { 
+            color: jobData.status === 'accepted' ? '#1E40AF' : 
+                   jobData.status === 'en-route' ? '#92400E' : '#6B7280'
+          }]}>
+            {jobData.status?.toUpperCase() || 'ACCEPTED'}
           </Text>
         </View>
       </View>
@@ -144,9 +387,9 @@ const RequestDetails = () => {
               />
             </View>
             <View style={styles.serviceInfo}>
-              <Text style={styles.serviceTitle}>{serviceName}</Text>
+              <Text style={styles.serviceTitle}>{jobData.serviceName}</Text>
               <Text style={styles.serviceSubtitle}>
-                {getTimeAgo(timestamp)} • {serviceType}
+                {getTimeAgo(jobData.acceptedAt)} • {jobData.serviceType}
               </Text>
             </View>
           </View>
@@ -169,14 +412,14 @@ const RequestDetails = () => {
                 <Feather name="user" size={24} color="#87CEFA" />
               </View>
               <View>
-                <Text style={styles.customerName}>{customerName}</Text>
+                <Text style={styles.customerName}>{jobData.customerName}</Text>
                 <View style={styles.ratingRow}>
                   <Feather name="star" size={12} color="#000" />
                   <Text style={styles.ratingText}>4.5 CUSTOMER RATING</Text>
                 </View>
               </View>
             </View>
-            {customerPhone ? (
+            {jobData.customerPhone ? (
               <TouchableOpacity style={styles.callButton} onPress={handleCallCustomer}>
                 <Image
                   source={require('../../assets/provider/callbutton.png')}
@@ -198,18 +441,18 @@ const RequestDetails = () => {
               <Feather name="truck" size={20} color="#9CA3AF" />
               <View style={styles.vehicleInfo}>
                 <Text style={styles.vehicleLabel}>TYPE & MODEL</Text>
-                <Text style={styles.vehicleValue}>{vehicleMakeModel}</Text>
+                <Text style={styles.vehicleValue}>{jobData.vehicleMakeModel}</Text>
               </View>
             </View>
             
             <View style={styles.detailsGrid}>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>LICENSE PLATE:</Text>
-                <Text style={styles.detailValue}>{vehicleLicensePlate}</Text>
+                <Text style={styles.detailValue}>{jobData.vehicleLicensePlate}</Text>
               </View>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>COLOR:</Text>
-                <Text style={styles.detailValue}>{vehicleColor}</Text>
+                <Text style={styles.detailValue}>{jobData.vehicleColor}</Text>
               </View>
             </View>
           </View>
@@ -231,11 +474,16 @@ const RequestDetails = () => {
               <View style={styles.locationDot} />
               <View style={styles.locationInfo}>
                 <Text style={styles.locationLabel}>PICKUP LOCATION</Text>
-                <Text style={styles.locationAddress}>{pickupLocation}</Text>
+                <Text style={styles.locationAddress}>{jobData.pickupLocation}</Text>
+                {jobData.pickupLat && jobData.pickupLng && (
+                  <Text style={styles.coordinates}>
+                    📍 {parseFloat(jobData.pickupLat).toFixed(6)}, {parseFloat(jobData.pickupLng).toFixed(6)}
+                  </Text>
+                )}
               </View>
             </View>
             
-            {dropoffLocation && (
+            {jobData.dropoffLocation && (
               <>
                 <View style={styles.locationDivider} />
                 
@@ -243,7 +491,12 @@ const RequestDetails = () => {
                   <View style={[styles.locationDot, styles.locationDotOutline]} />
                   <View style={styles.locationInfo}>
                     <Text style={styles.locationLabel}>DROP-OFF LOCATION</Text>
-                    <Text style={styles.locationAddress}>{dropoffLocation}</Text>
+                    <Text style={styles.locationAddress}>{jobData.dropoffLocation}</Text>
+                    {jobData.dropoffLat && jobData.dropoffLng && (
+                      <Text style={styles.coordinates}>
+                        📍 {parseFloat(jobData.dropoffLat).toFixed(6)}, {parseFloat(jobData.dropoffLng).toFixed(6)}
+                      </Text>
+                    )}
                   </View>
                 </View>
               </>
@@ -252,17 +505,32 @@ const RequestDetails = () => {
             <View style={styles.distanceCard}>
               <Feather name="navigation" size={16} color="#87CEFA" />
               <Text style={styles.distanceLabel}>DISTANCE FROM YOU</Text>
-              <Text style={styles.distanceValue}>{distance}</Text>
+              <Text style={styles.distanceValue}>{jobData.distance}</Text>
             </View>
           </View>
         </View>
 
         {/* Customer Notes */}
-        {description && (
+        {jobData.description && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>CUSTOMER NOTES</Text>
             <View style={styles.notesCard}>
-              <Text style={styles.notesText}>{description}</Text>
+              <Text style={styles.notesText}>{jobData.description}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Issues (if available) */}
+        {jobData.issues && jobData.issues.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>ISSUES REPORTED</Text>
+            <View style={styles.issuesCard}>
+              {jobData.issues.map((issue: string, index: number) => (
+                <View key={index} style={styles.issueItem}>
+                  <Feather name="alert-circle" size={14} color="#EF4444" />
+                  <Text style={styles.issueText}>{issue}</Text>
+                </View>
+              ))}
             </View>
           </View>
         )}
@@ -277,7 +545,7 @@ const RequestDetails = () => {
             </View>
             <View style={styles.paymentRow}>
               <Text style={styles.paymentLabel}>SERVICE FEE:</Text>
-              <Text style={styles.paymentValue}>{formatPrice(price)} BHD</Text>
+              <Text style={styles.paymentValue}>{formatPrice(jobData.price)} BHD</Text>
             </View>
             <View style={[styles.paymentRow, styles.earningsHighlight]}>
               <Text style={styles.paymentLabelBold}>YOUR EARNINGS (85%):</Text>
@@ -286,8 +554,8 @@ const RequestDetails = () => {
           </View>
         </View>
 
-        {/* Urgent Request Alert - Only show if urgent or emergency */}
-        {(urgency?.toLowerCase() === 'urgent' || urgency?.toLowerCase() === 'emergency') && (
+        {/* Urgent Request Alert */}
+        {(jobData.urgency?.toLowerCase() === 'urgent' || jobData.urgency?.toLowerCase() === 'emergency') && (
           <View style={[styles.urgentAlert, { backgroundColor: urgencyDetails.bgColor }]}>
             <Feather name="alert-circle" size={20} color={urgencyDetails.color} />
             <View style={styles.urgentAlertContent}>
@@ -295,7 +563,7 @@ const RequestDetails = () => {
                 {urgencyDetails.text} REQUEST
               </Text>
               <Text style={[styles.urgentAlertText, { color: urgencyDetails.color }]}>
-                {urgency === 'emergency' 
+                {jobData.urgency === 'emergency' 
                   ? 'EMERGENCY SITUATION - Immediate assistance required!'
                   : 'This is a priority request. Customer is waiting for immediate assistance.'}
               </Text>
@@ -303,22 +571,48 @@ const RequestDetails = () => {
           </View>
         )}
 
-        {/* Estimated Arrival */}
-        <View style={styles.arrivalCard}>
-          <Feather name="clock" size={20} color="#0891B2" />
-          <View style={styles.arrivalInfo}>
-            <Text style={styles.arrivalTitle}>ESTIMATED ARRIVAL TIME</Text>
-            <Text style={styles.arrivalTime}>8-10 MINUTES BASED ON CURRENT TRAFFIC</Text>
-          </View>
+        {/* ✅ FIXED: Action buttons based on status */}
+        <View style={styles.actionButtonsContainer}>
+          {jobData.status === 'accepted' && (
+            <TouchableOpacity 
+              style={styles.enRouteButton}
+              onPress={handleEnRoute}
+              disabled={isProcessing}
+            >
+              <Text style={styles.enRouteButtonText}>START JOURNEY TO CUSTOMER</Text>
+            </TouchableOpacity>
+          )}
+
+          {jobData.status === 'en-route' && (
+            <TouchableOpacity 
+              style={styles.arrivedButton}
+              onPress={handleArrived}
+              disabled={isProcessing}
+            >
+              <Text style={styles.arrivedButtonText}>I'VE ARRIVED</Text>
+            </TouchableOpacity>
+          )}
+
+          {jobData.status === 'arrived' && (
+            <TouchableOpacity 
+              style={styles.startServiceButton}
+              onPress={handleStartService}
+              disabled={isProcessing}
+            >
+              <Text style={styles.startServiceButtonText}>START SERVICE</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* Action Buttons */}
-        <TouchableOpacity 
-          style={styles.acceptButton}
-          onPress={handleAcceptReject}
-        >
-          <Text style={styles.acceptButtonText}>PROCEED TO ACCEPT/REJECT</Text>
-        </TouchableOpacity>
+        {/* Connection Status */}
+        {!hasJoinedRoom && (
+          <View style={styles.connectionWarning}>
+            <Feather name="wifi-off" size={16} color="#DC2626" />
+            <Text style={styles.connectionWarningText}>
+              Not connected to real-time updates
+            </Text>
+          </View>
+        )}
 
         <TouchableOpacity 
           style={styles.homeButton}
@@ -326,6 +620,13 @@ const RequestDetails = () => {
         >
           <Text style={styles.homeButtonText}>BACK TO HOME</Text>
         </TouchableOpacity>
+
+        {isProcessing && (
+          <View style={styles.processingOverlay}>
+            <ActivityIndicator size="large" color="#87CEFA" />
+            <Text style={styles.processingText}>Processing...</Text>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -372,15 +673,14 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     marginTop: 2,
   },
-  urgentBadge: {
+  statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 29757000,
+    borderRadius: 20,
   },
-  urgentText: {
-    fontSize: 12,
-    fontWeight: '500',
-    letterSpacing: 0,
+  statusText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   // Scroll View
@@ -620,6 +920,12 @@ const styles = StyleSheet.create({
     color: '#000',
     lineHeight: 20,
   },
+  coordinates: {
+    fontSize: 10,
+    color: '#9CA3AF',
+    marginTop: 2,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
   locationDivider: {
     width: 2,
     height: 24,
@@ -659,6 +965,24 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     lineHeight: 20,
     fontWeight: '500',
+  },
+
+  // Issues Card
+  issuesCard: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 12,
+    padding: 16,
+  },
+  issueItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  issueText: {
+    fontSize: 13,
+    color: '#991B1B',
+    marginLeft: 8,
+    flex: 1,
   },
 
   // Payment Card
@@ -726,47 +1050,68 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Arrival Card
-  arrivalCard: {
-    backgroundColor: '#CFFAFE',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-    borderBottomWidth: 1.77,
-    borderBottomColor: "#d1d5dc",
-  },
-  arrivalInfo: {
-    marginLeft: 12,
-    flex: 1,
-  },
-  arrivalTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 4,
-  },
-  arrivalTime: {
-    fontSize: 12,
-    color: '#0891B2',
-    fontWeight: '500',
+  // Action Buttons Container
+  actionButtonsContainer: {
+    marginBottom: 16,
   },
 
-  // Buttons
-  acceptButton: {
-    backgroundColor: '#60A5FA',
+  // Status-based buttons
+  enRouteButton: {
+    backgroundColor: '#3B82F6',
     borderRadius: 12,
-    padding: 16,
+    padding: 18,
     alignItems: 'center',
     marginBottom: 12,
   },
-  acceptButtonText: {
+  enRouteButtonText: {
     fontSize: 15,
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
+  arrivedButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 12,
+    padding: 18,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  arrivedButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  startServiceButton: {
+    backgroundColor: '#8B5CF6',
+    borderRadius: 12,
+    padding: 18,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  startServiceButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+
+  // Connection Warning
+  connectionWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  connectionWarningText: {
+    fontSize: 12,
+    color: '#DC2626',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+
   homeButton: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
@@ -774,12 +1119,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    marginBottom: 16,
   },
   homeButtonText: {
     fontSize: 15,
     fontWeight: '600',
     color: '#000',
     letterSpacing: 0.5,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 24,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#000',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  errorBackButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+  },
+  errorBackButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  processingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  processingText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#87CEFA',
+    marginTop: 12,
   },
 });
 
