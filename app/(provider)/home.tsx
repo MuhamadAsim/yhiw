@@ -3,8 +3,8 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Location from 'expo-location';
-import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,8 +20,8 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
   Vibration,
+  View,
 } from "react-native";
 import MapView, { Marker, Region } from 'react-native-maps';
 import Sidebar from "./components/Sidebar";
@@ -1266,12 +1266,12 @@ const HomePage = () => {
         </View>
 
         {/* Polling Status */}
-        {isOnline && (
+        {/* {isOnline && (
           <View style={styles.pollingStatusContainer}>
             <ActivityIndicator size="small" color="#68bdee" />
             <Text style={styles.pollingStatusText}>Checking for new jobs every 5s</Text>
           </View>
-        )}
+        )} */}
 
         {/* Active Job Queue Status */}
         {Object.keys(jobRequestQueue).length > 0 && (
@@ -1665,14 +1665,14 @@ const styles = StyleSheet.create({
     borderColor: "#E5E7EB",
   },
   performanceValue: {
-    fontSize: 20,
+    fontSize: 17,
     fontWeight: "700",
     color: "#000",
     marginTop: 8,
     marginBottom: 4,
   },
   performanceLabel: {
-    fontSize: 11,
+    fontSize: 9,
     color: "#9CA3AF",
     fontWeight: "500",
     letterSpacing: 0,
