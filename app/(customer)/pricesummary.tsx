@@ -7,6 +7,7 @@ import {
   ScrollView,
   Image,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +17,7 @@ const PriceSummaryScreen = () => {
   const params = useLocalSearchParams();
   const [selectedTip, setSelectedTip] = useState<number>(0);
   const [promoCode, setPromoCode] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -39,7 +41,7 @@ const PriceSummaryScreen = () => {
   const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
   const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
   const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
-  
+
   // Check service types
   const isCarRental = serviceId === '11';
   const isFuelDelivery = serviceId === '3';
@@ -54,7 +56,11 @@ const PriceSummaryScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  
+
+  // Waypoints data
+  const waypointsParam = getStringParam(params.waypoints);
+  const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
+
   // Additional details data
   const urgency = getStringParam(params.urgency) || 'moderate';
   const issues = getParsedArray(params.issues);
@@ -64,7 +70,7 @@ const PriceSummaryScreen = () => {
   const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
   const hasModifications = getStringParam(params.hasModifications) === 'true';
   const needMultilingual = getStringParam(params.needMultilingual) === 'true';
-  
+
   // Vehicle data from VehicleContactInfoScreen
   const vehicleType = getStringParam(params.vehicleType);
   const makeModel = getStringParam(params.makeModel);
@@ -72,23 +78,23 @@ const PriceSummaryScreen = () => {
   const color = getStringParam(params.color);
   const licensePlate = getStringParam(params.licensePlate);
   const selectedVehicle = getStringParam(params.selectedVehicle);
-  
+
   // Contact data from VehicleContactInfoScreen
   const fullName = getStringParam(params.fullName);
   const phoneNumber = getStringParam(params.phoneNumber);
   const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
   const saveVehicle = getStringParam(params.saveVehicle) === 'true';
-  
-  // NEW FIELDS from VehicleContactInfoScreen
+
+  // Special fields from VehicleContactInfoScreen
   const licenseFront = getStringParam(params.licenseFront);
   const licenseBack = getStringParam(params.licenseBack);
   const fuelType = getStringParam(params.fuelType);
   const partDescription = getStringParam(params.partDescription);
-  
+
   // Location skipped flag
   const locationSkipped = getStringParam(params.locationSkipped) === 'true';
-  
+
   // Schedule data
   const serviceTime = getStringParam(params.serviceTime) || 'schedule_later';
   const scheduledDate = getStringParam(params.scheduledDate);
@@ -100,42 +106,151 @@ const PriceSummaryScreen = () => {
     { label: '10 BHD', value: 10 },
     { label: '15 BHD', value: 15 },
   ];
-
   useEffect(() => {
-    // Log received data for debugging
-    console.log('Price Summary - Received data:', {
-      serviceName,
-      serviceId,
-      servicePrice,
-      urgency,
-      issuesCount: issues.length,
-      serviceTime,
-      scheduledDate,
-      scheduledTimeSlot,
-      pickupAddress,
-      dropoffAddress,
-      vehicleType,
-      makeModel,
-      licensePlate,
-      fullName,
-      phoneNumber,
-      // New fields
-      hasLicense: !!licenseFront,
-      fuelType,
-      partDescription,
-      locationSkipped
-    });
+    // Parse waypoints for detailed logging
+    let parsedWaypoints: any[] = [];
+    if (hasWaypoints && waypointsParam) {
+      try {
+        parsedWaypoints = JSON.parse(waypointsParam);
+      } catch (e) {
+        console.error('Error parsing waypoints for log:', e);
+      }
+    }
+
+    // Log ALL received data for debugging
+    console.log('=====================================');
+    console.log('💰 PriceSummary - RECEIVED DATA:');
+    console.log('=====================================');
+
+    // Service Info
+    console.log('📦 SERVICE INFO:');
+    console.log('  • serviceId:', serviceId);
+    console.log('  • serviceName:', serviceName);
+    console.log('  • servicePrice:', servicePrice);
+    console.log('  • serviceCategory:', serviceCategory);
+
+    // Location Data - WITH COORDINATES
+    console.log('📍 LOCATION DATA:');
+    console.log('  • pickupAddress:', pickupAddress);
+    console.log('  • pickupLat:', pickupLat);
+    console.log('  • pickupLng:', pickupLng);
+    console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+    console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+    console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+
+    // Waypoints Data
+    console.log('🛑 WAYPOINTS DATA:');
+    console.log('  • hasWaypoints:', hasWaypoints);
+    console.log('  • waypointsParam raw:', waypointsParam);
+    console.log('  • parsed waypoints count:', parsedWaypoints.length);
+    if (parsedWaypoints.length > 0) {
+      parsedWaypoints.forEach((wp, index) => {
+        console.log(`    Stop ${index + 1}:`);
+        console.log(`      address: ${wp.address}`);
+        console.log(`      lat: ${wp.lat}`);
+        console.log(`      lng: ${wp.lng}`);
+        console.log(`      order: ${wp.order}`);
+      });
+    }
+
+    // Vehicle Data
+    console.log('🚗 VEHICLE DATA:');
+    console.log('  • vehicleType:', vehicleType);
+    console.log('  • makeModel:', makeModel);
+    console.log('  • year:', year);
+    console.log('  • color:', color);
+    console.log('  • licensePlate:', licensePlate);
+    console.log('  • selectedVehicle:', selectedVehicle);
+
+    // Contact Data
+    console.log('👤 CONTACT DATA:');
+    console.log('  • fullName:', fullName);
+    console.log('  • phoneNumber:', phoneNumber);
+    console.log('  • email:', email);
+    console.log('  • emergencyContact:', emergencyContact);
+    console.log('  • saveVehicle:', saveVehicle);
+
+    // Special Fields
+    console.log('🔧 SPECIAL FIELDS:');
+    console.log('  • hasLicenseFront:', !!licenseFront);
+    console.log('  • hasLicenseBack:', !!licenseBack);
+    console.log('  • fuelType:', fuelType || '(not provided)');
+    console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
+
+    // Additional Details
+    console.log('📝 ADDITIONAL DETAILS:');
+    console.log('  • urgency:', urgency);
+    console.log('  • issues count:', issues.length);
+    console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
+    console.log('  • photos count:', photos.length);
+    console.log('  • hasInsurance:', hasInsurance);
+    console.log('  • needSpecificTruck:', needSpecificTruck);
+    console.log('  • hasModifications:', hasModifications);
+    console.log('  • needMultilingual:', needMultilingual);
+
+    // Schedule Data
+    console.log('📅 SCHEDULE DATA:');
+    console.log('  • serviceTime:', serviceTime);
+    console.log('  • scheduledDate:', scheduledDate || '(not provided)');
+    console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
+
+    // Service Types
+    console.log('⚙️ SERVICE TYPES:');
+    console.log('  • isCarRental:', isCarRental);
+    console.log('  • isFuelDelivery:', isFuelDelivery);
+    console.log('  • isSpareParts:', isSpareParts);
+    console.log('  • isTowing:', isTowing);
+    console.log('  • isCarWash:', isCarWash);
+    console.log('  • locationSkipped:', locationSkipped);
+
+    // Price Info
+    console.log('💵 PRICE INFO:');
+    console.log('  • baseServiceFee:', baseServiceFee);
+    console.log('  • distanceFee:', distanceFee);
+    console.log('  • platformServiceFee:', platformServiceFee);
+    console.log('  • tax:', tax);
+    console.log('  • selectedTip:', selectedTip);
+    console.log('  • totalAmount:', totalAmount);
+
+    console.log('=====================================');
+
   }, []);
+
 
   const handleBack = () => {
     router.back();
   };
 
-  const handleContinue = () => {
-    // Navigate to confirm booking screen with ALL collected data
-    router.push({
-      pathname: '/(customer)/ConfirmBooking',
-      params: {
+  // Mock API request function
+  const submitBooking = async (): Promise<boolean> => {
+    // Simulate API call
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        // 90% success rate for demo
+        const success = Math.random() > 0.1;
+        resolve(success);
+      }, 1500); // Simulate network delay
+    });
+  };
+
+  const handleContinue = async () => {
+    // Validate required fields
+    if (!fullName || !phoneNumber) {
+      Alert.alert('Error', 'Missing contact information. Please go back and complete all required fields.');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Prepare booking data for API
+      const bookingData = {
+        // Service info
+        serviceId,
+        serviceName,
+        serviceCategory,
+        basePrice: baseServiceFee,
+
         // Location data
         pickupAddress,
         pickupLat,
@@ -143,57 +258,158 @@ const PriceSummaryScreen = () => {
         dropoffAddress,
         dropoffLat,
         dropoffLng,
-        
-        // Service data
-        serviceId,
-        serviceName,
-        servicePrice,
-        serviceCategory,
-        
-        // Additional details
-        urgency,
-        issues: JSON.stringify(issues),
-        description,
-        photos: JSON.stringify(photos),
-        hasInsurance: String(hasInsurance),
-        needSpecificTruck: String(needSpecificTruck),
-        hasModifications: String(hasModifications),
-        needMultilingual: String(needMultilingual),
-        
+        waypoints: hasWaypoints ? JSON.parse(waypointsParam) : [],
+
+        // Schedule data
+        serviceTime,
+        scheduledDate,
+        scheduledTimeSlot,
+
         // Vehicle data
         vehicleType,
         makeModel,
         year,
         color,
         licensePlate,
-        selectedVehicle,
-        
+
         // Contact data
         fullName,
         phoneNumber,
         email,
         emergencyContact,
-        saveVehicle: String(saveVehicle),
-        
-        // NEW FIELDS from VehicleContactInfo
+
+        // Special fields
         licenseFront,
         licenseBack,
         fuelType,
         partDescription,
-        
-        // Location skipped flag
-        locationSkipped: String(locationSkipped),
-        
-        // Schedule data
-        serviceTime,
-        scheduledDate,
-        scheduledTimeSlot,
-        
+
+        // Additional details
+        urgency,
+        issues,
+        description,
+        hasInsurance,
+        needSpecificTruck,
+        hasModifications,
+        needMultilingual,
+
         // Payment data
-        selectedTip: String(selectedTip),
-        totalAmount: String(totalAmount),
+        tip: selectedTip,
+        totalAmount: totalAmount,
+
+        // Metadata
+        locationSkipped,
+        createdAt: new Date().toISOString(),
+      };
+
+      console.log('Submitting booking:', bookingData);
+
+      // Check if this is a scheduled booking
+      const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
+
+      if (isScheduledBooking) {
+        // For scheduled bookings, make API request and go to home
+        const success = await submitBooking();
+
+        if (success) {
+          Alert.alert(
+            'Booking Saved!',
+            'Your service has been scheduled successfully. You will receive a confirmation shortly.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  // Navigate to home screen (main app)
+                  router.push('/(customer)/home'); // Adjust this path based on your routing structure
+                }
+              }
+            ]
+          );
+        } else {
+          Alert.alert(
+            'Booking Failed',
+            'There was an error saving your booking. Please try again.',
+            [{ text: 'OK' }]
+          );
+        }
+      } else {
+        // For immediate bookings (Right Now), proceed to Confirm Booking screen
+        router.push({
+          pathname: '/(customer)/ConfirmBooking',
+          params: {
+            // Location data
+            pickupAddress,
+            pickupLat,
+            pickupLng,
+            dropoffAddress,
+            dropoffLat,
+            dropoffLng,
+
+            // Waypoints
+            waypoints: waypointsParam,
+            hasWaypoints: String(hasWaypoints),
+
+            // Service data
+            serviceId,
+            serviceName,
+            servicePrice,
+            serviceCategory,
+
+            // Additional details
+            urgency,
+            issues: JSON.stringify(issues),
+            description,
+            photos: JSON.stringify(photos),
+            hasInsurance: String(hasInsurance),
+            needSpecificTruck: String(needSpecificTruck),
+            hasModifications: String(hasModifications),
+            needMultilingual: String(needMultilingual),
+
+            // Vehicle data
+            vehicleType,
+            makeModel,
+            year,
+            color,
+            licensePlate,
+            selectedVehicle,
+
+            // Contact data
+            fullName,
+            phoneNumber,
+            email,
+            emergencyContact,
+            saveVehicle: String(saveVehicle),
+
+            // Special fields
+            licenseFront,
+            licenseBack,
+            fuelType,
+            partDescription,
+
+            // Location skipped flag
+            locationSkipped: String(locationSkipped),
+
+            // Schedule data
+            serviceTime,
+            scheduledDate,
+            scheduledTimeSlot,
+
+            // Payment data
+            selectedTip: String(selectedTip),
+            totalAmount: String(totalAmount),
+          }
+        });
       }
-    });
+    } catch (error) {
+      console.error('Booking error:', error);
+      Alert.alert(
+        'Error',
+        'An unexpected error occurred. Please try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleSelectTip = (value: number) => {
@@ -208,12 +424,12 @@ const PriceSummaryScreen = () => {
 
   // Calculate fees based on service type
   const baseServiceFee = parsePrice(servicePrice);
-  
+
   // Different fee structure for Car Rental
   const distanceFee = isCarRental ? 0 : 15; // No distance fee for car rental
   const platformServiceFee = 5;
   const taxRate = 0.05;
-  
+
   const subtotal = baseServiceFee + distanceFee + platformServiceFee;
   const tax = Math.round(subtotal * taxRate);
   const totalAmount = subtotal + tax + (selectedTip || 0);
@@ -234,6 +450,18 @@ const PriceSummaryScreen = () => {
     }
   };
 
+  // Check if this is a scheduled booking
+  const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
+
+  // Get button text based on booking type
+  const getButtonText = () => {
+    if (isScheduledBooking) {
+      return 'Save Booking';
+    } else {
+      return 'Continue to Confirm';
+    }
+  };
+
   // Get service-specific summary details
   const getServiceSpecificSummary = () => {
     if (isCarRental && licenseFront) {
@@ -249,8 +477,8 @@ const PriceSummaryScreen = () => {
         <View style={styles.summaryRow}>
           <Text style={styles.summaryLabel}>Fuel Type:</Text>
           <Text style={styles.summaryValue}>
-            {fuelType === 'petrol' ? 'Petrol' : 
-             fuelType === 'diesel' ? 'Diesel' : 'Premium'}
+            {fuelType === 'petrol' ? 'Petrol' :
+              fuelType === 'diesel' ? 'Diesel' : 'Premium'}
           </Text>
         </View>
       );
@@ -291,8 +519,8 @@ const PriceSummaryScreen = () => {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-          <Image 
-            source={require('../../assets/customer/back_button.png')} 
+          <Image
+            source={require('../../assets/customer/back_button.png')}
             style={styles.backIcon}
           />
         </TouchableOpacity>
@@ -301,8 +529,8 @@ const PriceSummaryScreen = () => {
           <Text style={styles.headerSubtitle}>Step {getStepNumber()} of {getTotalSteps()}</Text>
         </View>
         <TouchableOpacity style={styles.editButton}>
-          <Image 
-            source={require('../../assets/customer/LanguageToggle.png')} 
+          <Image
+            source={require('../../assets/customer/LanguageToggle.png')}
             style={styles.editIcon}
           />
         </TouchableOpacity>
@@ -311,9 +539,19 @@ const PriceSummaryScreen = () => {
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: getProgressPercentage() as any}]} />
+          <View style={[styles.progressFill, { width: getProgressPercentage() as any }]} />
         </View>
       </View>
+
+      {/* Scheduled Booking Banner */}
+      {isScheduledBooking && (
+        <View style={styles.scheduledBanner}>
+          <Ionicons name="calendar" size={20} color="#FFFFFF" />
+          <Text style={styles.scheduledBannerText}>
+            Scheduled for {getScheduleDisplay()}
+          </Text>
+        </View>
+      )}
 
       {/* Service Banner for special services */}
       {isCarRental && (
@@ -349,15 +587,15 @@ const PriceSummaryScreen = () => {
         {/* Booking Summary */}
         <View style={styles.summaryCard}>
           <Text style={styles.cardTitle}>BOOKING SUMMARY</Text>
-          
+
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Service:</Text>
             <Text style={styles.summaryValue}>{serviceName}</Text>
           </View>
-          
+
           {/* Show service-specific summary */}
           {getServiceSpecificSummary()}
-          
+
           {/* Show pickup only if not locationSkipped or if it's a valid address */}
           {!locationSkipped && pickupAddress && pickupAddress !== 'Location not required for this service' && (
             <View style={styles.summaryRow}>
@@ -367,7 +605,7 @@ const PriceSummaryScreen = () => {
               </Text>
             </View>
           )}
-          
+
           {dropoffAddress && !locationSkipped && (
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Dropoff:</Text>
@@ -376,7 +614,17 @@ const PriceSummaryScreen = () => {
               </Text>
             </View>
           )}
-          
+
+          {/* Show waypoints count if any */}
+          {hasWaypoints && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Stops:</Text>
+              <Text style={styles.summaryValue}>
+                {getParsedArray(params.waypoints).length} stops
+              </Text>
+            </View>
+          )}
+
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Schedule:</Text>
             <Text style={styles.summaryValue}>{getScheduleDisplay()}</Text>
@@ -386,8 +634,8 @@ const PriceSummaryScreen = () => {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Urgency:</Text>
               <Text style={styles.summaryValue}>
-                {urgency === 'urgent' ? 'Urgent' : 
-                 urgency === 'moderate' ? 'Moderate' : 'Not Urgent'}
+                {urgency === 'urgent' ? 'Urgent' :
+                  urgency === 'moderate' ? 'Moderate' : 'Not Urgent'}
               </Text>
             </View>
           )}
@@ -412,43 +660,43 @@ const PriceSummaryScreen = () => {
         {/* Price Breakdown */}
         <View style={styles.priceCard}>
           <Text style={styles.cardTitle}>PRICE BREAKDOWN</Text>
-          
+
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Base Service Fee</Text>
             <Text style={styles.priceValue}>{baseServiceFee} BHD</Text>
           </View>
-          
+
           {!isCarRental && (
             <View style={styles.priceRow}>
               <Text style={styles.priceLabel}>Distance Fee (~5 km)</Text>
               <Text style={styles.priceValue}>{distanceFee} BHD</Text>
             </View>
           )}
-          
+
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Platform Service Fee</Text>
             <Text style={styles.priceValue}>{platformServiceFee} BHD</Text>
           </View>
-          
+
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Tax (5%)</Text>
             <Text style={styles.priceValue}>{tax} BHD</Text>
           </View>
-          
+
           <View style={styles.divider} />
-          
+
           <View style={styles.priceRow}>
             <Text style={styles.subtotalLabel}>Subtotal</Text>
             <Text style={styles.subtotalValue}>{subtotal.toFixed(2)} BHD</Text>
           </View>
-          
+
           {selectedTip > 0 && (
             <View style={styles.priceRow}>
               <Text style={styles.priceLabel}>Tip</Text>
               <Text style={styles.priceValue}>{selectedTip} BHD</Text>
             </View>
           )}
-          
+
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total Amount</Text>
             <Text style={styles.totalValue}>{totalAmount.toFixed(2)} BHD</Text>
@@ -459,7 +707,7 @@ const PriceSummaryScreen = () => {
         {!isCarRental && (
           <View style={styles.tipCard}>
             <Text style={styles.cardTitle}>ADD TIP (OPTIONAL)</Text>
-            
+
             <View style={styles.tipOptionsContainer}>
               {tipOptions.map((option) => (
                 <TouchableOpacity
@@ -481,7 +729,7 @@ const PriceSummaryScreen = () => {
                 </TouchableOpacity>
               ))}
             </View>
-            
+
             <Text style={styles.tipNote}>
               100% of your tip goes directly to the service provider
             </Text>
@@ -499,7 +747,7 @@ const PriceSummaryScreen = () => {
         {/* Payment Method */}
         <View style={styles.paymentCard}>
           <Text style={styles.cardTitle}>PAYMENT METHOD</Text>
-          
+
           {/* MVP Notice */}
           <View style={styles.mvpNotice}>
             <Ionicons name="information-circle" size={20} color="#8B0000" />
@@ -508,7 +756,7 @@ const PriceSummaryScreen = () => {
                 MVP Notice - Cash Payment Only
               </Text>
               <Text style={styles.mvpNoticeText}>
-                This is an MVP version. Only cash payment is available at this time. 
+                This is an MVP version. Only cash payment is available at this time.
                 Online payment methods will be added in future updates.
               </Text>
             </View>
@@ -517,8 +765,8 @@ const PriceSummaryScreen = () => {
           {/* Cash Payment Option */}
           <TouchableOpacity style={styles.paymentOption}>
             <View style={styles.paymentOptionLeft}>
-              <Image 
-                source={require('../../assets/customer/cash.png')} 
+              <Image
+                source={require('../../assets/customer/cash.png')}
                 style={styles.paymentIcon}
               />
               <View>
@@ -536,8 +784,8 @@ const PriceSummaryScreen = () => {
           {/* Disabled Payment Options */}
           <View style={styles.paymentOptionDisabled}>
             <View style={styles.paymentOptionLeft}>
-              <Image 
-                source={require('../../assets/customer/credit.png')} 
+              <Image
+                source={require('../../assets/customer/credit.png')}
                 style={[styles.paymentIcon, styles.disabledIcon]}
               />
               <View>
@@ -550,8 +798,8 @@ const PriceSummaryScreen = () => {
 
           <View style={styles.paymentOptionDisabled}>
             <View style={styles.paymentOptionLeft}>
-              <Image 
-                source={require('../../assets/customer/yhiw.png')} 
+              <Image
+                source={require('../../assets/customer/yhiw.png')}
                 style={[styles.paymentIcon, styles.disabledIcon]}
               />
               <View>
@@ -570,7 +818,7 @@ const PriceSummaryScreen = () => {
             <Text style={styles.guaranteeTitle}>Price Guarantee</Text>
           </View>
           <Text style={styles.guaranteeText}>
-            {isCarRental 
+            {isCarRental
               ? 'Final price includes all rental fees and insurance. No hidden charges.'
               : 'Final price may vary by ±10% based on actual distance and service time. You\'ll be notified of any changes before service begins and can cancel free of charge.'
             }
@@ -584,9 +832,9 @@ const PriceSummaryScreen = () => {
               HOW IS THE PRICE CALCULATED?
             </Text>
           </View>
-          
+
           <View style={styles.calculationDivider} />
-          
+
           {isCarRental ? (
             // Car Rental specific calculation
             <>
@@ -655,14 +903,23 @@ const PriceSummaryScreen = () => {
           <Text style={styles.totalToPayLabel}>Total to Pay</Text>
           <Text style={styles.totalToPayAmount}>{totalAmount.toFixed(2)} BHD</Text>
         </View>
-        <TouchableOpacity
-          style={styles.continueButton}
-          onPress={handleContinue}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.continueButtonText}>Continue</Text>
-          <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-        </TouchableOpacity>
+
+        {isSubmitting ? (
+          <View style={styles.loadingButton}>
+            <ActivityIndicator size="small" color="#FFFFFF" />
+            <Text style={styles.loadingButtonText}>Processing...</Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.continueButton}
+            onPress={handleContinue}
+            activeOpacity={0.8}
+            disabled={isSubmitting}
+          >
+            <Text style={styles.continueButtonText}>{getButtonText()}</Text>
+            <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -727,6 +984,20 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
+  },
+  scheduledBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  scheduledBannerText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    flex: 1,
+    fontWeight: '500',
   },
   serviceBanner: {
     flexDirection: 'row',
@@ -1112,13 +1383,27 @@ const styles = StyleSheet.create({
   continueButton: {
     backgroundColor: '#68bdee',
     paddingVertical: 14,
-    paddingHorizontal: 30,
+    paddingHorizontal: 20,
     borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
   continueButtonText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  loadingButton: {
+    backgroundColor: '#b0b0b0',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  loadingButtonText: {
     fontSize: 14,
     fontWeight: 'bold',
     color: '#FFFFFF',

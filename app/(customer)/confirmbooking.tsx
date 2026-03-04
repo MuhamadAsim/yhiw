@@ -97,33 +97,110 @@ const ConfirmBookingScreen = () => {
   // Location skipped flag
   const locationSkipped = getStringParam(params.locationSkipped) === 'true';
 
-  useEffect(() => {
-    // Log received data for debugging
-    console.log('Confirm Booking - Received data:', {
-      serviceName,
-      serviceId,
-      servicePrice,
-      pickupAddress,
-      dropoffAddress,
-      urgency,
-      serviceTime,
-      scheduledDate,
-      scheduledTimeSlot,
-      totalAmount,
-      vehicleType,
-      makeModel,
-      licensePlate,
-      fullName,
-      phoneNumber,
-      color,
-      year,
-      // New fields
-      hasLicense: !!licenseFront,
-      fuelType,
-      partDescription,
-      locationSkipped
-    });
-  }, []);
+ useEffect(() => {
+  // Log ALL received data for debugging
+  console.log('=====================================');
+  console.log('✅ ConfirmBooking - RECEIVED DATA:');
+  console.log('=====================================');
+  
+  // Service Info
+  console.log('📦 SERVICE INFO:');
+  console.log('  • serviceId:', serviceId);
+  console.log('  • serviceName:', serviceName);
+  console.log('  • servicePrice:', servicePrice);
+  console.log('  • serviceCategory:', serviceCategory);
+  
+  // Location Data - WITH COORDINATES
+  console.log('📍 LOCATION DATA:');
+  console.log('  • pickupAddress:', pickupAddress);
+  console.log('  • pickupLat:', pickupLat);
+  console.log('  • pickupLng:', pickupLng);
+  console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+  console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+  console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+  
+  // Waypoints Data - Parse if available
+  const waypointsParam = getStringParam(params.waypoints);
+  const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
+  
+  if (hasWaypoints && waypointsParam) {
+    try {
+      const parsedWaypoints = JSON.parse(waypointsParam);
+      console.log('🛑 WAYPOINTS DATA:');
+      console.log('  • hasWaypoints:', hasWaypoints);
+      console.log('  • waypoints count:', parsedWaypoints.length);
+      parsedWaypoints.forEach((wp: any, index: number) => {
+        console.log(`    Stop ${index + 1}:`);
+        console.log(`      address: ${wp.address}`);
+        console.log(`      lat: ${wp.lat}`);
+        console.log(`      lng: ${wp.lng}`);
+        console.log(`      order: ${wp.order}`);
+      });
+    } catch (e) {
+      console.log('  • Error parsing waypoints:', e);
+    }
+  } else {
+    console.log('  • hasWaypoints:', hasWaypoints);
+  }
+  
+  // Vehicle Data
+  console.log('🚗 VEHICLE DATA:');
+  console.log('  • vehicleType:', vehicleType);
+  console.log('  • makeModel:', makeModel);
+  console.log('  • year:', year);
+  console.log('  • color:', color);
+  console.log('  • licensePlate:', licensePlate);
+  console.log('  • selectedVehicle:', selectedVehicle);
+  
+  // Contact Data
+  console.log('👤 CONTACT DATA:');
+  console.log('  • fullName:', fullName);
+  console.log('  • phoneNumber:', phoneNumber);
+  console.log('  • email:', email);
+  console.log('  • emergencyContact:', emergencyContact);
+  console.log('  • saveVehicle:', saveVehicle);
+  
+  // Special Fields
+  console.log('🔧 SPECIAL FIELDS:');
+  console.log('  • hasLicenseFront:', !!licenseFront);
+  console.log('  • hasLicenseBack:', !!licenseBack);
+  console.log('  • fuelType:', fuelType || '(not provided)');
+  console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
+  
+  // Additional Details
+  console.log('📝 ADDITIONAL DETAILS:');
+  console.log('  • urgency:', urgency);
+  console.log('  • issues count:', issues.length);
+  console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
+  console.log('  • photos count:', photos.length);
+  console.log('  • hasInsurance:', hasInsurance);
+  console.log('  • needSpecificTruck:', needSpecificTruck);
+  console.log('  • hasModifications:', hasModifications);
+  console.log('  • needMultilingual:', needMultilingual);
+  
+  // Schedule Data
+  console.log('📅 SCHEDULE DATA:');
+  console.log('  • serviceTime:', serviceTime);
+  console.log('  • scheduledDate:', scheduledDate || '(not provided)');
+  console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
+  
+  // Payment Data
+  console.log('💰 PAYMENT DATA:');
+  console.log('  • selectedTip:', selectedTip);
+  console.log('  • totalAmount:', totalAmount);
+  
+  // Service Types
+  console.log('⚙️ SERVICE TYPES:');
+  console.log('  • isCarRental:', isCarRental);
+  console.log('  • isFuelDelivery:', isFuelDelivery);
+  console.log('  • isSpareParts:', isSpareParts);
+  console.log('  • isTowing:', isTowing);
+  console.log('  • isCarWash:', isCarWash);
+  console.log('  • locationSkipped:', locationSkipped);
+  
+  console.log('=====================================');
+  
+}, []);
 
   const handleBack = () => {
     router.back();

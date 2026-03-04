@@ -26,7 +26,14 @@ interface SavedVehicle {
   year?: string;
 }
 
-// Update the Omit type to make name optional for creation
+// New type for waypoints
+interface Waypoint {
+  address: string;
+  lat: string;
+  lng: string;
+  order: number;
+}
+
 type NewVehicle = Omit<SavedVehicle, 'id'>;
 
 interface VehicleTypeOption {
@@ -47,8 +54,8 @@ interface UserData {
   phoneNumber?: string;
   firebaseUserId?: string;
   uid?: string;
-  displayName?: string; // Common in Firebase
-  fullName?: string; // Alternative field name
+  displayName?: string;
+  fullName?: string;
   firstName?: string;
   lastName?: string;
 }
@@ -84,6 +91,9 @@ const VehicleContactInfoScreen = () => {
   const [savedVehicles, setSavedVehicles] = useState<SavedVehicle[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  // Waypoints state
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
     if (!param) return '';
@@ -97,6 +107,11 @@ const VehicleContactInfoScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
+  
+  // Get waypoints from previous screen
+  const waypointsParam = getStringParam(params.waypoints);
+  const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
+  
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
@@ -113,36 +128,73 @@ const VehicleContactInfoScreen = () => {
   const isFuelDelivery = serviceId === '3';
   const isSpareParts = serviceId === '12';
 
+  // Parse waypoints from params
+  useEffect(() => {
+    if (hasWaypoints && waypointsParam) {
+      try {
+        const parsedWaypoints = JSON.parse(waypointsParam);
+        setWaypoints(parsedWaypoints);
+        console.log('Loaded waypoints:', parsedWaypoints);
+      } catch (error) {
+        console.error('Error parsing waypoints:', error);
+        setWaypoints([]);
+      }
+    }
+  }, [waypointsParam, hasWaypoints]);
+
   // Load user data from AsyncStorage
   useEffect(() => {
     loadUserData();
     loadSavedVehicles();
   }, []);
 
-  useEffect(() => {
-    // Check if location was skipped
-    if (locationSkippedParam === 'true') {
-      setLocationSkipped(true);
-    }
+ useEffect(() => {
+  // Check if location was skipped
+  if (locationSkippedParam === 'true') {
+    setLocationSkipped(true);
+  }
 
-    // Log received data for debugging
-    console.log('VehicleContactInfo - Received data:', {
-      pickupAddress,
-      dropoffAddress,
-      serviceName,
-      servicePrice,
-      serviceId,
-      isCarRental,
-      isFuelDelivery,
-      isSpareParts,
-      requiresFuelType,
-      requiresLicense,
-      requiresTextDescription,
-      locationSkipped: locationSkippedParam
-    });
-  }, []);
-
-  // FIXED: Load user data from AsyncStorage with better name extraction
+  // Log ALL received data for debugging
+  console.log('=====================================');
+  console.log('📱 VehicleContactInfo - RECEIVED DATA:');
+  console.log('=====================================');
+  
+  // Service Info
+  console.log('📦 SERVICE INFO:');
+  console.log('  • serviceId:', serviceId);
+  console.log('  • serviceName:', serviceName);
+  console.log('  • servicePrice:', servicePrice);
+  console.log('  • serviceCategory:', serviceCategory);
+  
+  // Location Data - WITH COORDINATES
+  console.log('📍 LOCATION DATA:');
+  console.log('  • pickupAddress:', pickupAddress);
+  console.log('  • pickupLat:', pickupLat);
+  console.log('  • pickupLng:', pickupLng);
+  console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+  console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+  console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+  
+  // Waypoints Data
+  console.log('🛑 WAYPOINTS DATA:');
+  console.log('  • hasWaypoints:', hasWaypoints);
+  console.log('  • waypointsParam raw:', waypointsParam);
+  console.log('  • parsed waypoints:', waypoints);
+  
+  // Service Requirements
+  console.log('⚙️ SERVICE REQUIREMENTS:');
+  console.log('  • requiresFuelType:', requiresFuelType);
+  console.log('  • requiresLicense:', requiresLicense);
+  console.log('  • requiresTextDescription:', requiresTextDescription);
+  console.log('  • isCarRental:', isCarRental);
+  console.log('  • isFuelDelivery:', isFuelDelivery);
+  console.log('  • isSpareParts:', isSpareParts);
+  console.log('  • locationSkipped:', locationSkippedParam);
+  
+  console.log('=====================================');
+  
+}, [waypoints]);
+  // Load user data from AsyncStorage
   const loadUserData = async () => {
     try {
       // Try to get userData first
@@ -237,7 +289,7 @@ const VehicleContactInfoScreen = () => {
     }
   };
 
-  // FIXED: Check for duplicate vehicle before saving
+  // Check for duplicate vehicle before saving
   const isVehicleDuplicate = (vehicleData: {
     type: string;
     make: string;
@@ -256,7 +308,7 @@ const VehicleContactInfoScreen = () => {
     );
   };
 
-  // Save vehicle to AsyncStorage - FIXED: Now checks for duplicates
+  // Save vehicle to AsyncStorage
   const saveVehicleToStorage = async (vehicleData: {
     type: string;
     make: string;
@@ -281,7 +333,7 @@ const VehicleContactInfoScreen = () => {
       
       // Create new vehicle with all required fields
       const newVehicle: SavedVehicle = {
-        id: Date.now(), // Simple ID generation
+        id: Date.now(),
         name: vehicleName,
         type: vehicleData.type,
         plate: vehicleData.plate,
@@ -296,8 +348,6 @@ const VehicleContactInfoScreen = () => {
       setSavedVehicles(vehicles);
       
       console.log('Vehicle saved successfully:', newVehicle);
-      
-      // Optionally show a success message
       Alert.alert('Success', 'Vehicle saved successfully!');
       return true;
     } catch (error) {
@@ -410,52 +460,59 @@ const VehicleContactInfoScreen = () => {
       });
     }
 
+    // Prepare navigation params
+    const navigationParams: Record<string, string> = {
+      // Location data from previous screen
+      pickupAddress,
+      pickupLat,
+      pickupLng,
+      dropoffAddress,
+      dropoffLat,
+      dropoffLng,
+      
+      // Waypoints data
+      waypoints: waypointsParam,
+      hasWaypoints: hasWaypoints ? 'true' : 'false',
+      
+      // Service data from previous screen
+      serviceName,
+      servicePrice,
+      serviceCategory,
+      serviceId,
+      
+      // Vehicle data
+      vehicleType: selectedVehicleType,
+      makeModel,
+      year,
+      color,
+      licensePlate,
+      selectedVehicle: selectedVehicle ? String(selectedVehicle) : '',
+      
+      // Contact data
+      fullName,
+      phoneNumber,
+      email,
+      emergencyContact,
+      saveVehicle: String(saveVehicle),
+      
+      // License data for Car Rental
+      licenseFront,
+      licenseBack,
+      
+      // Fuel type for Fuel Delivery
+      fuelType,
+      
+      // Part description for Spare Parts
+      partDescription,
+      
+      // Flag for location skipped
+      locationSkipped: locationSkipped ? 'true' : 'false',
+    };
+
     // Navigate to additional details screen with all collected data
     router.push({
       pathname: '/(customer)/AdditionalDetails',
-      params: {
-        // Location data from previous screen (or placeholder if skipped)
-        pickupAddress,
-        pickupLat,
-        pickupLng,
-        dropoffAddress,
-        dropoffLat,
-        dropoffLng,
-        
-        // Service data from previous screen
-        serviceName,
-        servicePrice,
-        serviceCategory,
-        serviceId,
-        
-        // Vehicle data
-        vehicleType: selectedVehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-        selectedVehicle: selectedVehicle ? String(selectedVehicle) : '',
-        
-        // Contact data
-        fullName,
-        phoneNumber,
-        email,
-        emergencyContact,
-        saveVehicle: String(saveVehicle),
-        
-        // License data for Car Rental
-        licenseFront,
-        licenseBack,
-        
-        // Fuel type for Fuel Delivery
-        fuelType,
-        
-        // Part description for Spare Parts
-        partDescription,
-        
-        // Flag for location skipped
-        locationSkipped: locationSkipped ? 'true' : 'false',
-      }
+      params: navigationParams
     });
   };
 
@@ -485,13 +542,13 @@ const VehicleContactInfoScreen = () => {
 
   // Get service-specific helper text
   const getServiceHelperText = () => {
-    if (serviceId === '11') { // Car Rental
+    if (serviceId === '11') {
       return "Driver's license upload required";
-    } else if (serviceId === '12') { // Spare Parts
+    } else if (serviceId === '12') {
       return "Please describe the part you need";
-    } else if (serviceId === '3') { // Fuel Delivery
+    } else if (serviceId === '3') {
       return "Select fuel type";
-    } else if (serviceId === '9' || serviceId === '10') { // Car Wash/Detailing
+    } else if (serviceId === '9' || serviceId === '10') {
       return "This helps us identify your vehicle for the appointment";
     }
     return "This helps the provider identify your vehicle";
@@ -501,6 +558,8 @@ const VehicleContactInfoScreen = () => {
   const getButtonText = () => {
     return 'Continue to Additional Details';
   };
+
+
 
   return (
     <View style={styles.container}>
@@ -518,6 +577,7 @@ const VehicleContactInfoScreen = () => {
           <Text style={styles.headerSubtitle}>Step 2 of 7</Text>
         </View>
       </View>
+
 
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
@@ -963,6 +1023,39 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+ 
+  locationItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  locationDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  locationText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#3c3c3c',
+  },
+  locationSkippedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f5ff',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#68bdee',
+  },
+  locationSkippedText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    flex: 1,
+    fontWeight: '500',
+  },
   progressBarContainer: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
@@ -978,23 +1071,6 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
-  },
-  locationSkippedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#e3f5ff',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    marginBottom: 1,
-    gap: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#68bdee',
-  },
-  locationSkippedText: {
-    fontSize: 12,
-    color: '#3c3c3c',
-    flex: 1,
-    fontWeight: '500',
   },
   scrollView: {
     flex: 1,

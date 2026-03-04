@@ -49,6 +49,14 @@ interface Coordinates {
   longitude: number;
 }
 
+// New type for waypoints (stops between pickup and dropoff)
+interface Waypoint {
+  id: string;
+  address: string;
+  coordinates: Coordinates;
+  title?: string;
+}
+
 const LocationDetailsScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -58,14 +66,23 @@ const LocationDetailsScreen = () => {
   const [dropoffLocation, setDropoffLocation] = useState<string>('');
   const [pickupCoordinates, setPickupCoordinates] = useState<Coordinates | null>(null);
   const [dropoffCoordinates, setDropoffCoordinates] = useState<Coordinates | null>(null);
+  
+  // New state for waypoints (intermediate stops)
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+  const [activeWaypointIndex, setActiveWaypointIndex] = useState<number | null>(null);
+  
   const [pickupSuggestions, setPickupSuggestions] = useState<LocationSuggestion[]>([]);
   const [dropoffSuggestions, setDropoffSuggestions] = useState<LocationSuggestion[]>([]);
+  const [waypointSuggestions, setWaypointSuggestions] = useState<LocationSuggestion[]>([]);
+  
   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
   const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
+  const [showWaypointSuggestions, setShowWaypointSuggestions] = useState(false);
+  
   const [isLoading, setIsLoading] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
-  const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | null>(null);
+  const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | 'waypoint' | null>(null);
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
@@ -80,7 +97,7 @@ const LocationDetailsScreen = () => {
     address: string;
     latitude: number;
     longitude: number;
-    type: 'pickup' | 'dropoff';
+    type: 'pickup' | 'dropoff' | 'waypoint';
   } | null>(null);
   const [saveLocationTitle, setSaveLocationTitle] = useState('');
   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
@@ -117,6 +134,19 @@ const LocationDetailsScreen = () => {
     loadUserData();
     getCurrentLocationAndSetDefault();
   }, []);
+
+  // Update map when waypoints change
+  useEffect(() => {
+    if (pickupCoordinates && dropoffCoordinates && waypoints.length > 0) {
+      fitMapToAllPoints();
+    } else if (pickupCoordinates && dropoffCoordinates) {
+      fitMapToCoordinates(pickupCoordinates, dropoffCoordinates);
+    } else if (pickupCoordinates) {
+      fitMapToSinglePoint(pickupCoordinates);
+    } else if (dropoffCoordinates) {
+      fitMapToSinglePoint(dropoffCoordinates);
+    }
+  }, [waypoints.length]);
 
   const loadUserData = async () => {
     try {
@@ -306,14 +336,17 @@ const LocationDetailsScreen = () => {
     }
   };
 
-  const searchLocation = async (query: string, type: 'pickup' | 'dropoff') => {
+  const searchLocation = async (query: string, type: 'pickup' | 'dropoff' | 'waypoint') => {
     if (query.length < 3) {
       if (type === 'pickup') {
         setPickupSuggestions([]);
         setShowPickupSuggestions(false);
-      } else {
+      } else if (type === 'dropoff') {
         setDropoffSuggestions([]);
         setShowDropoffSuggestions(false);
+      } else {
+        setWaypointSuggestions([]);
+        setShowWaypointSuggestions(false);
       }
       return;
     }
@@ -362,18 +395,24 @@ const LocationDetailsScreen = () => {
         if (type === 'pickup') {
           setPickupSuggestions(suggestions);
           setShowPickupSuggestions(suggestions.length > 0);
-        } else {
+        } else if (type === 'dropoff') {
           setDropoffSuggestions(suggestions);
           setShowDropoffSuggestions(suggestions.length > 0);
+        } else {
+          setWaypointSuggestions(suggestions);
+          setShowWaypointSuggestions(suggestions.length > 0);
         }
       } else {
         // No results found
         if (type === 'pickup') {
           setPickupSuggestions([]);
           setShowPickupSuggestions(false);
-        } else {
+        } else if (type === 'dropoff') {
           setDropoffSuggestions([]);
           setShowDropoffSuggestions(false);
+        } else {
+          setWaypointSuggestions([]);
+          setShowWaypointSuggestions(false);
         }
       }
     } catch (error) {
@@ -382,9 +421,12 @@ const LocationDetailsScreen = () => {
       if (type === 'pickup') {
         setPickupSuggestions([]);
         setShowPickupSuggestions(false);
-      } else {
+      } else if (type === 'dropoff') {
         setDropoffSuggestions([]);
         setShowDropoffSuggestions(false);
+      } else {
+        setWaypointSuggestions([]);
+        setShowWaypointSuggestions(false);
       }
     } finally {
       setIsSearching(false);
@@ -401,7 +443,15 @@ const LocationDetailsScreen = () => {
     searchLocation(text, 'dropoff');
   };
 
-  const handleSelectLocation = (location: LocationSuggestion, type: 'pickup' | 'dropoff') => {
+  const handleWaypointChange = (text: string, index: number) => {
+    const updatedWaypoints = [...waypoints];
+    updatedWaypoints[index] = { ...updatedWaypoints[index], address: text };
+    setWaypoints(updatedWaypoints);
+    setActiveWaypointIndex(index);
+    searchLocation(text, 'waypoint');
+  };
+
+  const handleSelectLocation = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint', waypointIndex?: number) => {
     if (type === 'pickup') {
       setPickupLocation(location.address);
       setPickupCoordinates({
@@ -412,14 +462,10 @@ const LocationDetailsScreen = () => {
       setShowPickupSuggestions(false);
       setFocusedInput(null);
       
-      const newRegion = {
+      fitMapToSinglePoint({
         latitude: location.latitude,
         longitude: location.longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      };
-      setRegion(newRegion);
-      mapRef.current?.animateToRegion(newRegion, 1000);
+      });
 
       // Show save location option only if user is signed in
       if (userToken && firebaseUserId) {
@@ -434,7 +480,7 @@ const LocationDetailsScreen = () => {
           );
         }, 500);
       }
-    } else {
+    } else if (type === 'dropoff') {
       setDropoffLocation(location.address);
       setDropoffCoordinates({
         latitude: location.latitude,
@@ -445,19 +491,12 @@ const LocationDetailsScreen = () => {
       setFocusedInput(null);
       
       if (pickupCoordinates) {
-        fitMapToCoordinates(pickupCoordinates, {
+        fitMapToAllPoints();
+      } else {
+        fitMapToSinglePoint({
           latitude: location.latitude,
           longitude: location.longitude,
         });
-      } else {
-        const newRegion = {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          latitudeDelta: 0.02,
-          longitudeDelta: 0.02,
-        };
-        setRegion(newRegion);
-        mapRef.current?.animateToRegion(newRegion, 1000);
       }
 
       // Show save location option only if user is signed in
@@ -473,6 +512,24 @@ const LocationDetailsScreen = () => {
           );
         }, 500);
       }
+    } else if (type === 'waypoint' && waypointIndex !== undefined) {
+      const updatedWaypoints = [...waypoints];
+      updatedWaypoints[waypointIndex] = {
+        id: `waypoint-${Date.now()}-${waypointIndex}`,
+        address: location.address,
+        coordinates: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        },
+        title: location.title,
+      };
+      setWaypoints(updatedWaypoints);
+      setWaypointSuggestions([]);
+      setShowWaypointSuggestions(false);
+      setActiveWaypointIndex(null);
+      setFocusedInput(null);
+      
+      fitMapToAllPoints();
     }
 
     // Try to save to recent locations (silently fail if it doesn't work)
@@ -481,7 +538,7 @@ const LocationDetailsScreen = () => {
     }
   };
 
-  const openSaveLocationModal = (location: LocationSuggestion, type: 'pickup' | 'dropoff') => {
+  const openSaveLocationModal = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint') => {
     setSelectedLocationForSave({
       address: location.address,
       latitude: location.latitude,
@@ -630,6 +687,53 @@ const LocationDetailsScreen = () => {
     mapRef.current?.animateToRegion(newRegion, 1000);
   };
 
+  const fitMapToSinglePoint = (coord: Coordinates) => {
+    const newRegion = {
+      latitude: coord.latitude,
+      longitude: coord.longitude,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    };
+    setRegion(newRegion);
+    mapRef.current?.animateToRegion(newRegion, 1000);
+  };
+
+  const fitMapToAllPoints = () => {
+    const allPoints: Coordinates[] = [];
+    
+    if (pickupCoordinates) allPoints.push(pickupCoordinates);
+    waypoints.forEach(wp => allPoints.push(wp.coordinates));
+    if (dropoffCoordinates) allPoints.push(dropoffCoordinates);
+    
+    if (allPoints.length === 0) return;
+    
+    if (allPoints.length === 1) {
+      fitMapToSinglePoint(allPoints[0]);
+      return;
+    }
+    
+    const latitudes = allPoints.map(p => p.latitude);
+    const longitudes = allPoints.map(p => p.longitude);
+    
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLng = Math.min(...longitudes);
+    const maxLng = Math.max(...longitudes);
+    
+    const latDelta = (maxLat - minLat) * 1.5;
+    const lngDelta = (maxLng - minLng) * 1.5;
+    
+    const newRegion = {
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max(latDelta, 0.02),
+      longitudeDelta: Math.max(lngDelta, 0.02),
+    };
+    
+    setRegion(newRegion);
+    mapRef.current?.animateToRegion(newRegion, 1000);
+  };
+
   const handleAddSavedLocation = (location: SavedLocation) => {
     if (!pickupCoordinates) {
       setPickupLocation(location.address);
@@ -638,27 +742,21 @@ const LocationDetailsScreen = () => {
         longitude: location.longitude,
       });
       
-      const newRegion = {
-        latitude: location.latitude,
-        longitude: location.longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      };
-      setRegion(newRegion);
-      mapRef.current?.animateToRegion(newRegion, 1000);
-    } else if (!dropoffCoordinates) {
-      setDropoffLocation(location.address);
-      setDropoffCoordinates({
-        latitude: location.latitude,
-        longitude: location.longitude,
-      });
-      
-      fitMapToCoordinates(pickupCoordinates, {
+      fitMapToSinglePoint({
         latitude: location.latitude,
         longitude: location.longitude,
       });
     } else {
-      Alert.alert('Maximum locations', 'You can only add pickup and dropoff locations. Please clear one to add another.');
+      // If pickup is set, add as a waypoint instead of overriding dropoff
+      addWaypoint({
+        id: `saved-${Date.now()}`,
+        address: location.address,
+        coordinates: {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        },
+        title: location.title,
+      });
     }
   };
 
@@ -666,11 +764,70 @@ const LocationDetailsScreen = () => {
     getCurrentLocation();
   };
 
+  const addWaypoint = (waypoint?: Waypoint) => {
+    if (waypoint) {
+      setWaypoints([...waypoints, waypoint]);
+    } else {
+      // Add empty waypoint
+      const newWaypoint: Waypoint = {
+        id: `waypoint-${Date.now()}`,
+        address: '',
+        coordinates: {
+          latitude: 0,
+          longitude: 0,
+        },
+      };
+      setWaypoints([...waypoints, newWaypoint]);
+      setActiveWaypointIndex(waypoints.length);
+      setFocusedInput('waypoint');
+    }
+  };
+
+  const removeWaypoint = (index: number) => {
+    const updatedWaypoints = waypoints.filter((_, i) => i !== index);
+    setWaypoints(updatedWaypoints);
+    
+    if (updatedWaypoints.length === 0) {
+      setActiveWaypointIndex(null);
+    }
+    
+    // Update map after removal
+    if (pickupCoordinates && dropoffCoordinates) {
+      fitMapToAllPoints();
+    } else if (pickupCoordinates) {
+      fitMapToSinglePoint(pickupCoordinates);
+    }
+  };
+
+  const moveWaypointUp = (index: number) => {
+    if (index === 0) return;
+    const updatedWaypoints = [...waypoints];
+    [updatedWaypoints[index - 1], updatedWaypoints[index]] = [updatedWaypoints[index], updatedWaypoints[index - 1]];
+    setWaypoints(updatedWaypoints);
+  };
+
+  const moveWaypointDown = (index: number) => {
+    if (index === waypoints.length - 1) return;
+    const updatedWaypoints = [...waypoints];
+    [updatedWaypoints[index], updatedWaypoints[index + 1]] = [updatedWaypoints[index + 1], updatedWaypoints[index]];
+    setWaypoints(updatedWaypoints);
+  };
+
   const handleContinue = async () => {
     if (!pickupCoordinates) {
       Alert.alert('Required field', 'Please select a pickup location');
       return;
     }
+
+    // Format waypoints for passing to next screen
+    const waypointsData = waypoints
+      .filter(wp => wp.coordinates && wp.coordinates.latitude !== 0 && wp.coordinates.longitude !== 0)
+      .map((wp, index) => ({
+        address: wp.address,
+        lat: wp.coordinates.latitude.toString(),
+        lng: wp.coordinates.longitude.toString(),
+        order: index + 1, // Order between pickup (0) and dropoff (last)
+      }));
 
     // Navigate to next step with ALL params from previous screen
     router.push({
@@ -683,6 +840,10 @@ const LocationDetailsScreen = () => {
         dropoffAddress: dropoffLocation || '',
         dropoffLat: dropoffCoordinates?.latitude?.toString() || '',
         dropoffLng: dropoffCoordinates?.longitude?.toString() || '',
+        
+        // Waypoints data (stringified JSON)
+        waypoints: JSON.stringify(waypointsData),
+        hasWaypoints: (waypointsData.length > 0).toString(),
         
         // Service data (passed from ServiceDetails)
         serviceId: serviceId,
@@ -717,6 +878,16 @@ const LocationDetailsScreen = () => {
     }
   };
 
+  const clearWaypoint = (index: number) => {
+    const updatedWaypoints = [...waypoints];
+    updatedWaypoints[index] = {
+      ...updatedWaypoints[index],
+      address: '',
+      coordinates: { latitude: 0, longitude: 0 },
+    };
+    setWaypoints(updatedWaypoints);
+  };
+
   // Get icon for saved location type
   const getLocationIcon = (type: string) => {
     switch (type) {
@@ -727,6 +898,12 @@ const LocationDetailsScreen = () => {
       default:
         return '📍';
     }
+  };
+
+  // Get marker color based on index
+  const getWaypointColor = (index: number) => {
+    const colors = ['#FF9800', '#9C27B0', '#00BCD4', '#FF4081', '#4CAF50'];
+    return colors[index % colors.length];
   };
 
   return (
@@ -790,6 +967,20 @@ const LocationDetailsScreen = () => {
                 pinColor="#68bdee"
               />
             )}
+            
+            {/* Waypoint Markers */}
+            {waypoints.map((waypoint, index) => (
+              waypoint.coordinates && waypoint.coordinates.latitude !== 0 && (
+                <Marker
+                  key={waypoint.id}
+                  coordinate={waypoint.coordinates}
+                  title={`Stop ${index + 1}`}
+                  description={waypoint.address}
+                  pinColor={getWaypointColor(index)}
+                />
+              )
+            ))}
+            
             {dropoffCoordinates && (
               <Marker
                 coordinate={dropoffCoordinates}
@@ -798,12 +989,17 @@ const LocationDetailsScreen = () => {
                 pinColor="#ff4444"
               />
             )}
-            {pickupCoordinates && dropoffCoordinates && (
+            
+            {/* Draw route through all points */}
+            {pickupCoordinates && (
               <Polyline
-                coordinates={[pickupCoordinates, dropoffCoordinates]}
+                coordinates={[
+                  pickupCoordinates,
+                  ...waypoints.filter(wp => wp.coordinates.latitude !== 0).map(wp => wp.coordinates),
+                  ...(dropoffCoordinates ? [dropoffCoordinates] : [])
+                ]}
                 strokeColor="#68bdee"
                 strokeWidth={3}
-                lineDashPattern={[5, 5]}
               />
             )}
           </MapView>
@@ -920,7 +1116,8 @@ const LocationDetailsScreen = () => {
           {/* Drop-off Location - with higher z-index when focused */}
           <View style={[
             styles.inputSection,
-            focusedInput === 'dropoff' && styles.inputSectionFocused
+            focusedInput === 'dropoff' && styles.inputSectionFocused,
+            styles.dropoffSection
           ]}>
             <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
             <View style={styles.inputContainer}>
@@ -984,8 +1181,121 @@ const LocationDetailsScreen = () => {
             )}
           </View>
 
-          {/* Add Another Stop Button */}
-          <TouchableOpacity style={styles.addStopButton}>
+          {/* Waypoints (Intermediate Stops) - These appear AFTER dropoff */}
+          {waypoints.map((waypoint, index) => (
+            <View 
+              key={waypoint.id} 
+              style={[
+                styles.inputSection,
+                styles.waypointSection,
+                activeWaypointIndex === index && styles.inputSectionFocused,
+                { marginLeft: width * 0.05 } // Indent to show hierarchy
+              ]}
+            >
+              <View style={styles.waypointHeader}>
+                <Text style={styles.inputLabel}>
+                  Stop {index + 1}
+                </Text>
+                <View style={styles.waypointControls}>
+                  <TouchableOpacity 
+                    onPress={() => moveWaypointUp(index)}
+                    disabled={index === 0}
+                    style={styles.waypointControlButton}
+                  >
+                    <Ionicons 
+                      name="arrow-up" 
+                      size={Math.min(18, width * 0.045)} 
+                      color={index === 0 ? "#b0b0b0" : "#68bdee"} 
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => moveWaypointDown(index)}
+                    disabled={index === waypoints.length - 1}
+                    style={styles.waypointControlButton}
+                  >
+                    <Ionicons 
+                      name="arrow-down" 
+                      size={Math.min(18, width * 0.045)} 
+                      color={index === waypoints.length - 1 ? "#b0b0b0" : "#68bdee"} 
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => removeWaypoint(index)}
+                    style={styles.waypointControlButton}
+                  >
+                    <Ionicons name="close" size={Math.min(18, width * 0.045)} color="#ff4444" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+              <View style={styles.inputContainer}>
+                <View style={[
+                  styles.locationDot, 
+                  { backgroundColor: getWaypointColor(index) },
+                  waypoint.coordinates.latitude !== 0 && styles.locationDotActive
+                ]} />
+                <TextInput
+                  style={styles.input}
+                  placeholder={`Enter stop ${index + 1} location`}
+                  placeholderTextColor="#b0b0b0"
+                  value={waypoint.address}
+                  onChangeText={(text) => handleWaypointChange(text, index)}
+                  onFocus={() => {
+                    setActiveWaypointIndex(index);
+                    setFocusedInput('waypoint');
+                    if (waypointSuggestions.length > 0) {
+                      setShowWaypointSuggestions(true);
+                    }
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => {
+                      setActiveWaypointIndex(null);
+                      setFocusedInput(null);
+                      setShowWaypointSuggestions(false);
+                    }, 200);
+                  }}
+                />
+                {waypoint.address ? (
+                  <TouchableOpacity 
+                    style={styles.inputIcon}
+                    onPress={() => clearWaypoint(index)}
+                  >
+                    <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              
+              {/* Waypoint Suggestions */}
+              {showWaypointSuggestions && activeWaypointIndex === index && waypointSuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  {isSearching ? (
+                    <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+                  ) : (
+                    waypointSuggestions.map((suggestion) => (
+                      <TouchableOpacity
+                        key={suggestion.id}
+                        style={styles.suggestionItem}
+                        onPress={() => handleSelectLocation(suggestion, 'waypoint', index)}
+                      >
+                        <Ionicons name="location" size={Math.min(20, width * 0.05)} color={getWaypointColor(index)} />
+                        <View style={styles.suggestionTextContainer}>
+                          <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
+                          <Text style={styles.suggestionAddress} numberOfLines={1}>
+                            {suggestion.address}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              )}
+            </View>
+          ))}
+
+          {/* Add Another Stop Button - Now appears AFTER dropoff and waypoints */}
+          <TouchableOpacity 
+            style={styles.addStopButton}
+            onPress={() => addWaypoint()}
+          >
             <Ionicons name="add" size={Math.min(20, width * 0.05)} color="#68bdee" />
             <Text style={styles.addStopText}>Add Another Stop</Text>
           </TouchableOpacity>
@@ -1173,6 +1483,7 @@ const LocationDetailsScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  // ... all styles remain exactly the same ...
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -1321,6 +1632,12 @@ const styles = StyleSheet.create({
     position: 'relative',
     zIndex: 1,
   },
+  waypointSection: {
+    marginBottom: height * 0.02,
+  },
+  dropoffSection: {
+    marginTop: height * 0.01,
+  },
   inputSectionFocused: {
     zIndex: 1000,
   },
@@ -1417,6 +1734,20 @@ const styles = StyleSheet.create({
   suggestionAddress: {
     fontSize: Math.min(12, width * 0.03),
     color: '#8c8c8c',
+  },
+  waypointHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: height * 0.01,
+  },
+  waypointControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  waypointControlButton: {
+    padding: width * 0.02,
+    marginLeft: width * 0.01,
   },
   addStopButton: {
     flexDirection: 'row',

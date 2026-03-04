@@ -1,30 +1,22 @@
-import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
+  View,
   Text,
   TouchableOpacity,
-  View,
-  TextInput,
+  ScrollView,
+  StyleSheet,
+  SafeAreaView,
+  Alert,
+  StatusBar,
 } from 'react-native';
-import { providerWebSocket } from '../../services/websocket.service';
+import Feather from '@expo/vector-icons/Feather';
+import { useRouter } from 'expo-router';
 
 // ─── Timer Hook ───────────────────────────────────────────────────────────────
 
-const useTimer = (initialSeconds: number = 0) => {
-  const [seconds, setSeconds] = useState<number>(initialSeconds);
-  const [paused, setPaused] = useState<boolean>(false);
-  const [startTime, setStartTime] = useState<Date | null>(null);
-
-  useEffect(() => {
-    const now = new Date();
-    setStartTime(now);
-  }, []);
+const useTimer = () => {
+  const [seconds, setSeconds] = useState(35 * 60 + 42);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     if (paused) return;
@@ -32,30 +24,19 @@ const useTimer = (initialSeconds: number = 0) => {
     return () => clearInterval(interval);
   }, [paused]);
 
-  const format = (s: number): string => {
+  const format = (s) => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0');
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
     const sec = String(s % 60).padStart(2, '0');
     return `${h}:${m}:${sec}`;
   };
 
-  const getStartTimeString = (): string => {
-    if (!startTime) return 'Just now';
-    return startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  return { 
-    display: format(seconds), 
-    paused, 
-    setPaused,
-    startTimeString: getStartTimeString(),
-    elapsedSeconds: seconds
-  };
+  return { display: format(seconds), paused, setPaused };
 };
 
 // ─── Checklist Items ──────────────────────────────────────────────────────────
 
-const CHECKLIST: string[] = [
+const CHECKLIST = [
   'Inspect vehicle condition',
   'Secure vehicle on flatbed',
   'Document pre-service photos',
@@ -67,270 +48,14 @@ const CHECKLIST: string[] = [
 
 export default function ServiceInProgressScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  
-  const { display, paused, setPaused, startTimeString, elapsedSeconds } = useTimer(0);
-  const [completedItems, setCompletedItems] = useState<number[]>([]);
-  const [serviceNotes, setServiceNotes] = useState('');
-  const [wsConnected, setWsConnected] = useState(false);
-  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
+  const { display, paused, setPaused } = useTimer();
 
-  // Get data from params (passed from NavigateToCustomerScreen)
-  const jobId = params.jobId as string;
-  const bookingId = params.bookingId as string;
-  const customerName = params.customerName as string || 'Mohammed A.';
-  const customerPhone = params.customerPhone as string || '+973 3XXX XXXX';
-  const serviceType = params.serviceType as string || 'Towing Service';
-  const vehicleType = params.vehicleType as string || 'Sedan';
-  const licensePlate = params.licensePlate as string || 'ABC 1234';
-  const vehicleModel = params.vehicleModel as string || 'Toyota Camry 2020';
-  const price = params.price as string || '81';
-  const requestId = params.requestId as string || 'REQ-7891';
-  const pickupLocation = params.pickupLocation as string || 'Main Street, Manama';
-
-  // ─── WebSocket Setup ────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    console.log('🔌 Setting up WebSocket for ServiceInProgress');
-    console.log('Job ID:', jobId);
-    console.log('Booking ID:', bookingId);
-
-    // Check initial connection
-    setWsConnected(providerWebSocket.isConnected());
-
-    // Listen for connection changes
-    providerWebSocket.onConnectionChange((connected) => {
-      console.log('WebSocket connection changed:', connected);
-      setWsConnected(connected);
-      
-      // Re-join room if connection restored
-      if (connected && jobId && !hasJoinedRoom) {
-        joinJobRoom();
-      }
-    });
-
-    // Join job room and notify service started
-    if (jobId) {
-      joinJobRoom();
-    }
-
-    // Cleanup on unmount
-    return () => {
-      // No need to leave room as service is completing
-    };
-  }, []);
-
-  const joinJobRoom = () => {
-    if (!jobId || hasJoinedRoom) return;
-
-    console.log('🚪 Joining job room:', jobId);
-    providerWebSocket.send('join_job_room', {
-      jobId,
-      role: 'provider'
-    });
-    
-    // Notify that service has started
-    console.log('▶️ Notifying service started');
-    providerWebSocket.send('start_service', {
-      jobId,
-      bookingId,
-      timestamp: new Date().toISOString()
-    });
-    
-    setHasJoinedRoom(true);
-  };
-
-  const notifyServiceCompleted = () => {
-    if (providerWebSocket.isConnected()) {
-      console.log('✅ Notifying service completed');
-      providerWebSocket.send('complete_service', {
-        jobId,
-        bookingId,
-        completedAt: new Date().toISOString(),
-        duration: elapsedSeconds,
-        notes: serviceNotes,
-        completedItems: completedItems.length
-      });
-    }
-  };
-
-  const notifyTimeAdded = (minutes: number) => {
-    if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('service_time_updated', {
-        jobId,
-        bookingId,
-        additionalMinutes: minutes,
-        newTotal: elapsedSeconds + (minutes * 60),
-        timestamp: new Date().toISOString()
-      });
-    }
-  };
-
-  // ─── Handlers ───────────────────────────────────────────────────────────────
-
-  const handleCall = () => {
-    if (customerPhone) {
-      Alert.alert('Call', `Calling ${customerName} at ${customerPhone}...`);
-    } else {
-      Alert.alert('Call', `Calling ${customerName}...`);
-    }
-  };
-  
-  const handleMessage = () => {
-    router.push({
-      pathname: '/(provider)/Chat',
-      params: {
-        customerName,
-        jobId,
-        bookingId,
-      }
-    });
-  };
-  
-  const handleAddPhoto = () => {
-    Alert.alert('Photo', 'Opening camera to take photos...');
-  };
-  
-  const handleAddTime = () => {
-    Alert.alert(
-      'Add Extra Time',
-      'Select additional time for this service:',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel'
-        },
-        {
-          text: '15 minutes',
-          onPress: () => {
-            notifyTimeAdded(15);
-            Alert.alert('Success', '15 minutes added to service time');
-          }
-        },
-        {
-          text: '30 minutes',
-          onPress: () => {
-            notifyTimeAdded(30);
-            Alert.alert('Success', '30 minutes added to service time');
-          }
-        },
-        {
-          text: '45 minutes',
-          onPress: () => {
-            notifyTimeAdded(45);
-            Alert.alert('Success', '45 minutes added to service time');
-          }
-        }
-      ]
-    );
-  };
-  
-  const handleReportIssue = () => {
-    Alert.alert('Report Issue', 'Opening report form...');
-  };
-
-  const toggleChecklistItem = (index: number) => {
-    if (completedItems.includes(index)) {
-      setCompletedItems(completedItems.filter(item => item !== index));
-    } else {
-      setCompletedItems([...completedItems, index]);
-    }
-  };
-
-  const handleComplete = () => {
-    // First confirmation
-    Alert.alert(
-      'Complete Service',
-      'Are you sure you want to complete this service?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel'
-        },
-        {
-          text: 'Continue',
-          onPress: () => {
-            // Check if checklist is incomplete
-            if (completedItems.length < CHECKLIST.length) {
-              // Show warning about incomplete checklist
-              Alert.alert(
-                'Incomplete Checklist',
-                `You have completed ${completedItems.length} out of ${CHECKLIST.length} items. Complete anyway?`,
-                [
-                  {
-                    text: 'Go Back',
-                    style: 'cancel'
-                  },
-                  {
-                    text: 'Complete Service',
-                    onPress: () => {
-                      // ✅ Notify via WebSocket
-                      notifyServiceCompleted();
-                      
-                      // Navigate to Service Complete screen with ALL data
-                      router.push({
-                        pathname: '/ServiceCompletedScreen',
-                        params: {
-                          // Timer data
-                          serviceTime: display,
-                          elapsedSeconds: elapsedSeconds.toString(),
-                          startTime: startTimeString,
-                          
-                          // Job data
-                          jobId: jobId,
-                          bookingId: bookingId,
-                          customerName: customerName,
-                          
-                          // Earnings
-                          earnings: price,
-                          
-                          // Checklist data
-                          completedItems: JSON.stringify(completedItems),
-                          totalItems: CHECKLIST.length.toString(),
-                          
-                          // Service notes
-                          serviceNotes: serviceNotes,
-                          
-                          // Request info
-                          requestId: requestId,
-                          serviceType: serviceType,
-                          pickupLocation: pickupLocation
-                        }
-                      });
-                    },
-                    style: 'destructive'
-                  }
-                ]
-              );
-            } else {
-              // Checklist complete - go straight to completion
-              // ✅ Notify via WebSocket
-              notifyServiceCompleted();
-              
-              router.push({
-                pathname: '/ServiceCompletedScreen',
-                params: {
-                  serviceTime: display,
-                  elapsedSeconds: elapsedSeconds.toString(),
-                  startTime: startTimeString,
-                  jobId: jobId,
-                  bookingId: bookingId,
-                  customerName: customerName,
-                  earnings: price,
-                  completedItems: JSON.stringify(completedItems),
-                  totalItems: CHECKLIST.length.toString(),
-                  serviceNotes: serviceNotes,
-                  requestId: requestId,
-                  serviceType: serviceType,
-                  pickupLocation: pickupLocation
-                }
-              });
-            }
-          }
-        }
-      ]
-    );
-  };
+  const handleCall = () => Alert.alert('Call', 'Calling Mohammed A...');
+  const handleMessage = () => Alert.alert('Message', 'Opening message...');
+  const handleAddPhoto = () => Alert.alert('Photo', 'Opening camera...');
+  const handleAddTime = () => Alert.alert('Add Time', 'Adding extra time...');
+  const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
+  const handleComplete = () => Alert.alert('Complete Service', 'Are you sure you want to complete this service?');
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -338,34 +63,14 @@ export default function ServiceInProgressScreen() {
 
       {/* ── HEADER ── */}
       <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backBtn} 
-          onPress={() => {
-            Alert.alert(
-              'Exit Service',
-              'Are you sure you want to exit? Service in progress will be lost.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Exit', onPress: () => router.back() }
-              ]
-            );
-          }} 
-          activeOpacity={0.8}
-        >
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
           <Feather name="arrow-left" size={25} color="#1e2939" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Service In Progress</Text>
-          <Text style={styles.headerSub}>{requestId}</Text>
+          <Text style={styles.headerSub}>REQ-7891</Text>
         </View>
-        <View style={styles.headerRight}>
-          {/* WebSocket Status Indicator */}
-          {wsConnected && hasJoinedRoom && (
-            <View style={styles.wsIndicator}>
-              <View style={styles.wsDot} />
-            </View>
-          )}
-        </View>
+        <View style={styles.headerRight} />
       </View>
 
       <ScrollView
@@ -377,18 +82,13 @@ export default function ServiceInProgressScreen() {
         <View style={styles.activeBadge}>
           <View style={styles.activeDot} />
           <Text style={styles.activeBadgeText}>Service Active</Text>
-          {wsConnected && hasJoinedRoom && (
-            <View style={styles.liveBadge}>
-              <Text style={styles.liveBadgeText}>LIVE</Text>
-            </View>
-          )}
         </View>
 
         {/* ── TIMER CARD ── */}
         <View style={styles.timerCard}>
           <Text style={styles.timerLabel}>SERVICE DURATION</Text>
           <Text style={styles.timerDisplay}>{display}</Text>
-          <Text style={styles.timerStarted}>Started at {startTimeString}</Text>
+          <Text style={styles.timerStarted}>Started at 2:45 PM</Text>
           <View style={styles.timerBtnRow}>
             <TouchableOpacity
               style={styles.pauseBtn}
@@ -410,11 +110,10 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.cardSectionLabel}>SERVICE DETAILS</Text>
           <View style={styles.detailsDivider} />
           {[
-            { label: 'Service Type:', value: serviceType },
-            { label: 'Vehicle:', value: vehicleType },
-            { label: 'License Plate:', value: licensePlate },
-            { label: 'Model:', value: vehicleModel },
-            { label: 'Pickup:', value: pickupLocation },
+            { label: 'Service Type:', value: 'Towing Service' },
+            { label: 'Vehicle:', value: 'Sedan' },
+            { label: 'License Plate:', value: 'ABC 1234' },
+            { label: 'Model:', value: 'Toyota Camry 2020' },
           ].map((item, i) => (
             <View key={i} style={styles.detailRow}>
               <Text style={styles.detailLabel}>{item.label}</Text>
@@ -431,8 +130,8 @@ export default function ServiceInProgressScreen() {
               <Feather name="user" size={24} color="#9dd7fb" />
             </View>
             <View style={styles.customerText}>
-              <Text style={styles.customerName}>{customerName}</Text>
-              <Text style={styles.customerPhone}>{customerPhone}</Text>
+              <Text style={styles.customerName}>Mohammed A.</Text>
+              <Text style={styles.customerPhone}>+973 3XXX XXXX</Text>
             </View>
           </View>
           <View style={styles.contactBtnRow}>
@@ -453,52 +152,21 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.cardSectionLabel}>PHOTO DOCUMENTATION</Text>
           <TouchableOpacity style={styles.photoAddBox} onPress={handleAddPhoto} activeOpacity={0.7}>
             <Feather name="camera" size={28} color="#AAAAAA" />
-            <Text style={styles.photoAddText}>Add Photos</Text>
+            <Text style={styles.photoAddText}>Add</Text>
           </TouchableOpacity>
-          <Text style={styles.photoHint}>Photos will be saved with service record (0 photos added)</Text>
-        </View>
-
-        {/* ── SERVICE NOTES ── */}
-        <View style={styles.card}>
-          <Text style={styles.cardSectionLabel}>SERVICE NOTES</Text>
-          <TextInput
-            style={styles.notesInput}
-            placeholder="Add notes about the service..."
-            value={serviceNotes}
-            onChangeText={setServiceNotes}
-            multiline
-            numberOfLines={3}
-            textAlignVertical="top"
-          />
+          <Text style={styles.photoHint}>Document before/after and any issues found</Text>
         </View>
 
         {/* ── SERVICE CHECKLIST ── */}
         <View style={styles.card}>
           <Text style={styles.cardSectionLabel}>SERVICE CHECKLIST</Text>
-          <Text style={styles.checklistProgress}>
-            Completed: {completedItems.length}/{CHECKLIST.length}
-          </Text>
           {CHECKLIST.map((item, i) => (
-            <TouchableOpacity 
-              key={i} 
-              style={styles.checkRow} 
-              onPress={() => toggleChecklistItem(i)}
-              activeOpacity={0.7}
-            >
+            <View key={i} style={styles.checkRow}>
               <View style={styles.checkIconWrap}>
-                <Feather 
-                  name={completedItems.includes(i) ? "check-circle" : "circle"} 
-                  size={20} 
-                  color={completedItems.includes(i) ? "#00C853" : "#87cefa"} 
-                />
+                <Feather name="check-circle" size={20} color="#87cefa" />
               </View>
-              <Text style={[
-                styles.checkText,
-                completedItems.includes(i) && styles.checkTextCompleted
-              ]}>
-                {item}
-              </Text>
-            </TouchableOpacity>
+              <Text style={styles.checkText}>{item}</Text>
+            </View>
           ))}
         </View>
 
@@ -507,7 +175,7 @@ export default function ServiceInProgressScreen() {
           <View style={styles.earningsRow}>
             <View>
               <Text style={styles.earningsLabel}>Estimated Earnings</Text>
-              <Text style={styles.earningsValue}>{price} BHD</Text>
+              <Text style={styles.earningsValue}>81 BHD</Text>
             </View>
             <View>
               <Text style={styles.earningsStatusLabel}>Status</Text>
@@ -538,11 +206,7 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.completeBtnText}>Complete Service</Text>
         </TouchableOpacity>
 
-        <Text style={styles.completeHint}>
-          {completedItems.length === CHECKLIST.length 
-            ? '✓ All checklist items completed' 
-            : `⚠ ${CHECKLIST.length - completedItems.length} checklist items remaining`}
-        </Text>
+        <Text style={styles.completeHint}>Make sure all checklist items are completed</Text>
 
         <View style={{ height: 16 }} />
       </ScrollView>
@@ -597,20 +261,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerRight: {
-    width: 40,
-    alignItems: 'flex-end',
-  },
-  wsIndicator: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#4CAF50',
-  },
-  wsDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#4CAF50',
+    width: 38,
   },
 
   // ── Scroll ──
@@ -632,7 +283,6 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     backgroundColor: '#FFFFFF',
     gap: 8,
-    position: 'relative',
   },
   activeDot: {
     width: 10,
@@ -646,19 +296,6 @@ const styles = StyleSheet.create({
     color: '#1A1A2E',
     letterSpacing: 1,
     textTransform: 'uppercase',
-  },
-  liveBadge: {
-    position: 'absolute',
-    right: 12,
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  liveBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#FFFFFF',
   },
 
   // ── Timer Card ──
@@ -830,7 +467,7 @@ const styles = StyleSheet.create({
 
   // ── Photo Documentation ──
   photoAddBox: {
-    width: '100%',
+    width: 90,
     height: 90,
     borderRadius: 10,
     borderWidth: 1.5,
@@ -854,32 +491,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // ── Service Notes ──
-  notesInput: {
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 13,
-    color: '#1A1A2E',
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-
   // ── Checklist ──
-  checklistProgress: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6a7282',
-    marginBottom: 10,
-    textAlign: 'right',
-  },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     marginBottom: 10,
-    paddingVertical: 2,
   },
   checkIconWrap: {},
   checkText: {
@@ -888,10 +505,6 @@ const styles = StyleSheet.create({
     color: '#374151',
     letterSpacing: 0.2,
     flex: 1,
-  },
-  checkTextCompleted: {
-    textDecorationLine: 'line-through',
-    color: '#888888',
   },
 
   // ── Earnings Card ──

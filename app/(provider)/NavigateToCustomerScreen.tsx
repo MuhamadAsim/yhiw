@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -8,385 +8,21 @@ import {
   SafeAreaView,
   Alert,
   StatusBar,
-  Platform,
-  Linking,
-  ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { providerWebSocket } from '../../services/websocket.service';
-
-// Google Maps API Keys
-const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
-const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
-
-// Select API key based on platform
-const GOOGLE_MAPS_API_KEY = Platform.select({
-  android: ANDROID_API_KEY,
-  ios: IOS_API_KEY,
-});
-
-interface RouteStep {
-  instruction: string;
-  distance: string;
-  duration: string;
-}
-
-interface Coordinates {
-  latitude: number;
-  longitude: number;
-}
+import { useRouter } from 'expo-router';
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function NavigateToCustomerScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  
-  const mapRef = useRef<MapView>(null);
-  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
-  
-  const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
-  const [nextTurn, setNextTurn] = useState<RouteStep | null>(null);
-  const [eta, setEta] = useState('-- min');
-  const [distance, setDistance] = useState('-- km');
-  const [isLoading, setIsLoading] = useState(true);
-  const [wsConnected, setWsConnected] = useState(false);
-  const [mapReady, setMapReady] = useState(false);
 
-  // Get data from params (coming from MakeYourDecisionScreen)
-  const customerName = params.customerName as string || 'Customer';
-  const customerPhone = params.customerPhone as string || '';
-  const jobId = params.jobId as string;
-  const bookingId = params.bookingId as string;
-  const serviceType = params.serviceType as string || 'Service';
-  const price = params.price as string || '0';
-  
-  // Destination (pickup location)
-  const destination = {
-    latitude: parseFloat(params.pickupLat as string) || 26.2285,
-    longitude: parseFloat(params.pickupLng as string) || 50.5860,
-    address: params.pickupLocation as string || 'Pickup Location',
-  };
-
-  useEffect(() => {
-    console.log('🗺️ NavigateToCustomerScreen mounted');
-    console.log('Destination:', destination);
-    console.log('Customer:', customerName);
-    console.log('Job ID:', jobId);
-    
-    getUserLocation();
-    setupWebSocket();
-
-    return () => {
-      if (locationSubscription.current) {
-        locationSubscription.current.remove();
-      }
-      providerWebSocket.disconnect();
-    };
-  }, []);
-
-  // Update route when location changes
-  useEffect(() => {
-    if (userLocation && destination) {
-      getRoute(userLocation, destination);
-    }
-  }, [userLocation]);
-
-  // Fit map to show both points when ready
-  useEffect(() => {
-    if (mapReady && userLocation && destination && mapRef.current) {
-      mapRef.current.fitToCoordinates(
-        [userLocation, destination],
-        {
-          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-          animated: true,
-        }
-      );
-    }
-  }, [mapReady, userLocation, destination]);
-
-  const setupWebSocket = () => {
-    // Listen for connection changes
-    providerWebSocket.onConnectionChange((connected) => {
-      setWsConnected(connected);
-    });
-
-    // Request any updates for this job
-    if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('subscribe_to_job', { jobId, bookingId });
-    }
-  };
-
-  const getUserLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permission Denied',
-          'Location permission is required for navigation',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Settings', onPress: () => Linking.openSettings() }
-          ]
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      // Get current location
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest,
-      });
-
-      const userLoc = {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      };
-
-      console.log('📍 Current location:', userLoc);
-      setUserLocation(userLoc);
-
-      // Send initial location to backend
-      if (providerWebSocket.isConnected()) {
-        providerWebSocket.send('provider_location_update', {
-          jobId,
-          bookingId,
-          latitude: userLoc.latitude,
-          longitude: userLoc.longitude,
-        });
-      }
-
-      // Start watching position for real-time updates
-      locationSubscription.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Highest,
-          timeInterval: 5000,
-          distanceInterval: 10,
-        },
-        (newLocation) => {
-          const updatedLoc = {
-            latitude: newLocation.coords.latitude,
-            longitude: newLocation.coords.longitude,
-          };
-          setUserLocation(updatedLoc);
-          
-          // Update provider location to backend
-          if (providerWebSocket.isConnected()) {
-            providerWebSocket.send('provider_location_update', {
-              jobId,
-              bookingId,
-              latitude: updatedLoc.latitude,
-              longitude: updatedLoc.longitude,
-            });
-          }
-        }
-      );
-      
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get your current location');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const getRoute = async (origin: Coordinates, dest: Coordinates) => {
-    try {
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
-      
-      console.log('📍 Fetching route...');
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.routes.length > 0) {
-        const route = data.routes[0];
-        
-        // Decode polyline points
-        const points = decodePolyline(route.overview_polyline.points);
-        setRouteCoordinates(points);
-
-        // Get next turn instruction
-        if (route.legs.length > 0 && route.legs[0].steps.length > 0) {
-          const firstStep = route.legs[0].steps[0];
-          setNextTurn({
-            instruction: firstStep.html_instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
-            distance: firstStep.distance.text,
-            duration: firstStep.duration.text,
-          });
-        }
-
-        // Update ETA and distance
-        if (route.legs.length > 0) {
-          setEta(route.legs[0].duration.text);
-          setDistance(route.legs[0].distance.text);
-        }
-        
-        console.log('📍 Route found:', route.legs[0].duration.text);
-      }
-    } catch (error) {
-      console.error('Error getting route:', error);
-    }
-  };
-
-  // Function to decode Google Maps polyline
-  const decodePolyline = (t: string, precision: number = 5) => {
-    let points = [];
-    let lat = 0;
-    let lng = 0;
-    let index = 0;
-    let shift = 0;
-    let result = 0;
-    let factor = Math.pow(10, precision);
-
-    while (index < t.length) {
-      let b = 0;
-      shift = 0;
-      result = 0;
-      
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-      
-      shift = 0;
-      result = 0;
-      
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-      
-      points.push({
-        latitude: lat / factor,
-        longitude: lng / factor
-      });
-    }
-    
-    return points;
-  };
-
-  const handleCompass = () => {
-    if (userLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        ...userLocation,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 1000);
-    }
-  };
-
-  const handleFitAll = () => {
-    if (mapRef.current && userLocation && destination) {
-      mapRef.current.fitToCoordinates(
-        [userLocation, destination],
-        {
-          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-          animated: true,
-        }
-      );
-    }
-  };
-
-  const handleCall = () => {
-    if (customerPhone) {
-      Linking.openURL(`tel:${customerPhone}`);
-    } else {
-      Alert.alert('Call Customer', `Calling ${customerName}...`);
-    }
-  };
-
-  const handleMessage = () => {
-    router.push({
-      pathname: '/(provider)/Chat',
-      params: {
-        customerName,
-        jobId,
-        bookingId,
-      }
-    });
-  };
-
-  const handleOpenMaps = () => {
-    if (userLocation && destination) {
-      const url = Platform.select({
-        ios: `maps://app?saddr=${userLocation.latitude},${userLocation.longitude}&daddr=${destination.latitude},${destination.longitude}`,
-        android: `google.navigation:q=${destination.latitude},${destination.longitude}`,
-      });
-      
-      if (url) {
-        Linking.openURL(url);
-      }
-    }
-  };
-
-  const handleArrived = () => {
-    // Notify backend via WebSocket
-    if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('provider_arrived', {
-        jobId,
-        bookingId,
-        location: userLocation,
-      });
-    }
-
-    router.push({
-      pathname: '/ServiceInProgressScreen',
-      params: {
-        jobId,
-        bookingId,
-        customerName,
-        pickupLocation: destination.address,
-        serviceType,
-        price,
-      }
-    });
-  };
-
+  const handleCompass = () => Alert.alert('Compass', 'Recenter map');
+  const handleCall = () => Alert.alert('Call', 'Calling Mohammed A...');
+  const handleMessage = () => Alert.alert('Message', 'Opening message...');
+  const handleArrived = () => Alert.alert('Arrived', "You've arrived at the location!");
   const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
-  
-  const handleCancelService = () => {
-    Alert.alert(
-      'Cancel Service',
-      'Are you sure you want to cancel this service?',
-      [
-        { text: 'No', style: 'cancel' },
-        { 
-          text: 'Yes, Cancel', 
-          style: 'destructive',
-          onPress: () => {
-            if (providerWebSocket.isConnected()) {
-              providerWebSocket.send('cancel_job', { jobId, bookingId });
-            }
-            router.back();
-          }
-        }
-      ]
-    );
-  };
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4eafe4" />
-          <Text style={styles.loadingText}>Loading navigation...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const handleCancelService = () => Alert.alert('Cancel Service', 'Are you sure you want to cancel?');
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -394,55 +30,6 @@ export default function NavigateToCustomerScreen() {
 
       {/* ── MAP AREA ── */}
       <View style={styles.mapArea}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={{
-            latitude: userLocation?.latitude || destination.latitude,
-            longitude: userLocation?.longitude || destination.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-          showsUserLocation={true}
-          showsMyLocationButton={false}
-          showsTraffic={true}
-          onMapReady={() => setMapReady(true)}
-        >
-          {/* Provider Location Marker (self) */}
-          {userLocation && (
-            <Marker
-              coordinate={userLocation}
-              title="Your Location"
-              description="You are here"
-            >
-              <View style={styles.providerMarker}>
-                <Feather name="navigation" size={20} color="#4eafe4" />
-              </View>
-            </Marker>
-          )}
-
-          {/* Destination Marker (pickup) */}
-          <Marker
-            coordinate={destination}
-            title="Pickup Location"
-            description={destination.address}
-          >
-            <View style={styles.destinationMarker}>
-              <Feather name="map-pin" size={24} color="#EF4444" />
-            </View>
-          </Marker>
-
-          {/* Route Polyline */}
-          {routeCoordinates.length > 0 && (
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeWidth={4}
-              strokeColor="#4eafe4"
-              lineDashPattern={[0]}
-            />
-          )}
-        </MapView>
 
         {/* Back Button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
@@ -454,57 +41,29 @@ export default function NavigateToCustomerScreen() {
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
 
-        {/* Fit All Button */}
-        <TouchableOpacity style={styles.fitAllBtn} onPress={handleFitAll} activeOpacity={0.8}>
-          <Feather name="maximize-2" size={20} color="#8fd1fb" />
-        </TouchableOpacity>
-
-        {/* Open in Google Maps Button */}
-        <TouchableOpacity style={styles.mapsBtn} onPress={handleOpenMaps} activeOpacity={0.8}>
-          <Feather name="external-link" size={20} color="#8fd1fb" />
-        </TouchableOpacity>
-
-        {/* WebSocket Status */}
-        <View style={[
-          styles.wsStatus,
-          wsConnected ? styles.wsConnected : styles.wsDisconnected
-        ]}>
-          <View style={[
-            styles.wsDot,
-            wsConnected ? styles.wsDotConnected : styles.wsDotDisconnected
-          ]} />
-          <Text style={styles.wsText}>
-            {wsConnected ? 'Live' : 'Reconnecting...'}
-          </Text>
-        </View>
-
         {/* Navigation Card */}
-        {nextTurn && (
-          <View style={styles.navCard}>
-            <View style={styles.navCardTop}>
-              <View style={styles.navIconWrap}>
-                <Feather name="navigation" size={18} color="#8fd1fb" />
-              </View>
-              <View style={styles.navCardTextBlock}>
-                <Text style={styles.navCardLabel}>NEXT TURN</Text>
-                <Text style={styles.navCardTurn} numberOfLines={1}>
-                  {nextTurn.instruction}
-                </Text>
-              </View>
+        <View style={styles.navCard}>
+          <View style={styles.navCardTop}>
+            <View style={styles.navIconWrap}>
+              <Feather name="navigation" size={18} color="#8fd1fb" />
             </View>
-            <View style={styles.navCardDivider} />
-            <View style={styles.navCardBottom}>
-              <View style={styles.navCardStat}>
-                <Text style={styles.navStatLabel}>ETA</Text>
-                <Text style={styles.navStatValue}>{eta}</Text>
-              </View>
-              <View style={styles.navCardStat}>
-                <Text style={styles.navStatLabel}>DISTANCE</Text>
-                <Text style={styles.navStatValue}>{distance}</Text>
-              </View>
+            <View style={styles.navCardTextBlock}>
+              <Text style={styles.navCardLabel}>NEXT TURN</Text>
+              <Text style={styles.navCardTurn}>Turn right on Main Street</Text>
             </View>
           </View>
-        )}
+          <View style={styles.navCardDivider} />
+          <View style={styles.navCardBottom}>
+            <View style={styles.navCardStat}>
+              <Text style={styles.navStatLabel}>ETA</Text>
+              <Text style={styles.navStatValue}>8 minutes</Text>
+            </View>
+            <View style={styles.navCardStat}>
+              <Text style={styles.navStatLabel}>DISTANCE</Text>
+              <Text style={styles.navStatValue}>2.5 km</Text>
+            </View>
+          </View>
+        </View>
 
         {/* Navigation Active Badge */}
         <View style={styles.navActiveBadge}>
@@ -538,7 +97,7 @@ export default function NavigateToCustomerScreen() {
                 <Feather name="user" size={26} color="#8fd1fb" />
               </View>
               <View style={styles.customerText}>
-                <Text style={styles.customerName}>{customerName}</Text>
+                <Text style={styles.customerName}>Mohammed A.</Text>
                 <Text style={styles.customerRating}>⭐ 4.5 Customer Rating</Text>
               </View>
             </View>
@@ -565,7 +124,7 @@ export default function NavigateToCustomerScreen() {
               <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
               <View>
                 <Text style={styles.locationLabel}>Pickup Location</Text>
-                <Text style={styles.locationValue}>{destination.address}</Text>
+                <Text style={styles.locationValue}>Main Street, Manama, near City Mall</Text>
               </View>
             </View>
           </View>
@@ -579,6 +138,7 @@ export default function NavigateToCustomerScreen() {
               <View style={styles.tipsTextBlock}>
                 <Text style={styles.tipsTitle}>Navigation Tips</Text>
                 <Text style={styles.tipsText}>
+                  Located in underground parking.{'\n'}
                   Call customer upon arrival for exact location.
                 </Text>
               </View>
@@ -587,7 +147,7 @@ export default function NavigateToCustomerScreen() {
 
           {/* Arrived Button */}
           <TouchableOpacity style={styles.arrivedBtn} onPress={handleArrived} activeOpacity={0.85}>
-            <Feather name="check-circle" size={16} color="#fff" style={{ marginRight: 8 }} />
+            <Feather name="play" size={16} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.arrivedBtnText}>I've Arrived at Location</Text>
           </TouchableOpacity>
 
@@ -608,29 +168,39 @@ export default function NavigateToCustomerScreen() {
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#D6EAF8',
+  },
+  header: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingTop: 40,
+    paddingBottom: 14,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
   },
   mapArea: {
     flex: 1,
     backgroundColor: '#f9fafb',
     position: 'relative',
     minHeight: 260,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
+    paddingHorizontal: 20,
+    paddingTop: 40,
   },
   backBtn: {
     position: 'absolute',
     top: 27,
     left: 16,
-    width: 45,
-    height: 45,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#1e2939',
+     width: 45,
+     height: 45,
+     borderRadius: 10,
+     borderWidth: 1.5,
+     borderColor: '#1e2939',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#1e2939',
@@ -658,96 +228,22 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 10,
   },
-  fitAllBtn: {
-    position: 'absolute',
-    top: 87,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-  mapsBtn: {
-    position: 'absolute',
-    top: 147,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-  wsStatus: {
-    position: 'absolute',
-    top: 27,
-    left: 70,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    zIndex: 10,
-  },
-  wsConnected: {
-    backgroundColor: '#E8F5E9',
-  },
-  wsDisconnected: {
-    backgroundColor: '#FFEBEE',
-  },
-  wsDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  wsDotConnected: {
-    backgroundColor: '#4CAF50',
-  },
-  wsDotDisconnected: {
-    backgroundColor: '#F44336',
-  },
-  wsText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
   navCard: {
     position: 'absolute',
-    top: 207,
+    top: 88,
     left: 16,
     right: 16,
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-    borderWidth: 1.5,
-    borderColor: '#87cefa',
+     borderWidth: 1.5,
+  borderColor: '#87cefa',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
     shadowRadius: 8,
     elevation: 4,
-    zIndex: 5,
   },
   navCardTop: {
     flexDirection: 'row',
@@ -1032,30 +528,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6a7282',
   },
-  providerMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#4eafe4',
-  },
-  destinationMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#EF4444',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F7F7F7',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#666666',
-  },
 });
-

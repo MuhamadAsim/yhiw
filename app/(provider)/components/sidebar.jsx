@@ -78,13 +78,7 @@ const Sidebar = ({ visible, onClose }) => {
       id: 6,
       title: 'MarkServiceComplete',
       icon: 'settings',
-      route: '/MarkServiceCompletedScreen',
-    },
-    {
-      id: 7,
-      title: 'NoProvidersAvailable',
-      icon: 'help-circle',
-      route: '/NoProvidersAvailableScreen',
+      route: '/ServiceCompletedScreen',
     },
     {
       id: 8,

@@ -10,9 +10,19 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { customerWebSocket } from '../../services/websocket.service';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { height } = Dimensions.get('window');
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com';
+
+interface JobStatusResponse {
+  status: 'en-route' | 'arrived' | 'started' | 'completed' | 'cancelled';
+  duration?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
+}
 
 const ServiceInProgressScreen = () => {
   const router = useRouter();
@@ -20,8 +30,10 @@ const ServiceInProgressScreen = () => {
   
   const [duration, setDuration] = useState('00:00');
   const [startTime] = useState(new Date());
-  const [wsConnected, setWsConnected] = useState(false);
-  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
+  const [pollingAttempts, setPollingAttempts] = useState(0);
+  const [jobStatus, setJobStatus] = useState('started');
+  const [isPolling, setIsPolling] = useState(true);
+  const [hasShownCancelledAlert, setHasShownCancelledAlert] = useState(false);
 
   // Get data from params
   const bookingId = params.bookingId as string;
@@ -48,99 +60,114 @@ const ServiceInProgressScreen = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // WebSocket setup
+  // Polling effect - check job status every 5 seconds
   useEffect(() => {
-    console.log('📱 Customer ServiceInProgress - Setting up WebSocket');
-    console.log('Booking ID:', bookingId);
-    console.log('Provider ID:', providerId);
-    
-    // Check initial connection
-    setWsConnected(customerWebSocket.isConnected());
-    
-    // Listen for connection changes
-    customerWebSocket.onConnectionChange((isConnected) => {
-      console.log('Connection changed:', isConnected);
-      setWsConnected(isConnected);
-      
-      // Re-join room if connection restored
-      if (isConnected && bookingId && !hasJoinedRoom) {
-        joinJobRoom();
-      }
-    });
-    
-    // Listen for provider status updates
-    customerWebSocket.on('provider_status_update', handleProviderStatus);
-    customerWebSocket.on('job_completed', handleJobCompleted);
-    
-    // Join job room
-    if (bookingId) {
-      joinJobRoom();
+    if (!bookingId) {
+      console.log('❌ No bookingId available for polling');
+      return;
     }
 
-    // Cleanup
+    console.log('🔄 Starting polling for job status (every 5 seconds)');
+    
+    const pollInterval = setInterval(async () => {
+      if (!isPolling) return;
+      
+      await checkJobStatus();
+      setPollingAttempts(prev => prev + 1);
+    }, 5000); // Poll every 5 seconds
+
+    // Cleanup on unmount
     return () => {
-      customerWebSocket.off('provider_status_update', handleProviderStatus);
-      customerWebSocket.off('job_completed', handleJobCompleted);
-      
-      // Leave job room
-      if (bookingId && hasJoinedRoom) {
-        customerWebSocket.send('leave_job_room', { bookingId });
-      }
+      console.log('🧹 Stopping polling');
+      clearInterval(pollInterval);
     };
-  }, []);
+  }, [bookingId, isPolling]);
 
-  const joinJobRoom = () => {
-    if (!bookingId || hasJoinedRoom) return;
-    
-    console.log('🚪 Customer joining job room:', bookingId);
-    customerWebSocket.send('join_job_room', {
-      bookingId,
-      role: 'customer'
-    });
-    setHasJoinedRoom(true);
-  };
+  const checkJobStatus = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        console.log('❌ No token found');
+        return;
+      }
 
-  const handleProviderStatus = (data: any) => {
-    console.log('📨 Provider status update:', data);
-    const statusData = data.data || data;
-    
-    // You could update UI based on status if needed
-    if (statusData.status === 'started') {
-      // Service started - already on this screen
-    } else if (statusData.status === 'en-route') {
-      // Should not happen here, but handle gracefully
-    }
-  };
+      const url = `${API_BASE_URL}/api/jobs/${bookingId}/status`;
+      console.log(`📊 Polling #${pollingAttempts + 1} - Checking job status`);
+      
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-  const handleJobCompleted = (data: any) => {
-    console.log('✅ Job completed event received:', data);
-    
-    // Auto-navigate to rating when provider completes
-    Alert.alert(
-      'Service Completed',
-      'The provider has completed the service. Please rate your experience.',
-      [
-        {
-          text: 'Rate Now',
-          onPress: () => {
-            router.push({
-              pathname: '/(customer)/RateService',
-              params: {
-                bookingId,
-                providerName,
-                providerId,
-                serviceType,
-                totalAmount,
-                duration,
-                pickupLocation,
-                pickupLat,
-                pickupLng,
+      if (!response.ok) {
+        console.log(`❌ Status check failed: ${response.status}`);
+        return;
+      }
+
+      const data: JobStatusResponse = await response.json();
+      console.log(`📊 Job status: ${data.status}`);
+
+      setJobStatus(data.status);
+
+      // ===== HANDLE JOB COMPLETED =====
+      if (data.status === 'completed') {
+        console.log('✅✅✅ JOB COMPLETED - Navigating to ServiceCompleted');
+        
+        // Stop polling
+        setIsPolling(false);
+
+        // Navigate to ServiceCompleted screen (keep bookingId in storage)
+        setTimeout(() => {
+          router.push({
+            pathname: '/(customer)/ServiceCompleted',
+            params: {
+              bookingId,
+              providerName,
+              providerId,
+              serviceType,
+              totalAmount,
+              duration,
+              pickupLocation,
+              pickupLat,
+              pickupLng,
+              completedAt: data.completedAt || new Date().toISOString(),
+            }
+          });
+        }, 500);
+      }
+
+      // ===== HANDLE JOB CANCELLED =====
+      if (data.status === 'cancelled' && !hasShownCancelledAlert) {
+        console.log('❌❌❌ JOB CANCELLED - Returning to home');
+        
+        setHasShownCancelledAlert(true);
+        
+        // Stop polling
+        setIsPolling(false);
+
+        // Remove bookingId from storage
+        await AsyncStorage.removeItem('currentBookingId');
+
+        // Show alert
+        Alert.alert(
+          'Service Cancelled',
+          data.cancellationReason || 'The service has been cancelled by the provider.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Navigate to home screen
+                router.push('/(customer)/home');
               }
-            });
-          }
-        }
-      ]
-    );
+            }
+          ]
+        );
+      }
+
+    } catch (error) {
+      console.log('❌ Error checking job status:', error);
+    }
   };
 
   const handleCall = () => {
@@ -172,13 +199,11 @@ const ServiceInProgressScreen = () => {
 
   return (
     <View style={styles.container}>
-      {/* Connection Status Badge */}
-      {wsConnected && hasJoinedRoom && (
-        <View style={styles.connectionBadge}>
-          <View style={styles.connectionDot} />
-          <Text style={styles.connectionText}>Live Updates Active</Text>
-        </View>
-      )}
+      {/* Polling Status Badge */}
+      <View style={styles.pollingBadge}>
+        <View style={styles.pollingDot} />
+        <Text style={styles.pollingText}>Live • {pollingAttempts}</Text>
+      </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -310,13 +335,13 @@ const ServiceInProgressScreen = () => {
             You'll be notified when the service is complete.
           </Text>
           
-          {/* Real-time status indicator */}
-          {wsConnected && (
-            <View style={styles.realtimeIndicator}>
-              <Ionicons name="radio-outline" size={14} color="#4CAF50" />
-              <Text style={styles.realtimeText}>Real-time updates active</Text>
-            </View>
-          )}
+          {/* Polling status indicator */}
+          <View style={styles.pollingIndicator}>
+            <Ionicons name="sync-outline" size={14} color="#4CAF50" />
+            <Text style={styles.pollingIndicatorText}>
+              Checking for updates every 5 seconds
+            </Text>
+          </View>
         </View>
 
         {/* Estimated Cost Card */}
@@ -353,7 +378,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8f8f8',
     position: 'relative',
   },
-  connectionBadge: {
+  pollingBadge: {
     position: 'absolute',
     top: 10,
     right: 20,
@@ -367,14 +392,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4CAF50',
   },
-  connectionDot: {
+  pollingDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
     backgroundColor: '#4CAF50',
     marginRight: 6,
   },
-  connectionText: {
+  pollingText: {
     fontSize: 10,
     fontWeight: '600',
     color: '#2E7D32',
@@ -701,7 +726,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 12,
   },
-  realtimeIndicator: {
+  pollingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#E8F5E9',
@@ -710,7 +735,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignSelf: 'flex-start',
   },
-  realtimeText: {
+  pollingIndicatorText: {
     fontSize: 10,
     color: '#2E7D32',
     fontWeight: '600',

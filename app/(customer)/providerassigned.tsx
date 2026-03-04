@@ -1,23 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Image,
-  ScrollView,
-  TouchableOpacity,
-  Dimensions,
+  ActivityIndicator,
   Alert,
+  Dimensions,
+  Image,
   Linking,
   Platform,
-  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
-import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { customerWebSocket } from '../../services/websocket.service';
 
 const { height, width } = Dimensions.get('window');
 
@@ -37,19 +35,50 @@ interface Coordinates {
   longitude: number;
 }
 
+interface ProviderData {
+  id: string;
+  name: string;
+  rating: number;
+  totalRatings?: number;
+  profileImage?: string;
+  vehicleDetails?: string;
+  phone?: string;
+  licensePlate?: string;
+  email?: string;
+  yearsOfExperience?: number;
+  completedJobs?: number;
+}
+
+interface JobStatusResponse {
+  status: 'searching' | 'accepted' | 'en-route' | 'arrived' | 'started' | 'completed' | 'cancelled';
+  eta?: string;
+  distance?: string;
+  provider?: {
+    name: string;
+    phone: string;
+    rating: number;
+  };
+}
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com';
+
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
-  const locationInterval = useRef<NodeJS.Timeout | null>(null);
+  const pollingTimer = useRef<NodeJS.Timeout | null>(null);
+  const isMounted = useRef(true);
+  const navigationInProgress = useRef(false);
 
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [timeRemaining, setTimeRemaining] = useState<number>(0);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'reconnecting'>('connected');
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [eta, setEta] = useState<string>('');
-  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
+  const [pollingAttempts, setPollingAttempts] = useState<number>(0);
+  const [providerDetails, setProviderDetails] = useState<ProviderData | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<string>('accepted');
+  const [hasShownArrivedAlert, setHasShownArrivedAlert] = useState(false);
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -74,7 +103,8 @@ const ProviderAssignedScreen = () => {
   const vehicleDetails = getStringParam(params.vehicleDetails) || 'White Flatbed Truck';
   const licensePlate = getStringParam(params.licensePlate) || 'BHR 5432';
   const estimatedArrival = getStringParam(params.estimatedArrival) || '15';
-  
+  const serviceType = getStringParam(params.serviceName) || 'Roadside Towing';
+
   // Get booking data from params
   const bookingId = getStringParam(params.bookingId);
   const serviceName = getStringParam(params.serviceName) || 'Roadside Towing';
@@ -82,8 +112,7 @@ const ProviderAssignedScreen = () => {
   const pickupAddress = getStringParam(params.pickupAddress) || '123 Main Street, Manama';
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const totalAmount = getStringParam(params.totalAmount) || '89.25';
-  const token = getStringParam(params.token);
-  
+
   // Get coordinates
   const pickupLat = getNumberParam(params.pickupLat) || 26.2285;
   const pickupLng = getNumberParam(params.pickupLng) || 50.5860;
@@ -91,14 +120,20 @@ const ProviderAssignedScreen = () => {
   const providerLng = getNumberParam(params.providerLng);
   const dropoffLat = getNumberParam(params.dropoffLat);
   const dropoffLng = getNumberParam(params.dropoffLng);
-  
-  const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
   // Check if this is a "no providers" scenario
   const noProviders = getStringParam(params.noProviders) === 'true';
 
+  // Debug logger
+  const addDebug = (message: string) => {
+    console.log(`🔍 [ProviderAssigned] ${message}`);
+  };
+
   // Set initial ETA
   useEffect(() => {
+    addDebug(`Initializing with bookingId: ${bookingId}, providerId: ${providerId}`);
+    addDebug(`Pickup location: ${pickupLat}, ${pickupLng}`);
+    
     setEta(`${estimatedArrival} min`);
     const etaMinutes = parseInt(estimatedArrival);
     if (!isNaN(etaMinutes)) {
@@ -107,100 +142,242 @@ const ProviderAssignedScreen = () => {
 
     // Set initial provider location if provided
     if (providerLat && providerLng) {
+      addDebug(`Initial provider location from params: ${providerLat}, ${providerLng}`);
       setProviderLocation({
         latitude: providerLat,
         longitude: providerLng,
         lastUpdate: new Date().toISOString(),
       });
       setIsLoading(false);
+    } else {
+      addDebug('No initial provider location in params');
     }
-  }, [estimatedArrival, providerLat, providerLng]);
 
-  // Initialize WebSocket and join job room
-  useEffect(() => {
-    if (!noProviders && bookingId && providerId) {
-      ensureWebSocketConnected();
-      setupWebSocketListeners();
-      startEtaCountdown();
-      
-      return () => {
-        leaveJobRoom();
-        removeWebSocketListeners();
-        if (locationInterval.current) {
-          clearInterval(locationInterval.current);
-        }
-      };
+    // Start polling for provider location and job status
+    if (bookingId) {
+      startPolling();
     }
+
+    // Start ETA countdown
+    startEtaCountdown();
+
+    // Cleanup on unmount
+    return () => {
+      addDebug('Cleaning up - stopping polling');
+      isMounted.current = false;
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+    };
   }, [bookingId, providerId]);
 
-  const ensureWebSocketConnected = async () => {
-    if (!customerWebSocket.isConnected()) {
-      console.log('WebSocket not connected, connecting...');
-      const connected = await customerWebSocket.connect('customer');
-      if (connected) {
-        console.log('WebSocket connected successfully');
-        setConnectionStatus('connected');
-        // Join job room after connection
-        setTimeout(() => joinJobRoom(), 1000);
-      } else {
-        console.log('Failed to connect WebSocket');
-        setConnectionStatus('disconnected');
+  const startPolling = () => {
+    addDebug('🔄 Starting polling for provider location & job status (every 10 seconds)');
+    
+    const poll = async () => {
+      if (!isMounted.current || navigationInProgress.current) return;
+      
+      // Fetch both location and status in parallel
+      await Promise.all([
+        fetchProviderLocation(),
+        fetchJobStatus()
+      ]);
+      
+      // Schedule next poll
+      if (isMounted.current && !navigationInProgress.current) {
+        pollingTimer.current = setTimeout(poll, 10000); // Poll every 10 seconds
       }
-    } else {
-      // Already connected, join job room immediately
-      joinJobRoom();
-    }
+    };
+    
+    // Start polling immediately
+    poll();
   };
 
-  // ✅ NEW: Join dedicated job room
-  const joinJobRoom = () => {
-    if (bookingId && providerId && !hasJoinedRoom) {
-      console.log('🚪 Joining job room:', bookingId);
+  const fetchProviderLocation = async () => {
+    if (!bookingId) {
+      addDebug('❌ No bookingId available for location fetch');
+      return;
+    }
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        addDebug('❌ No token found');
+        return;
+      }
+
+      const url = `${API_BASE_URL}/api/jobs/${bookingId}/provider-location`;
+      addDebug(`📍 Polling #${pollingAttempts + 1} - Fetching provider location`);
       
-      customerWebSocket.send('join_job_room', {
-        bookingId,
-        role: 'customer'
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
       });
-      
-      setHasJoinedRoom(true);
-      
-      // Request initial location after joining
-      setTimeout(() => {
-        requestProviderLocation();
-      }, 1000);
-      
-      // Set up periodic location refresh (every 30 seconds)
-      locationInterval.current = setInterval(() => {
-        if (connectionStatus === 'connected') {
-          requestProviderLocation();
+
+      if (!isMounted.current) return;
+
+      if (!response.ok) {
+        addDebug(`❌ Location fetch failed: ${response.status}`);
+        return;
+      }
+
+      const data = await response.json();
+      setPollingAttempts(prev => prev + 1);
+
+      if (data.success && data.location) {
+        addDebug(`✅ Location received: ${data.location.latitude}, ${data.location.longitude}`);
+        
+        const newLocation = {
+          latitude: data.location.latitude,
+          longitude: data.location.longitude,
+          heading: data.location.heading,
+          lastUpdate: data.timestamp || new Date().toISOString(),
+        };
+
+        setProviderLocation(newLocation);
+
+        // Fetch route and ETA
+        fetchRoute(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
+        getEtaFromGoogleMaps(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
+
+        // Center map to show both provider and pickup on first location
+        if (isLoading && mapRef.current) {
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: newLocation.latitude, longitude: newLocation.longitude },
+              { latitude: pickupLat, longitude: pickupLng }
+            ],
+            {
+              edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
+              animated: true,
+            }
+          );
         }
-      }, 30000);
+
+        setIsLoading(false);
+      } else {
+        addDebug(`ℹ️ No location update available`);
+      }
+
+      // Also fetch provider details if not already loaded
+      if (!providerDetails) {
+        fetchProviderDetails();
+      }
+
+    } catch (error) {
+      addDebug(`❌ Error fetching location: ${error}`);
     }
   };
 
-  // ✅ NEW: Leave job room
-  const leaveJobRoom = () => {
-    if (bookingId && hasJoinedRoom) {
-      console.log('🚪 Leaving job room:', bookingId);
-      customerWebSocket.send('leave_job_room', { bookingId });
-      setHasJoinedRoom(false);
+  const fetchJobStatus = async () => {
+    if (!bookingId || navigationInProgress.current) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const url = `${API_BASE_URL}/api/jobs/${bookingId}/status`;
+      addDebug(`📊 Checking job status...`);
+      
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data: JobStatusResponse = await response.json();
+      addDebug(`📊 Job status: ${data.status}`);
+
+      // Update current status
+      setCurrentStatus(data.status);
+
+      // Update ETA if provided
+      if (data.eta) {
+        setEta(data.eta);
+      }
+
+      // ===== HANDLE PROVIDER ARRIVAL =====
+      if (data.status === 'arrived' && !hasShownArrivedAlert) {
+        addDebug('✅ Provider has ARRIVED!');
+        setHasShownArrivedAlert(true);
+        
+        // Show alert to user
+        Alert.alert(
+          'Provider Arrived',
+          `${providerName} has arrived at your location. Please go outside to meet them.`,
+          [{ text: 'OK' }]
+        );
+      }
+
+      // ===== HANDLE SERVICE STARTED =====
+      if (data.status === 'started') {
+        addDebug('✅✅✅ SERVICE HAS STARTED - Navigating to ServiceInProgress');
+        
+        // Navigate to ServiceInProgress if not already navigating
+        if (!navigationInProgress.current) {
+          navigationInProgress.current = true;
+          
+          // Stop polling
+          if (pollingTimer.current) {
+            clearTimeout(pollingTimer.current);
+            pollingTimer.current = null;
+          }
+
+          // Navigate to ServiceInProgress
+          setTimeout(() => {
+            if (isMounted.current) {
+              router.push({
+                pathname: '/(customer)/ServiceInProgress',
+                params: {
+                  bookingId,
+                  providerName,
+                  providerId,
+                  providerPhone,
+                  serviceType,
+                  vehicleType,
+                  pickupLocation: pickupAddress,
+                  pickupLat: pickupLat.toString(),
+                  pickupLng: pickupLng.toString(),
+                  totalAmount,
+                }
+              });
+            }
+          }, 500);
+        }
+      }
+
+    } catch (error) {
+      addDebug(`Error checking job status: ${error}`);
     }
   };
 
-  const requestProviderLocation = () => {
-    console.log('Requesting provider location for booking:', bookingId);
-    
-    // Use the job room to request location
-    customerWebSocket.send('send_to_job_room', {
-      bookingId,
-      messageType: 'request_provider_location',
-      data: { requesterId: 'customer' }
-    });
-    
-    // Also send direct request as backup
-    customerWebSocket.send('request_provider_location', { 
-      bookingId
-    });
+  const fetchProviderDetails = async () => {
+    if (!providerId) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const url = `${API_BASE_URL}/api/providers/${providerId}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setProviderDetails(data.provider);
+      }
+    } catch (error) {
+      addDebug(`Error fetching provider details: ${error}`);
+    }
   };
 
   // Decode Google Maps polyline
@@ -216,56 +393,58 @@ const ProviderAssignedScreen = () => {
       let b = 0;
       shift = 0;
       result = 0;
-      
+
       do {
         b = t.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
-      
+
       let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
       lat += dlat;
-      
+
       shift = 0;
       result = 0;
-      
+
       do {
         b = t.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
-      
+
       let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
       lng += dlng;
-      
+
       points.push({
         latitude: lat / 1e5,
         longitude: lng / 1e5
       });
     }
-    
+
     return points;
   };
 
   // Fetch route from Google Maps
   const fetchRoute = async (startLat: number, startLng: number, endLat: number, endLng: number) => {
     try {
+      addDebug(`Fetching route from ${startLat},${startLng} to ${endLat},${endLng}`);
       const apiKey = Platform.select({
         android: ANDROID_API_KEY,
         ios: IOS_API_KEY,
       });
 
       const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&key=${apiKey}`;
-      
+
       const response = await fetch(url);
       const data = await response.json();
 
       if (data.routes.length > 0) {
         const points = decodePolyline(data.routes[0].overview_polyline.points);
         setRouteCoordinates(points);
+        addDebug(`Route found with ${points.length} points`);
       }
     } catch (error) {
-      console.error('Error fetching route:', error);
+      addDebug(`Error fetching route: ${error}`);
     }
   };
 
@@ -278,197 +457,27 @@ const ProviderAssignedScreen = () => {
       });
 
       const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${apiKey}`;
-      
+
       const response = await fetch(url);
       const data = await response.json();
 
       if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
         const durationText = data.rows[0].elements[0].duration.text;
         setEta(durationText);
-        
+        addDebug(`ETA updated: ${durationText}`);
+
         const durationInSeconds = data.rows[0].elements[0].duration.value;
         setTimeRemaining(durationInSeconds);
       }
     } catch (error) {
-      console.error('Error getting ETA:', error);
+      addDebug(`Error getting ETA: ${error}`);
     }
   };
 
-  const setupWebSocketListeners = () => {
-    // Listen for all possible provider update events
-    customerWebSocket.on('provider_location', handleProviderLocationUpdate);
-    customerWebSocket.on('provider_assigned', handleProviderAssigned);
-    customerWebSocket.on('job_accepted', handleJobAccepted);
-    customerWebSocket.on('status_update', handleStatusUpdate);
-    customerWebSocket.on('eta_update', handleEtaUpdate);
-    
-    // NEW: Job room events
-    customerWebSocket.on('joined_job_room', handleJoinedJobRoom);
-    customerWebSocket.on('user_joined', handleUserJoined);
-    customerWebSocket.on('user_left', handleUserLeft);
-    
-    // Connection change listener
-    customerWebSocket.onConnectionChange((isConnected) => {
-      handleConnectionChange({ isConnected });
-    });
-  };
-
-  const removeWebSocketListeners = () => {
-    customerWebSocket.off('provider_location', handleProviderLocationUpdate);
-    customerWebSocket.off('provider_assigned', handleProviderAssigned);
-    customerWebSocket.off('job_accepted', handleJobAccepted);
-    customerWebSocket.off('status_update', handleStatusUpdate);
-    customerWebSocket.off('eta_update', handleEtaUpdate);
-    customerWebSocket.off('joined_job_room', handleJoinedJobRoom);
-    customerWebSocket.off('user_joined', handleUserJoined);
-    customerWebSocket.off('user_left', handleUserLeft);
-  };
-
-  // ✅ NEW: Handle joining job room confirmation
-  const handleJoinedJobRoom = (message: any) => {
-    console.log('✅ Joined job room:', message);
-    const data = message.data || message;
-    Alert.alert('Connected', `You are now connected with ${providerName}`);
-  };
-
-  // ✅ NEW: Handle other user joining
-  const handleUserJoined = (message: any) => {
-    console.log('👤 User joined:', message);
-    const data = message.data || message;
-    if (data.userType === 'provider') {
-      console.log('✅ Provider is now in the room');
-    }
-  };
-
-  // ✅ NEW: Handle user leaving
-  const handleUserLeft = (message: any) => {
-    console.log('👤 User left:', message);
-  };
-
-  const handleProviderAssigned = (message: any) => {
-    console.log('Provider assigned message:', message);
-    const data = message.data || message;
-    
-    if (data.providerLocation) {
-      handleProviderLocationUpdate({ data: data.providerLocation });
-    }
-  };
-
-  const handleJobAccepted = (message: any) => {
-    console.log('Job accepted message:', message);
-    const data = message.data || message;
-    
-    if (data.providerLocation) {
-      handleProviderLocationUpdate({ data: data.providerLocation });
-    }
-  };
-
-  const handleProviderLocationUpdate = (message: any) => {
-    console.log('Provider location update:', message);
-    
-    const data = message.data || message;
-    
-    // Try different possible field names
-    let latitude, longitude;
-    
-    if (data.location) {
-      // Format: { location: { latitude, longitude } }
-      latitude = data.location.latitude || data.location.lat;
-      longitude = data.location.longitude || data.location.lng;
-    } else {
-      // Direct format
-      latitude = data.latitude || data.lat;
-      longitude = data.longitude || data.lng;
-    }
-    
-    if (latitude && longitude) {
-      const newLocation = {
-        latitude: typeof latitude === 'string' ? parseFloat(latitude) : latitude,
-        longitude: typeof longitude === 'string' ? parseFloat(longitude) : longitude,
-        heading: data.heading || (data.location?.heading),
-        lastUpdate: data.timestamp || data.lastUpdate || new Date().toISOString(),
-      };
-      
-      console.log('Setting provider location:', newLocation);
-      setProviderLocation(newLocation);
-      
-      // Fetch route and ETA
-      fetchRoute(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
-      getEtaFromGoogleMaps(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
-      
-      // Center map to show both provider and pickup on first location
-      if (isLoading && mapRef.current) {
-        mapRef.current.fitToCoordinates(
-          [
-            { latitude: newLocation.latitude, longitude: newLocation.longitude },
-            { latitude: pickupLat, longitude: pickupLng }
-          ],
-          {
-            edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
-            animated: true,
-          }
-        );
-      }
-      
-      setIsLoading(false);
-    }
-  };
-
-  const handleStatusUpdate = (message: any) => {
-    console.log('Status update:', message);
-    const data = message.data || message;
-    
-    if (data.status === 'arrived') {
-      Alert.alert(
-        'Provider Arrived',
-        `${providerName} has arrived at your location.`,
-        [{ text: 'OK' }]
-      );
-    } else if (data.status === 'en-route') {
-      // Update ETA if provided
-      if (data.eta) {
-        setEta(data.eta);
-      }
-    }
-    
-    // If location is included in status update
-    if (data.location) {
-      handleProviderLocationUpdate({ data: data.location });
-    }
-  };
-
-  const handleEtaUpdate = (message: any) => {
-    console.log('ETA update:', message);
-    const data = message.data || message;
-    
-    if (data.eta) {
-      setEta(data.eta);
-    }
-    
-    if (data.distance) {
-      // Could display distance if needed
-    }
-  };
-
-  const handleConnectionChange = (data: any) => {
-    const isConnected = data.isConnected || data;
-    setConnectionStatus(isConnected ? 'connected' : 'disconnected');
-    
-    if (!isConnected) {
-      // Try to reconnect
-      setTimeout(() => {
-        setConnectionStatus('reconnecting');
-        customerWebSocket.connect('customer').then(connected => {
-          if (connected && bookingId && providerId) {
-            // Rejoin job room after reconnection
-            joinJobRoom();
-          }
-        });
-      }, 3000);
-    } else if (isConnected && bookingId && providerId && !hasJoinedRoom) {
-      // Reconnected, join room again
-      joinJobRoom();
-    }
+  const forceRefresh = () => {
+    addDebug('🔄 Manually refreshing');
+    fetchProviderLocation();
+    fetchJobStatus();
   };
 
   const startEtaCountdown = () => {
@@ -515,39 +524,48 @@ const ProviderAssignedScreen = () => {
     });
   };
 
-  const handleTrackProvider = () => {
-    if (providerLocation) {
-      router.push({
-        pathname: '/(customer)/LiveTracking',
-        params: {
-          bookingId,
-          providerName,
-          providerId,
-          providerLat: providerLocation.latitude.toString(),
-          providerLng: providerLocation.longitude.toString(),
-          pickupLat: pickupLat.toString(),
-          pickupLng: pickupLng.toString(),
-          dropoffLat: dropoffLat?.toString() || '',
-          dropoffLng: dropoffLng?.toString() || '',
-          estimatedArrival: timeRemaining.toString(),
-          eta: eta,
-        }
-      });
-    } else {
-      Alert.alert('Tracking', 'Provider location is being updated...');
-    }
-  };
-
   const handleOpenInMaps = () => {
-    if (providerLocation) {
+    if (providerLocation && pickupLat && pickupLng) {
       const url = Platform.select({
         ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${pickupLat},${pickupLng}`,
         android: `google.navigation:q=${pickupLat},${pickupLng}`,
       });
-      
+
       if (url) {
         Linking.openURL(url);
       }
+    } else {
+      Alert.alert('Error', 'Location information not available');
+    }
+  };
+
+  const handleTrackProvider = () => {
+    if (providerLocation) {
+      addDebug(`🔄 Navigating to TrackProviderScreen`);
+      router.push({
+        pathname: '/(customer)/TrackProvider',
+        params: {
+          bookingId: bookingId,
+          providerId: providerId,
+          providerName: providerName,
+          providerPhone: providerPhone,
+          providerLat: providerLocation.latitude.toString(),
+          providerLng: providerLocation.longitude.toString(),
+          pickupLat: pickupLat.toString(),
+          pickupLng: pickupLng.toString(),
+          pickupAddress: pickupAddress,
+          dropoffLat: dropoffLat?.toString() || '',
+          dropoffLng: dropoffLng?.toString() || '',
+          estimatedArrival: timeRemaining.toString(),
+          eta: eta,
+          serviceType: serviceType,
+          vehicleType: vehicleType,
+          totalAmount: totalAmount,
+          lastUpdate: providerLocation.lastUpdate || new Date().toISOString()
+        }
+      });
+    } else {
+      Alert.alert('Tracking', 'Provider location is being updated...');
     }
   };
 
@@ -557,24 +575,11 @@ const ProviderAssignedScreen = () => {
       'Are you sure you want to cancel this service request?',
       [
         { text: 'No', style: 'cancel' },
-        { 
-          text: 'Yes, Cancel', 
+        {
+          text: 'Yes, Cancel',
           style: 'destructive',
           onPress: async () => {
             try {
-              // Leave job room first
-              leaveJobRoom();
-              
-              // Send cancellation via WebSocket
-              if (customerWebSocket.isConnected()) {
-                customerWebSocket.send('send_to_job_room', {
-                  bookingId,
-                  messageType: 'job_cancelled',
-                  data: { reason: 'customer_cancelled' }
-                });
-              }
-              
-              // API call to cancel booking
               const token = await AsyncStorage.getItem('userToken');
               await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/cancel`, {
                 method: 'POST',
@@ -585,6 +590,9 @@ const ProviderAssignedScreen = () => {
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
 
+              // Remove bookingId from storage since job is cancelled
+              await AsyncStorage.removeItem('currentBookingId');
+              
               router.back();
             } catch (error) {
               console.error('Cancel error:', error);
@@ -608,7 +616,7 @@ const ProviderAssignedScreen = () => {
           <Text style={styles.subtitle}>
             We couldn't find any providers in your area at this time. Please try again later.
           </Text>
-          
+
           <TouchableOpacity
             style={[styles.trackButton, { marginTop: 30 }]}
             onPress={() => router.back()}
@@ -619,6 +627,9 @@ const ProviderAssignedScreen = () => {
       </View>
     );
   }
+
+  // Check if provider has arrived
+  const hasProviderArrived = currentStatus === 'arrived';
 
   return (
     <View style={styles.container}>
@@ -641,31 +652,38 @@ const ProviderAssignedScreen = () => {
         {/* Subtitle */}
         <Text style={styles.subtitle}>Your service provider is on the way</Text>
 
-        {/* Connection Status */}
-        {connectionStatus !== 'connected' && (
-          <View style={[
-            styles.connectionStatus,
-            connectionStatus === 'reconnecting' ? styles.reconnectingStatus : styles.disconnectedStatus
-          ]}>
-            <ActivityIndicator size="small" color={connectionStatus === 'reconnecting' ? '#F59E0B' : '#EF4444'} />
-            <Text style={[
-              styles.connectionText,
-              connectionStatus === 'reconnecting' ? styles.reconnectingText : styles.disconnectedText
-            ]}>
-              {connectionStatus === 'reconnecting' ? 'Reconnecting...' : 'Connection lost - Using last known location'}
-            </Text>
-          </View>
-        )}
+        {/* Status Badge */}
+        <View style={[
+          styles.statusBadge,
+          hasProviderArrived ? styles.statusBadgeGreen : styles.statusBadgeBlue
+        ]}>
+          <Text style={styles.statusText}>
+            {currentStatus === 'arrived' ? 'PROVIDER ARRIVED' : 
+             currentStatus === 'started' ? 'SERVICE STARTED' :
+             currentStatus === 'en-route' ? 'ON THE WAY' :
+             currentStatus?.toUpperCase() || 'PROVIDER ASSIGNED'}
+          </Text>
+        </View>
 
-        {/* Job Room Status (optional) */}
-        {hasJoinedRoom && connectionStatus === 'connected' && (
-          <View style={styles.roomStatus}>
-            <Ionicons name="radio-outline" size={14} color="#4CAF50" />
-            <Text style={styles.roomStatusText}>Live connection active</Text>
-          </View>
-        )}
+        {/* Debug Panel - TEMPORARY for testing */}
+        <View style={styles.debugPanel}>
+          <Text style={styles.debugTitle}>🔍 DEBUG INFO</Text>
+          <ScrollView style={styles.debugScroll} horizontal>
+            <View>
+              <Text style={styles.debugText}>• Booking ID: {bookingId}</Text>
+              <Text style={styles.debugText}>• Provider ID: {providerId}</Text>
+              <Text style={styles.debugText}>• Status: {currentStatus}</Text>
+              <Text style={styles.debugText}>• Polling: #{pollingAttempts}</Text>
+              <Text style={styles.debugText}>• Location: {providerLocation ? '✓' : '✗'}</Text>
+              <Text style={styles.debugText}>• Last update: {providerLocation?.lastUpdate ? new Date(providerLocation.lastUpdate).toLocaleTimeString() : 'N/A'}</Text>
+            </View>
+          </ScrollView>
+          <TouchableOpacity style={styles.debugButton} onPress={forceRefresh}>
+            <Text style={styles.debugButtonText}>🔄 FORCE REFRESH</Text>
+          </TouchableOpacity>
+        </View>
 
-        {/* Map Section - Google Maps Integration */}
+        {/* Map Section */}
         <View style={styles.mapContainer}>
           {/* ETA Badge */}
           <View style={styles.etaBadge}>
@@ -760,6 +778,11 @@ const ProviderAssignedScreen = () => {
           >
             <Ionicons name="navigate-outline" size={20} color="#68bdee" />
           </TouchableOpacity>
+
+          {/* Polling Info */}
+          <View style={styles.pollingBadge}>
+            <Text style={styles.pollingText}>Live • {pollingAttempts}</Text>
+          </View>
         </View>
 
         {/* Provider Card */}
@@ -780,7 +803,9 @@ const ProviderAssignedScreen = () => {
               <View style={styles.ratingContainer}>
                 <Ionicons name="star" size={16} color="#FFB800" />
                 <Text style={styles.ratingText}>{providerRating}</Text>
-                <Text style={styles.reviewsText}>• {getStringParam(params.totalRatings) || '127'} reviews</Text>
+                <Text style={styles.reviewsText}>
+                  • {providerDetails?.totalRatings || '127'} reviews
+                </Text>
               </View>
               <Text style={styles.vehicleInfo}>{vehicleDetails}</Text>
               <Text style={styles.plateNumber}>{licensePlate}</Text>
@@ -788,12 +813,17 @@ const ProviderAssignedScreen = () => {
           </View>
 
           {/* Provider Location Info */}
-          {providerLocation && (
+          {providerLocation ? (
             <View style={styles.locationInfoContainer}>
               <Ionicons name="location" size={14} color="#68bdee" />
               <Text style={styles.locationInfoText}>
                 Last updated: {new Date(providerLocation.lastUpdate || '').toLocaleTimeString()}
               </Text>
+            </View>
+          ) : (
+            <View style={styles.locationInfoContainer}>
+              <ActivityIndicator size="small" color="#68bdee" />
+              <Text style={styles.locationInfoText}>Waiting for provider location...</Text>
             </View>
           )}
 
@@ -825,7 +855,7 @@ const ProviderAssignedScreen = () => {
         {/* Service Details Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>SERVICE DETAILS</Text>
-          
+
           <View style={styles.cardDivider} />
 
           <View style={styles.detailRow}>
@@ -868,7 +898,7 @@ const ProviderAssignedScreen = () => {
         {/* Status Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>JOB STATUS</Text>
-          
+
           <View style={styles.cardDivider} />
 
           {/* Status Item 1 - Active */}
@@ -884,15 +914,19 @@ const ProviderAssignedScreen = () => {
 
           {/* Status Item 2 - In progress (current) */}
           <View style={styles.statusItem}>
-            <View style={[styles.statusCheckboxInactive, providerLocation && styles.statusCheckboxActive]}>
-              {providerLocation && <View style={styles.statusDotActive} />}
+            <View style={[styles.statusCheckboxInactive, (providerLocation || hasProviderArrived) && styles.statusCheckboxActive]}>
+              {(providerLocation || hasProviderArrived) && <View style={styles.statusDotActive} />}
             </View>
             <View style={styles.statusTextContainer}>
-              <Text style={[styles.statusTextInactive, providerLocation && styles.statusTextActive]}>
-                Provider On the Way
+              <Text style={[styles.statusTextInactive, (providerLocation || hasProviderArrived) && styles.statusTextActive]}>
+                {hasProviderArrived ? 'Provider Arrived' : 'Provider On the Way'}
               </Text>
-              <Text style={[styles.statusTimeInactive, providerLocation && styles.statusTimeActive]}>
-                {providerLocation ? 'Live tracking active' : `ETA: ${estimatedArrival} minutes`}
+              <Text style={[styles.statusTimeInactive, (providerLocation || hasProviderArrived) && styles.statusTimeActive]}>
+                {hasProviderArrived 
+                  ? 'Provider has arrived' 
+                  : providerLocation 
+                    ? 'Live tracking active' 
+                    : `ETA: ${estimatedArrival} minutes`}
               </Text>
             </View>
           </View>
@@ -970,47 +1004,59 @@ const styles = StyleSheet.create({
     marginBottom: height * 0.025,
     letterSpacing: 0.3,
   },
-  connectionStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  statusBadge: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
-    marginBottom: 8,
-    width: '100%',
-  },
-  disconnectedStatus: {
-    backgroundColor: '#FEE2E2',
-  },
-  reconnectingStatus: {
-    backgroundColor: '#FEF3C7',
-  },
-  connectionText: {
-    fontSize: 12,
-    marginLeft: 8,
-    fontWeight: '500',
-  },
-  disconnectedText: {
-    color: '#DC2626',
-  },
-  reconnectingText: {
-    color: '#F59E0B',
-  },
-  roomStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#E8F5E9',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    marginBottom: 12,
+    marginBottom: 10,
     alignSelf: 'center',
   },
-  roomStatusText: {
-    fontSize: 11,
-    color: '#2E7D32',
-    marginLeft: 6,
-    fontWeight: '600',
+  statusBadgeBlue: {
+    backgroundColor: '#68bdee',
+  },
+  statusBadgeGreen: {
+    backgroundColor: '#4CAF50',
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  // Debug Panel
+  debugPanel: {
+    width: '100%',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 10,
+  },
+  debugTitle: {
+    color: '#00ff00',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  debugScroll: {
+    maxHeight: 100,
+    marginBottom: 10,
+  },
+  debugText: {
+    color: '#00ff00',
+    fontSize: 10,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    marginBottom: 2,
+  },
+  debugButton: {
+    backgroundColor: '#333',
+    padding: 8,
+    borderRadius: 5,
+    alignItems: 'center',
+  },
+  debugButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   mapContainer: {
     width: '100%',
@@ -1080,6 +1126,24 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
     zIndex: 10,
     elevation: 5,
+  },
+  pollingBadge: {
+    position: 'absolute',
+    bottom: 15,
+    left: 15,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#68bdee',
+    zIndex: 10,
+    elevation: 5,
+  },
+  pollingText: {
+    fontSize: 10,
+    color: '#68bdee',
+    fontWeight: '600',
   },
   pickupMarkerContainer: {
     backgroundColor: 'white',

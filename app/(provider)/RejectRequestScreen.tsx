@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -7,1121 +7,701 @@ import {
   StyleSheet,
   SafeAreaView,
   Alert,
-  StatusBar,
-  Platform,
-  Linking,
-  ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
-import * as Location from 'expo-location';
-import { providerWebSocket } from '../../services/websocket.service';
 
-// Google Maps API Keys
-const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
-const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
+// ─── Icon components (no external deps) ─────────────────────────────────────
 
-// Select API key based on platform
-const GOOGLE_MAPS_API_KEY = Platform.select({
-  android: ANDROID_API_KEY,
-  ios: IOS_API_KEY,
-});
+const DollarIcon = () => (
+  <View style={styles.iconWrap}>
+    <Feather name="dollar-sign" size={24} color="#87CEFA" />
+  </View>
+);
 
-interface RouteStep {
-  instruction: string;
-  distance: string;
-  duration: string;
-}
+const PinIcon = () => (
+  <View style={styles.iconWrap}>
+    <Feather name="map-pin" size={24} color="#87CEFA" />
+  </View>
+);
 
-interface Coordinates {
-  latitude: number;
-  longitude: number;
-}
+const ClockIcon = () => (
+  <View style={styles.iconWrap}>
+    <Feather name="clock" size={24} color="#87CEFA" />
+  </View>
+);
+
+const CheckIcon = ({ size = 20, color = '#fff' }) => (
+  <Text style={{ fontSize: size, color }}>✓</Text>
+);
+
+const CrossIcon = ({ size = 20, color = '#fff' }) => (
+  <Text style={{ fontSize: size, color }}>✕</Text>
+);
+
+const WarningIcon = () => (
+  <Text style={{ fontSize: 18, color: '#FFA000' }}>⚠</Text>
+);
+
+// ─── Decline Reasons ─────────────────────────────────────────────────────────
+
+const DECLINE_REASONS = [
+  { id: 'too_far', label: 'Too far from current location' },
+  { id: 'another_job', label: 'Already have another job' },
+  { id: 'vehicle_type', label: 'Vehicle type not suitable' },
+  { id: 'outside_hours', label: 'Outside service hours' },
+  { id: 'other', label: 'Other reason' },
+];
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+const RequestSummary = () => (
+  <View style={styles.summaryCard}>
+    <Text style={styles.sectionLabel}>REQUEST SUMMARY</Text>
+    <View style={styles.summaryRow}>
+      <View style={styles.summaryItem}>
+        <DollarIcon />
+        <Text style={styles.summaryValue}>81 BHD</Text>
+        <Text style={styles.summarySubLabel}>Earnings</Text>
+      </View>
+      <View style={styles.summaryDivider} />
+      <View style={styles.summaryItem}>
+        <PinIcon />
+        <Text style={styles.summaryValue}>2.5 KM</Text>
+        <Text style={styles.summarySubLabel}>Distance</Text>
+      </View>
+      <View style={styles.summaryDivider} />
+      <View style={styles.summaryItem}>
+        <ClockIcon />
+        <Text style={styles.summaryValue}>8-10</Text>
+        <Text style={styles.summarySubLabel}>Minutes</Text>
+      </View>
+    </View>
+  </View>
+);
+
+const AcceptSection = ({ onAccept }) => (
+  <View style={styles.acceptCard}>
+    <View style={styles.acceptSection}>
+      <View style={styles.cardHeader}>
+        <View style={styles.acceptIconCircle}>
+          <CheckIcon size={18} color="#FFFFFF" />
+        </View>
+        <View style={styles.cardHeaderText}>
+          <Text style={styles.acceptCardTitle}>Accept Request</Text>
+          <Text style={styles.cardSubtitle}>Start earning immediately</Text>
+        </View>
+      </View>
+    </View>
+
+    <View style={styles.cardDividergreen} />
+    <View style={styles.acceptSection}>
+      <Text style={styles.nextLabel}>WHAT HAPPENS NEXT:</Text>
+      <View style={styles.stepRow}>
+        <View style={styles.stepCircle}><Text style={styles.stepNum}>1</Text></View>
+        <Text style={styles.stepText}>Customer will be notified</Text>
+      </View>
+      <View style={styles.stepRow}>
+        <View style={styles.stepCircle}><Text style={styles.stepNum}>2</Text></View>
+        <Text style={styles.stepText}>Navigate to pickup location</Text>
+      </View>
+      <View style={styles.stepRow}>
+        <View style={styles.stepCircle}><Text style={styles.stepNum}>3</Text></View>
+        <Text style={styles.stepText}>Start the service</Text>
+      </View>
+
+      <TouchableOpacity
+        style={styles.acceptBtn}
+        onPress={onAccept}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.acceptBtnText}>Accept & Start Navigation</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+);
+
+// ─── Decline Section (with reason selection) ─────────────────────────────────
+
+const DeclineSection = ({ onDecline }) => {
+  const [selectedReason, setSelectedReason] = useState(null);
+
+  const handleConfirmDecline = () => {
+    if (!selectedReason) {
+      Alert.alert('Select a Reason', 'Please select a reason before declining.');
+      return;
+    }
+    const reason = DECLINE_REASONS.find(r => r.id === selectedReason)?.label;
+    onDecline(reason);
+  };
+
+  const handleCancel = () => {
+    setSelectedReason(null);
+  };
+
+  return (
+    <View style={styles.declineCard}>
+
+      {/* 🔴 Top Header Section */}
+      <View style={styles.declineTop}>
+        <View style={styles.cardHeader}>
+          <View style={styles.declineIconCircle}>
+            <CrossIcon size={16} color="#FFFFFF" />
+          </View>
+          <View style={styles.cardHeaderText}>
+            <Text style={styles.declineCardTitle}>Decline Request</Text>
+            <Text style={styles.cardSubtitle}>Not available for this job</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* 🔴 Full-width Divider */}
+      <View style={styles.cardDividerred} />
+
+      {/* ⚪ Bottom White Section — Reason Selection */}
+      <View style={styles.declineBottom}>
+
+        <Text style={styles.reasonLabel}>SELECT A REASON (REQUIRED):</Text>
+
+        {DECLINE_REASONS.map((reason) => (
+          <TouchableOpacity
+            key={reason.id}
+            style={[
+              styles.radioOption,
+              selectedReason === reason.id && styles.radioOptionSelected,
+            ]}
+            onPress={() => setSelectedReason(reason.id)}
+            activeOpacity={0.7}
+          >
+            <View style={[
+              styles.radioCircle,
+              selectedReason === reason.id && styles.radioCircleSelected,
+            ]}>
+              {selectedReason === reason.id && (
+                <View style={styles.radioInner} />
+              )}
+            </View>
+            <Text style={[
+              styles.radioLabel,
+              selectedReason === reason.id && styles.radioLabelSelected,
+            ]}>
+              {reason.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+
+        {/* Confirm Decline Button */}
+        <TouchableOpacity
+          style={[
+            styles.confirmDeclineBtn,
+            !selectedReason && styles.confirmDeclineBtnDisabled,
+          ]}
+          onPress={handleConfirmDecline}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.confirmDeclineBtnText}>Confirm Decline</Text>
+        </TouchableOpacity>
+
+        {/* Cancel Button */}
+        <TouchableOpacity
+          style={styles.cancelBtn}
+          onPress={handleCancel}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.cancelBtnText}>Cancel</Text>
+        </TouchableOpacity>
+
+      </View>
+    </View>
+  );
+};
+
+const ImportantWarning = () => (
+  <View style={styles.warningCard}>
+    <View style={styles.warningHeader}>
+      <WarningIcon />
+      <Text style={styles.warningTitle}> Important</Text>
+    </View>
+    <Text style={styles.warningText}>
+      High rejection rate may affect your account standing and future request
+      priority. Current acceptance rate:{' '}
+      <Text style={styles.warningBold}>98%</Text>
+    </Text>
+  </View>
+);
+
+const ImpactStats = () => (
+  <View style={styles.impactCard}>
+    <Text style={styles.sectionLabel}>IMPACT ON YOUR STATS</Text>
+    <View style={styles.impactRow}>
+      <View style={styles.impactCol}>
+        <Text style={styles.impactColHead}>If you Accept:</Text>
+        <View style={styles.impactStatRow}>
+          <Text style={styles.impactIconGreen}>✓</Text>
+          <Text style={styles.impactStatGreen}>+81 BHD earnings</Text>
+        </View>
+        <View style={styles.impactStatRow}>
+          <Text style={styles.impactIconGreen}>✓</Text>
+          <Text style={styles.impactStatGreen}>Maintain 98% rate</Text>
+        </View>
+      </View>
+
+      <View style={styles.impactCol}>
+        <Text style={styles.impactColHead}>If you Decline:</Text>
+        <View style={styles.impactStatRow}>
+          <Text style={styles.impactIconRed}>✕</Text>
+          <Text style={styles.impactStatRed}>-0 BHD earnings</Text>
+        </View>
+        <View style={styles.impactStatRow}>
+          <Text style={styles.impactIconRed}>✕</Text>
+          <Text style={styles.impactStatRed}>Rate drops to 96%</Text>
+        </View>
+      </View>
+    </View>
+  </View>
+);
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
-export default function NavigateToCustomerScreen() {
-  const router = useRouter();
-  const params = useLocalSearchParams();
-  
-  const mapRef = useRef<MapView>(null);
-  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
-  
-  const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
-  const [nextTurn, setNextTurn] = useState<RouteStep | null>(null);
-  const [eta, setEta] = useState('-- min');
-  const [distance, setDistance] = useState('-- km');
-  const [isLoading, setIsLoading] = useState(true);
-  const [wsConnected, setWsConnected] = useState(false);
-  const [mapReady, setMapReady] = useState(false);
-  const [hasJoinedRoom, setHasJoinedRoom] = useState(false);
-
-  // Get data from params (coming from MakeYourDecisionScreen)
-  const customerName = params.customerName as string || 'Customer';
-  const customerPhone = params.customerPhone as string || '';
-  const jobId = params.jobId as string;
-  const bookingId = params.bookingId as string;
-  const serviceType = params.serviceType as string || 'Service';
-  const price = params.price as string || '0';
-  
-  // Destination (pickup location) - CRITICAL: Use passed coordinates
-  const destination = {
-    latitude: parseFloat(params.pickupLat as string) || 26.2285,
-    longitude: parseFloat(params.pickupLng as string) || 50.5860,
-    address: params.pickupLocation as string || 'Pickup Location',
+export default function MakeYourDecisionScreen() {
+  const handleAccept = () => {
+    Alert.alert('Request Accepted', 'Navigate to pickup location now.');
   };
 
-  useEffect(() => {
-    console.log('🗺️ NavigateToCustomerScreen mounted');
-    console.log('Destination:', destination);
-    console.log('Customer:', customerName);
-    console.log('Job ID:', jobId);
-    console.log('Pickup Coordinates:', params.pickupLat, params.pickupLng);
-    
-    getUserLocation();
-    setupWebSocket();
-
-    return () => {
-      if (locationSubscription.current) {
-        locationSubscription.current.remove();
-      }
-      // Leave job room on unmount
-      if (jobId && hasJoinedRoom) {
-        providerWebSocket.send('leave_job_room', { jobId });
-      }
-      providerWebSocket.disconnect();
-    };
-  }, []);
-
-  // Update route when location changes
-  useEffect(() => {
-    if (userLocation && destination) {
-      getRoute(userLocation, destination);
-    }
-  }, [userLocation]);
-
-  // Fit map to show both points when ready
-  useEffect(() => {
-    if (mapReady && userLocation && destination && mapRef.current) {
-      mapRef.current.fitToCoordinates(
-        [userLocation, destination],
-        {
-          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-          animated: true,
-        }
-      );
-    }
-  }, [mapReady, userLocation, destination]);
-
-  const setupWebSocket = () => {
-    // Listen for connection changes
-    providerWebSocket.onConnectionChange((connected) => {
-      console.log('WebSocket connection changed:', connected);
-      setWsConnected(connected);
-      
-      // IMPORTANT: Join job room when connected
-      if (connected && jobId && !hasJoinedRoom) {
-        joinJobRoom();
-      }
-    });
-
-    // Add listener for customer messages
-    providerWebSocket.on('customer_message', (data: any) => {
-      console.log('📨 Message from customer:', data);
-      // Handle customer messages if needed
-    });
-
-    // Check if already connected
-    if (providerWebSocket.isConnected() && jobId && !hasJoinedRoom) {
-      joinJobRoom();
-    }
+  const handleDecline = (reason) => {
+    Alert.alert('Request Declined', reason ? `Reason: ${reason}` : 'The request has been declined.');
   };
-
-  // IMPORTANT: Join dedicated job room for real-time communication
-  const joinJobRoom = () => {
-    console.log('🚪 Joining job room:', jobId);
-    providerWebSocket.send('join_job_room', {
-      jobId,
-      role: 'provider'
-    });
-    setHasJoinedRoom(true);
-  };
-
-  const getUserLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permission Denied',
-          'Location permission is required for navigation',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Settings', onPress: () => Linking.openSettings() }
-          ]
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      // Get current location
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest,
-      });
-
-      const userLoc = {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-      };
-
-      console.log('📍 Current location:', userLoc);
-      setUserLocation(userLoc);
-
-      // Send initial location to backend
-      if (providerWebSocket.isConnected()) {
-        providerWebSocket.send('provider_location_update', {
-          jobId,
-          bookingId,
-          latitude: userLoc.latitude,
-          longitude: userLoc.longitude,
-        });
-      }
-
-      // Start watching position for real-time updates
-      locationSubscription.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Highest,
-          timeInterval: 5000,
-          distanceInterval: 10,
-        },
-        (newLocation) => {
-          const updatedLoc = {
-            latitude: newLocation.coords.latitude,
-            longitude: newLocation.coords.longitude,
-          };
-          setUserLocation(updatedLoc);
-          
-          // Update provider location to backend - CRITICAL for customer tracking
-          if (providerWebSocket.isConnected()) {
-            providerWebSocket.send('provider_location_update', {
-              jobId,
-              bookingId,
-              latitude: updatedLoc.latitude,
-              longitude: updatedLoc.longitude,
-            });
-          }
-        }
-      );
-      
-    } catch (error) {
-      console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get your current location');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const getRoute = async (origin: Coordinates, dest: Coordinates) => {
-    try {
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_MAPS_API_KEY}&mode=driving&alternatives=false`;
-      
-      console.log('📍 Fetching route...');
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.routes.length > 0) {
-        const route = data.routes[0];
-        
-        // Decode polyline points
-        const points = decodePolyline(route.overview_polyline.points);
-        setRouteCoordinates(points);
-
-        // Get next turn instruction
-        if (route.legs.length > 0 && route.legs[0].steps.length > 0) {
-          const firstStep = route.legs[0].steps[0];
-          setNextTurn({
-            instruction: firstStep.html_instructions.replace(/<[^>]*>/g, ''), // Remove HTML tags
-            distance: firstStep.distance.text,
-            duration: firstStep.duration.text,
-          });
-        }
-
-        // Update ETA and distance
-        if (route.legs.length > 0) {
-          setEta(route.legs[0].duration.text);
-          setDistance(route.legs[0].distance.text);
-        }
-        
-        console.log('📍 Route found:', route.legs[0].duration.text);
-      }
-    } catch (error) {
-      console.error('Error getting route:', error);
-    }
-  };
-
-  // Function to decode Google Maps polyline
-  const decodePolyline = (t: string, precision: number = 5) => {
-    let points = [];
-    let lat = 0;
-    let lng = 0;
-    let index = 0;
-    let shift = 0;
-    let result = 0;
-    let factor = Math.pow(10, precision);
-
-    while (index < t.length) {
-      let b = 0;
-      shift = 0;
-      result = 0;
-      
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-      
-      shift = 0;
-      result = 0;
-      
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-      
-      points.push({
-        latitude: lat / factor,
-        longitude: lng / factor
-      });
-    }
-    
-    return points;
-  };
-
-  const handleCompass = () => {
-    if (userLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        ...userLocation,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 1000);
-    }
-  };
-
-  const handleFitAll = () => {
-    if (mapRef.current && userLocation && destination) {
-      mapRef.current.fitToCoordinates(
-        [userLocation, destination],
-        {
-          edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-          animated: true,
-        }
-      );
-    }
-  };
-
-  const handleCall = () => {
-    if (customerPhone) {
-      Linking.openURL(`tel:${customerPhone}`);
-    } else {
-      Alert.alert('Call Customer', `Calling ${customerName}...`);
-    }
-  };
-
-  const handleMessage = () => {
-    router.push({
-      pathname: '/(provider)/Chat',
-      params: {
-        customerName,
-        jobId,
-        bookingId,
-      }
-    });
-  };
-
-  const handleOpenMaps = () => {
-    if (userLocation && destination) {
-      const url = Platform.select({
-        ios: `maps://app?saddr=${userLocation.latitude},${userLocation.longitude}&daddr=${destination.latitude},${destination.longitude}`,
-        android: `google.navigation:q=${destination.latitude},${destination.longitude}`,
-      });
-      
-      if (url) {
-        Linking.openURL(url);
-      }
-    }
-  };
-
-  const handleArrived = () => {
-    // Notify backend via WebSocket
-    if (providerWebSocket.isConnected()) {
-      providerWebSocket.send('provider_arrived', {
-        jobId,
-        bookingId,
-        location: userLocation,
-      });
-    }
-
-    // Pass all data to next screen
-    router.push({
-      pathname: '/ServiceInProgressScreen',
-      params: {
-        jobId,
-        bookingId,
-        customerName,
-        customerPhone,
-        pickupLocation: destination.address,
-        pickupLat: destination.latitude.toString(),
-        pickupLng: destination.longitude.toString(),
-        serviceType,
-        price,
-        distance,
-        eta,
-      }
-    });
-  };
-
-  const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
-  
-  const handleCancelService = () => {
-    Alert.alert(
-      'Cancel Service',
-      'Are you sure you want to cancel this service?',
-      [
-        { text: 'No', style: 'cancel' },
-        { 
-          text: 'Yes, Cancel', 
-          style: 'destructive',
-          onPress: () => {
-            if (providerWebSocket.isConnected()) {
-              providerWebSocket.send('cancel_job', { jobId, bookingId });
-            }
-            router.back();
-          }
-        }
-      ]
-    );
-  };
-
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4eafe4" />
-          <Text style={styles.loadingText}>Loading navigation...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#E8F4FB" />
-
-      {/* ── MAP AREA ── */}
-      <View style={styles.mapArea}>
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={{
-            latitude: userLocation?.latitude || destination.latitude,
-            longitude: userLocation?.longitude || destination.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-          showsUserLocation={true}
-          showsMyLocationButton={false}
-          showsTraffic={true}
-          onMapReady={() => setMapReady(true)}
-        >
-          {/* Provider Location Marker (self) */}
-          {userLocation && (
-            <Marker
-              coordinate={userLocation}
-              title="Your Location"
-              description="You are here"
-            >
-              <View style={styles.providerMarker}>
-                <Feather name="navigation" size={20} color="#4eafe4" />
-              </View>
-            </Marker>
-          )}
-
-          {/* Destination Marker (pickup) - CRITICAL: Shows actual pickup location */}
-          <Marker
-            coordinate={destination}
-            title="Pickup Location"
-            description={destination.address}
-          >
-            <View style={styles.destinationMarker}>
-              <Feather name="map-pin" size={24} color="#EF4444" />
-            </View>
-          </Marker>
-
-          {/* Route Polyline */}
-          {routeCoordinates.length > 0 && (
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeWidth={4}
-              strokeColor="#4eafe4"
-              lineDashPattern={[0]}
-            />
-          )}
-        </MapView>
-
-        {/* Back Button */}
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
-          <Feather name="arrow-left" size={25} color="#1e2939" />
-        </TouchableOpacity>
-
-        {/* Compass Button */}
-        <TouchableOpacity style={styles.compassBtn} onPress={handleCompass} activeOpacity={0.8}>
-          <Feather name="navigation" size={20} color="#8fd1fb" />
-        </TouchableOpacity>
-
-        {/* Fit All Button */}
-        <TouchableOpacity style={styles.fitAllBtn} onPress={handleFitAll} activeOpacity={0.8}>
-          <Feather name="maximize-2" size={20} color="#8fd1fb" />
-        </TouchableOpacity>
-
-        {/* Open in Google Maps Button */}
-        <TouchableOpacity style={styles.mapsBtn} onPress={handleOpenMaps} activeOpacity={0.8}>
-          <Feather name="external-link" size={20} color="#8fd1fb" />
-        </TouchableOpacity>
-
-        {/* WebSocket Status */}
-        <View style={[
-          styles.wsStatus,
-          wsConnected ? styles.wsConnected : styles.wsDisconnected
-        ]}>
-          <View style={[
-            styles.wsDot,
-            wsConnected ? styles.wsDotConnected : styles.wsDotDisconnected
-          ]} />
-          <Text style={styles.wsText}>
-            {wsConnected ? 'Live' : 'Reconnecting...'}
-          </Text>
-        </View>
-
-        {/* Job Room Status */}
-        {hasJoinedRoom && wsConnected && (
-          <View style={styles.roomStatus}>
-            <Text style={styles.roomStatusText}>Connected to customer</Text>
-          </View>
-        )}
-
-        {/* Navigation Card */}
-        {nextTurn && (
-          <View style={styles.navCard}>
-            <View style={styles.navCardTop}>
-              <View style={styles.navIconWrap}>
-                <Feather name="navigation" size={18} color="#8fd1fb" />
-              </View>
-              <View style={styles.navCardTextBlock}>
-                <Text style={styles.navCardLabel}>NEXT TURN</Text>
-                <Text style={styles.navCardTurn} numberOfLines={1}>
-                  {nextTurn.instruction}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.navCardDivider} />
-            <View style={styles.navCardBottom}>
-              <View style={styles.navCardStat}>
-                <Text style={styles.navStatLabel}>ETA</Text>
-                <Text style={styles.navStatValue}>{eta}</Text>
-              </View>
-              <View style={styles.navCardStat}>
-                <Text style={styles.navStatLabel}>DISTANCE</Text>
-                <Text style={styles.navStatValue}>{distance}</Text>
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* Navigation Active Badge */}
-        <View style={styles.navActiveBadge}>
-          <View style={styles.navActiveTextBlock}>
-            <Text style={styles.navActiveTitle}>Navigation Active</Text>
-            <Text style={styles.navActiveSub}>Following GPS route</Text>
-          </View>
-          <View style={styles.navActiveIcon}>
-            <Feather name="map-pin" size={20} color="#ffffff" />
-          </View>
-        </View>
-
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Make Your Decision</Text>
+        <Text style={styles.headerSubtitle}>
+          Choose to accept or decline this request
+        </Text>
       </View>
 
-      {/* ── BOTTOM SHEET ── */}
-      <View style={styles.bottomSheet}>
-        {/* Drag Handle */}
-        <View style={styles.dragHandle} />
-
-        <ScrollView
-          contentContainerStyle={styles.sheetContent}
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={styles.sheetSectionLabel}>CUSTOMER DETAILS</Text>
-
-          {/* Customer Card */}
-          <View style={styles.customerCard}>
-            {/* Customer Info */}
-            <View style={styles.customerInfo}>
-              <View style={styles.avatarCircle}>
-                <Feather name="user" size={26} color="#8fd1fb" />
-              </View>
-              <View style={styles.customerText}>
-                <Text style={styles.customerName}>{customerName}</Text>
-                <Text style={styles.customerRating}>⭐ 4.5 Customer Rating</Text>
-              </View>
-            </View>
-
-            <View style={styles.customerDivider} />
-
-            {/* Call / Message Buttons */}
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionBtn} onPress={handleCall} activeOpacity={0.7}>
-                <Feather name="phone" size={16} color="#8fd1fb" />
-                <Text style={styles.actionBtnText}>Call</Text>
-              </TouchableOpacity>
-              <View style={styles.actionBtnDivider} />
-              <TouchableOpacity style={styles.actionBtn} onPress={handleMessage} activeOpacity={0.7}>
-                <Feather name="message-square" size={16} color="#8fd1fb" />
-                <Text style={styles.actionBtnText}>Message</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Pickup Location Card */}
-          <View style={styles.locationCard}>
-            <View style={styles.locationRow}>
-              <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
-              <View>
-                <Text style={styles.locationLabel}>Pickup Location</Text>
-                <Text style={styles.locationValue}>{destination.address}</Text>
-                {params.pickupLat && params.pickupLng && (
-                  <Text style={styles.coordinates}>
-                    📍 {parseFloat(params.pickupLat as string).toFixed(6)}, {parseFloat(params.pickupLng as string).toFixed(6)}
-                  </Text>
-                )}
-              </View>
-            </View>
-          </View>
-
-          {/* Navigation Tips Card */}
-          <View style={styles.tipsCard}>
-            <View style={styles.tipsRow}>
-              <View style={styles.tipsIconWrap}>
-                <Feather name="alert-circle" size={18} color="#5B9BD5" />
-              </View>
-              <View style={styles.tipsTextBlock}>
-                <Text style={styles.tipsTitle}>Navigation Tips</Text>
-                <Text style={styles.tipsText}>
-                  Call customer upon arrival for exact location.
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Arrived Button */}
-          <TouchableOpacity style={styles.arrivedBtn} onPress={handleArrived} activeOpacity={0.85}>
-            <Feather name="check-circle" size={16} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.arrivedBtnText}>I've Arrived at Location</Text>
-          </TouchableOpacity>
-
-          {/* Footer Links */}
-          <View style={styles.footerRow}>
-            <TouchableOpacity onPress={handleReportIssue} activeOpacity={0.7}>
-              <Text style={styles.footerLink}>Report Issue</Text>
-            </TouchableOpacity>
-            <Text style={styles.footerDot}>+</Text>
-            <TouchableOpacity onPress={handleCancelService} activeOpacity={0.7}>
-              <Text style={styles.footerLink}>Cancel Service</Text>
-            </TouchableOpacity>
-          </View>
-
-        </ScrollView>
-      </View>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <RequestSummary />
+        <AcceptSection onAccept={handleAccept} />
+        <DeclineSection onDecline={handleDecline} />
+        <ImportantWarning />
+        <ImpactStats />
+        <View style={{ height: 32 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
+  // ── Safe Area ──
   safeArea: {
     flex: 1,
-    backgroundColor: '#D6EAF8',
-  },
-  mapArea: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-    position: 'relative',
-    minHeight: 260,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  backBtn: {
-    position: 'absolute',
-    top: 27,
-    left: 16,
-    width: 45,
-    height: 45,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#1e2939',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#1e2939',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-    backgroundColor: '#F9FAFB',
-  },
-  compassBtn: {
-    position: 'absolute',
-    top: 27,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-  fitAllBtn: {
-    position: 'absolute',
-    top: 87,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-  mapsBtn: {
-    position: 'absolute',
-    top: 147,
-    right: 16,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    zIndex: 10,
-  },
-  wsStatus: {
-    position: 'absolute',
-    top: 27,
-    left: 70,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-    zIndex: 10,
-  },
-  wsConnected: {
-    backgroundColor: '#E8F5E9',
-  },
-  wsDisconnected: {
-    backgroundColor: '#FFEBEE',
-  },
-  wsDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  wsDotConnected: {
-    backgroundColor: '#4CAF50',
-  },
-  wsDotDisconnected: {
-    backgroundColor: '#F44336',
-  },
-  wsText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  roomStatus: {
-    position: 'absolute',
-    top: 75,
-    left: 70,
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-    zIndex: 10,
-  },
-  roomStatusText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  navCard: {
-    position: 'absolute',
-    top: 207,
-    left: 16,
-    right: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderWidth: 1.5,
-    borderColor: '#87cefa',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
-    zIndex: 5,
-  },
-  navCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  navIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#EBF5FD',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navCardTextBlock: {
-    flex: 1,
-  },
-  navCardLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#AAAAAA',
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  navCardTurn: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#1A1A2E',
-    letterSpacing: 0.2,
-  },
-  navCardDivider: {
-    height: 1,
-    backgroundColor: '#F0F0F0',
-    marginVertical: 10,
-  },
-  navCardBottom: {
-    flexDirection: 'row',
-    gap: 24,
-  },
-  navCardStat: {
-    flexDirection: 'column',
-  },
-  navStatLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#7d8492',
-    letterSpacing: 1,
-  },
-  navStatValue: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#1A1A2E',
-    marginTop: 2,
-  },
-  navActiveBadge: {
-    position: 'absolute',
-    bottom: 24,
-    left: 10,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  navActiveTextBlock: {
-    flex: 1,
-    alignItems: 'flex-end',
-    marginRight: 12,
-  },
-  navActiveTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#737a8a',
-    letterSpacing: 0.3,
-  },
-  navActiveSub: {
-    fontSize: 11,
-    color: '#888',
-    marginTop: 1,
-    letterSpacing: 0.2,
-  },
-  navActiveIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#87cefa',
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bottomSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingTop: 10,
-    maxHeight: '62%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 10,
-  },
-  dragHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#D0D0D0',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
-  sheetContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
-    gap: 12,
-  },
-  sheetSectionLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#AAAAAA',
-    letterSpacing: 1.5,
-    marginBottom: 2,
-  },
-  customerCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E8E8E8',
-    overflow: 'hidden',
-  },
-  customerInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    gap: 12,
-  },
-  avatarCircle: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#EBF5FD',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#BDE0F5',
-  },
-  customerText: {
-    flex: 1,
-  },
-  customerName: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#1A1A2E',
-    letterSpacing: 0.2,
-  },
-  customerRating: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 3,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  customerDivider: {
-    height: 1,
-    backgroundColor: '#F0F0F0',
-  },
-  actionRow: {
-    flexDirection: 'row',
-  },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 13,
-    gap: 7,
-  },
-  actionBtnDivider: {
-    width: 1,
-    backgroundColor: '#F0F0F0',
-  },
-  actionBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#8fd1fb',
-    letterSpacing: 0.5,
-  },
-  locationCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E8E8E8',
-    padding: 14,
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  locationIcon: {
-    marginTop: 2,
-  },
-  locationLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#6a7282',
-    letterSpacing: 0.8,
-    marginBottom: 4,
-  },
-  locationValue: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#1A1A2E',
-    letterSpacing: 0.2,
-  },
-  coordinates: {
-    fontSize: 10,
-    color: '#9CA3AF',
-    marginTop: 4,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  tipsCard: {
-    backgroundColor: '#EBF5FD',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#BDE0F5',
-    padding: 14,
-  },
-  tipsRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  tipsIconWrap: {
-    marginTop: 1,
-  },
-  tipsTextBlock: {
-    flex: 1,
-  },
-  tipsTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#2E86C1',
-    letterSpacing: 0.3,
-    marginBottom: 4,
-  },
-  tipsText: {
-    fontSize: 12,
-    color: '#5B9BD5',
-    lineHeight: 18,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-  },
-  arrivedBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    paddingVertical: 17,
-    backgroundColor: '#1d94d2',
-    shadowColor: '#1d94d2',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 5,
-    marginTop: 4,
-  },
-  arrivedBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 4,
-  },
-  footerLink: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#555',
-    textDecorationLine: 'underline',
-    letterSpacing: 0.3,
-  },
-  footerDot: {
-    fontSize: 14,
-    color: '#6a7282',
-  },
-  providerMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#4eafe4',
-  },
-  destinationMarker: {
-    backgroundColor: 'white',
-    padding: 8,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#EF4444',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
     backgroundColor: '#F7F7F7',
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
+
+  // ── Header ──
+  header: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingTop: 40,
+    paddingBottom: 14,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#1A1A2E',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  headerSubtitle: {
+    fontSize: 13,
     color: '#666666',
+    marginTop: 3,
+    letterSpacing: 0.2,
+  },
+
+  // ── Scroll ──
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    gap: 14,
+  },
+
+  // ── Section Label ──
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888888',
+    letterSpacing: 1.2,
+    marginBottom: 14,
+    textTransform: 'uppercase',
+  },
+
+  // ── Summary Card ──
+  summaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+    padding: 18,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  summaryDivider: {
+    width: 1,
+    height: 48,
+    backgroundColor: '#F0F0F0',
+  },
+  iconWrap: {
+    marginBottom: 2,
+  },
+  summaryValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1A1A2E',
+    letterSpacing: 0.3,
+  },
+  summarySubLabel: {
+    fontSize: 11,
+    color: '#888888',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    fontWeight: '500',
+  },
+
+  // ── Card Shared ──
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  cardHeaderText: {
+    flex: 1,
+  },
+  cardSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 4,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  cardDividergreen: {
+    height: 2,
+    backgroundColor: '#00C853',
+    width: '100%',
+  },
+  cardDividerred: {
+    height: 1.77,
+    backgroundColor: '#fc454d',
+    width: '100%',
+  },
+
+  // ── Accept Card ──
+  acceptCard: {
+    backgroundColor: '#F0FBF0',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#00C853',
+    overflow: 'hidden',
+  },
+  acceptSection: {
+    padding: 18,
+  },
+  acceptIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#00C853',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  acceptCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  nextLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#333333',
+    letterSpacing: 0.8,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  stepCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#87CEFA',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  stepNum: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#87CEFA',
+  },
+  stepText: {
+    fontSize: 14,
+    color: '#374151',
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  acceptBtn: {
+    backgroundColor: '#00C853',
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 18,
+    shadowColor: '#00C853',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  acceptBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+
+  // ── Decline Card ──
+  declineCard: {
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#F44336',
+    overflow: 'hidden',
+  },
+  declineTop: {
+    backgroundColor: '#FFF5F5',
+    padding: 14,
+  },
+  declineBottom: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+  },
+  declineIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#F44336',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  declineCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#F44336',
+    letterSpacing: 0.2,
+  },
+
+  // ── Reason Selection ──
+  reasonLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#888888',
+    letterSpacing: 1.2,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+  },
+  radioOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    marginBottom: 8,
+    backgroundColor: '#FAFAFA',
+    gap: 12,
+  },
+  radioOptionSelected: {
+    borderColor: '#F44336',
+    backgroundColor: '#FFF5F5',
+  },
+  radioCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioCircleSelected: {
+    borderColor: '#F44336',
+  },
+  radioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#F44336',
+  },
+  radioLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    flex: 1,
+    letterSpacing: 0.2,
+  },
+  radioLabelSelected: {
+    color: '#F44336',
+    fontWeight: '700',
+  },
+
+  // ── Confirm Decline Button ──
+  confirmDeclineBtn: {
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 10,
+    backgroundColor: '#4eafe4',
+    shadowColor: '#5B9BD5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  confirmDeclineBtnDisabled: {
+    backgroundColor: '#A8C8E8',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  confirmDeclineBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+
+  // ── Cancel Button ──
+  cancelBtn: {
+    borderRadius: 10,
+    paddingVertical: 13,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+  },
+  cancelBtnText: {
+    color: '#6B7280',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+
+  // ── Warning Card ──
+  warningCard: {
+    backgroundColor: '#FFFDE7',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#FFC107',
+    padding: 16,
+  },
+  warningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#F57F17',
+    letterSpacing: 0.3,
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#F57F17',
+    lineHeight: 20,
+    fontStyle: 'italic',
+  },
+  warningBold: {
+    fontWeight: '800',
+    fontStyle: 'normal',
+  },
+
+  // ── Impact Card ──
+  impactCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+    padding: 18,
+  },
+  impactRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  impactCol: {
+    flex: 1,
+  },
+  impactColHead: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#333333',
+    marginBottom: 10,
+  },
+  impactStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 6,
+  },
+  impactIconGreen: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#4CAF50',
+  },
+  impactStatGreen: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4CAF50',
+  },
+  impactIconRed: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#F44336',
+  },
+  impactStatRed: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#F44336',
   },
 });

@@ -30,7 +30,7 @@ export default function NoProvidersAvailableScreen() {
   };
 
   const handleGoHome = () => {
-    router.replace("/(customer)/home");
+    router.replace("/(customer)/Home");
   };
 
   return (
