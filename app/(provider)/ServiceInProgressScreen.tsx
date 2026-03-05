@@ -8,15 +8,19 @@ import {
   SafeAreaView,
   Alert,
   StatusBar,
+  ActivityIndicator,
+  Linking,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 // ─── Timer Hook ───────────────────────────────────────────────────────────────
-
-const useTimer = () => {
-  const [seconds, setSeconds] = useState(35 * 60 + 42);
-  const [paused, setPaused] = useState(false);
+const useTimer = (initialSeconds: number = 0) => {
+  const [seconds, setSeconds] = useState<number>(initialSeconds);
+  const [paused, setPaused] = useState<boolean>(false);
 
   useEffect(() => {
     if (paused) return;
@@ -24,19 +28,18 @@ const useTimer = () => {
     return () => clearInterval(interval);
   }, [paused]);
 
-  const format = (s) => {
+  const format = (s: number): string => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0');
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
     const sec = String(s % 60).padStart(2, '0');
     return `${h}:${m}:${sec}`;
   };
 
-  return { display: format(seconds), paused, setPaused };
+  return { display: format(seconds), seconds, paused, setPaused };
 };
 
 // ─── Checklist Items ──────────────────────────────────────────────────────────
-
-const CHECKLIST = [
+const CHECKLIST: string[] = [
   'Inspect vehicle condition',
   'Secure vehicle on flatbed',
   'Document pre-service photos',
@@ -44,18 +47,240 @@ const CHECKLIST = [
   'Verify drop-off location',
 ];
 
-// ─── Main Screen ──────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
+interface JobData {
+  serviceType: string;
+  vehicleType: string;
+  licensePlate: string;
+  vehicleModel: string;
+  customerName: string;
+  customerPhone: string;
+  estimatedEarnings: number;
+  startedAt: string | null;
+}
 
+// ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function ServiceInProgressScreen() {
   const router = useRouter();
-  const { display, paused, setPaused } = useTimer();
+  const params = useLocalSearchParams<{ bookingId: string }>();
+  const bookingId = params.bookingId;
+  
+  const [loading, setLoading] = useState<boolean>(false);
+  const [jobData, setJobData] = useState<JobData>({
+    serviceType: 'Towing Service',
+    vehicleType: 'Sedan',
+    licensePlate: 'ABC 1234',
+    vehicleModel: 'Toyota Camry 2020',
+    customerName: 'Mohammed A.',
+    customerPhone: '+973 3XXX XXXX',
+    estimatedEarnings: 81,
+    startedAt: null,
+  });
 
-  const handleCall = () => Alert.alert('Call', 'Calling Mohammed A...');
-  const handleMessage = () => Alert.alert('Message', 'Opening message...');
-  const handleAddPhoto = () => Alert.alert('Photo', 'Opening camera...');
-  const handleAddTime = () => Alert.alert('Add Time', 'Adding extra time...');
-  const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
-  const handleComplete = () => Alert.alert('Complete Service', 'Are you sure you want to complete this service?');
+  const { display, seconds, paused, setPaused } = useTimer(0);
+
+  // Mark service as started when screen loads
+  useEffect(() => {
+    if (bookingId) {
+      markServiceStarted();
+      fetchJobDetails();
+    }
+  }, []);
+
+  const markServiceStarted = async (): Promise<void> => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          status: 'in_progress',
+          action: 'start'
+        }),
+      });
+    } catch (error) {
+      console.error('Error marking service started:', error);
+    }
+  };
+
+  const fetchJobDetails = async (): Promise<void> => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/active-job`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      
+      if (data.success && data.job) {
+        setJobData({
+          serviceType: data.job.serviceType || 'Towing Service',
+          vehicleType: data.job.vehicleType || 'Sedan',
+          licensePlate: data.job.licensePlate || 'ABC 1234',
+          vehicleModel: data.job.vehicleModel || 'Toyota Camry 2020',
+          customerName: data.job.customer?.name || 'Mohammed A.',
+          customerPhone: data.job.customer?.phone || '+973 3XXX XXXX',
+          estimatedEarnings: data.job.estimatedEarnings || 81,
+          startedAt: data.job.startedAt,
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching job details:', error);
+    }
+  };
+
+  const handleCall = (): void => {
+    if (jobData.customerPhone && jobData.customerPhone !== '+973 3XXX XXXX') {
+      Linking.openURL(`tel:${jobData.customerPhone}`);
+    } else {
+      Alert.alert('Call', 'Calling customer...');
+    }
+  };
+
+  const handleMessage = (): void => {
+    if (jobData.customerPhone && jobData.customerPhone !== '+973 3XXX XXXX') {
+      Linking.openURL(`sms:${jobData.customerPhone}`);
+    } else {
+      Alert.alert('Message', 'Opening message...');
+    }
+  };
+
+  const handleAddPhoto = (): void => {
+    Alert.alert('Add Photo', 'Camera functionality will be implemented');
+  };
+
+  const handleAddTime = (): void => {
+    Alert.alert('Add Time', 'Request additional time?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Request',
+        onPress: async () => {
+          try {
+            const token = await AsyncStorage.getItem('userToken');
+            await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+              method: 'PATCH',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                action: 'add_time',
+                timeData: { minutes: 15, reason: 'Additional time needed' }
+              }),
+            });
+            Alert.alert('Success', 'Time extension requested');
+          } catch (error) {
+            Alert.alert('Error', 'Failed to request time extension');
+          }
+        }
+      }
+    ]);
+  };
+
+  const handlePauseResume = async (): Promise<void> => {
+    setPaused(!paused);
+    
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: paused ? 'resume' : 'pause'
+        }),
+      });
+    } catch (error) {
+      console.error('Error updating timer:', error);
+    }
+  };
+
+  const handleReportIssue = (): void => {
+    Alert.alert('Report Issue', 'What issue would you like to report?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Vehicle Issue',
+        onPress: () => reportIssue('vehicle', 'Issue with vehicle')
+      },
+      {
+        text: 'Customer Issue',
+        onPress: () => reportIssue('customer', 'Issue with customer')
+      },
+      {
+        text: 'Other',
+        onPress: () => reportIssue('other', 'Other issue')
+      }
+    ]);
+  };
+
+  const reportIssue = async (type: string, description: string): Promise<void> => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/issues`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          issueType: type,
+          description,
+          severity: 'medium'
+        }),
+      });
+      Alert.alert('Success', 'Issue reported successfully');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to report issue');
+    }
+  };
+
+  const handleComplete = (): void => {
+    Alert.alert(
+      'Complete Service',
+      'Have you completed all checklist items and taken required photos?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Complete',
+          onPress: () => {
+            // Just navigate to next page with all the data - NO API CALL
+            router.push({
+              pathname: '/(provider)/ServiceComplete',
+              params: {
+                bookingId,
+                earnings: jobData.estimatedEarnings.toString(),
+                serviceType: jobData.serviceType,
+                customerName: jobData.customerName,
+                customerPhone: jobData.customerPhone,
+                vehicleType: jobData.vehicleType,
+                licensePlate: jobData.licensePlate,
+                vehicleModel: jobData.vehicleModel,
+                duration: display,
+                durationSeconds: seconds.toString(),
+              }
+            });
+          }
+        }
+      ]
+    );
+  };
+
+  const formatStartTime = (dateString: string | null): string => {
+    if (!dateString) return 'Just now';
+    const date = new Date(dateString);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -63,12 +288,25 @@ export default function ServiceInProgressScreen() {
 
       {/* ── HEADER ── */}
       <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
+        <TouchableOpacity 
+          style={styles.backBtn} 
+          onPress={() => {
+            Alert.alert(
+              'Exit Service',
+              'Are you sure you want to exit? Service will continue in background.',
+              [
+                { text: 'Stay', style: 'cancel' },
+                { text: 'Exit', onPress: () => router.back() }
+              ]
+            );
+          }} 
+          activeOpacity={0.8}
+        >
           <Feather name="arrow-left" size={25} color="#1e2939" />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Service In Progress</Text>
-          <Text style={styles.headerSub}>REQ-7891</Text>
+          <Text style={styles.headerSub}>{bookingId?.slice(-8) || 'REQ-7891'}</Text>
         </View>
         <View style={styles.headerRight} />
       </View>
@@ -88,17 +326,23 @@ export default function ServiceInProgressScreen() {
         <View style={styles.timerCard}>
           <Text style={styles.timerLabel}>SERVICE DURATION</Text>
           <Text style={styles.timerDisplay}>{display}</Text>
-          <Text style={styles.timerStarted}>Started at 2:45 PM</Text>
+          <Text style={styles.timerStarted}>
+            Started at {formatStartTime(jobData.startedAt)}
+          </Text>
           <View style={styles.timerBtnRow}>
             <TouchableOpacity
               style={styles.pauseBtn}
-              onPress={() => setPaused(p => !p)}
+              onPress={handlePauseResume}
               activeOpacity={0.8}
             >
               <Feather name={paused ? 'play' : 'pause'} size={15} color="#C8960C" />
               <Text style={styles.pauseBtnText}>{paused ? 'Resume' : 'Pause'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.addTimeBtn} onPress={handleAddTime} activeOpacity={0.8}>
+            <TouchableOpacity 
+              style={styles.addTimeBtn} 
+              onPress={handleAddTime} 
+              activeOpacity={0.8}
+            >
               <Feather name="clock" size={15} color="#1A1A2E" />
               <Text style={styles.addTimeBtnText}>Add Time</Text>
             </TouchableOpacity>
@@ -110,10 +354,10 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.cardSectionLabel}>SERVICE DETAILS</Text>
           <View style={styles.detailsDivider} />
           {[
-            { label: 'Service Type:', value: 'Towing Service' },
-            { label: 'Vehicle:', value: 'Sedan' },
-            { label: 'License Plate:', value: 'ABC 1234' },
-            { label: 'Model:', value: 'Toyota Camry 2020' },
+            { label: 'Service Type:', value: jobData.serviceType },
+            { label: 'Vehicle:', value: jobData.vehicleType },
+            { label: 'License Plate:', value: jobData.licensePlate },
+            { label: 'Model:', value: jobData.vehicleModel },
           ].map((item, i) => (
             <View key={i} style={styles.detailRow}>
               <Text style={styles.detailLabel}>{item.label}</Text>
@@ -130,8 +374,8 @@ export default function ServiceInProgressScreen() {
               <Feather name="user" size={24} color="#9dd7fb" />
             </View>
             <View style={styles.customerText}>
-              <Text style={styles.customerName}>Mohammed A.</Text>
-              <Text style={styles.customerPhone}>+973 3XXX XXXX</Text>
+              <Text style={styles.customerName}>{jobData.customerName}</Text>
+              <Text style={styles.customerPhone}>{jobData.customerPhone}</Text>
             </View>
           </View>
           <View style={styles.contactBtnRow}>
@@ -175,7 +419,7 @@ export default function ServiceInProgressScreen() {
           <View style={styles.earningsRow}>
             <View>
               <Text style={styles.earningsLabel}>Estimated Earnings</Text>
-              <Text style={styles.earningsValue}>81 BHD</Text>
+              <Text style={styles.earningsValue}>{jobData.estimatedEarnings} BHD</Text>
             </View>
             <View>
               <Text style={styles.earningsStatusLabel}>Status</Text>
@@ -195,15 +439,30 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.reportSubText}>
             Found a problem? Report it before completing the service.
           </Text>
-          <TouchableOpacity style={styles.reportBtn} onPress={handleReportIssue} activeOpacity={0.8}>
+          <TouchableOpacity 
+            style={styles.reportBtn} 
+            onPress={handleReportIssue} 
+            activeOpacity={0.8}
+          >
             <Text style={styles.reportBtnText}>Report Issue</Text>
           </TouchableOpacity>
         </View>
 
         {/* ── COMPLETE BUTTON ── */}
-        <TouchableOpacity style={styles.completeBtn} onPress={handleComplete} activeOpacity={0.85}>
-          <Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.completeBtnText}>Complete Service</Text>
+        <TouchableOpacity 
+          style={[styles.completeBtn, loading && styles.buttonDisabled]} 
+          onPress={handleComplete} 
+          activeOpacity={0.85}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Feather name="check-circle" size={18} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.completeBtnText}>Complete Service</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         <Text style={styles.completeHint}>Make sure all checklist items are completed</Text>
@@ -215,7 +474,6 @@ export default function ServiceInProgressScreen() {
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -626,5 +884,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.3,
     marginTop: 4,
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
 });

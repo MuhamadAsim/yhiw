@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,12 +8,176 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+interface JobDetails {
+  bookingId: string;
+  serviceType: string;
+  serviceName: string;
+  urgency: string;
+  price: number;
+  customer: {
+    name: string;
+    phone: string;
+    rating?: number;
+  };
+  vehicle: {
+    type: string;
+    makeModel: string;
+    year: string;
+    color: string;
+    licensePlate: string;
+  };
+  pickup: {
+    address: string;
+    coordinates?: {
+      lat: number;
+      lng: number;
+    };
+  };
+  dropoff?: {
+    address: string;
+    coordinates?: {
+      lat: number;
+      lng: number;
+    };
+  };
+  distance: string;
+  description?: string;
+  issues?: string[];
+  payment: {
+    totalAmount: number;
+    baseServiceFee: number;
+    selectedTip: number;
+  };
+  estimatedArrival?: string;
+}
 
 const RequestDetails = () => {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const bookingId = params.bookingId as string;
+
+  const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (bookingId) {
+      fetchJobDetails();
+    } else {
+      setError('No booking ID provided');
+      setIsLoading(false);
+    }
+  }, [bookingId]);
+
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (!token) {
+        setError('Authentication failed');
+        return;
+      }
+
+      // Fetch job details from notification or job model
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch job details');
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setJobDetails(data.job);
+      } else {
+        throw new Error(data.message || 'Job not found');
+      }
+    } catch (error: any) {
+      console.error('Error fetching job details:', error);
+      setError(error.message || 'Failed to load job details');
+      
+      Alert.alert(
+        'Error',
+        'Could not load job details. The job may have expired.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.back()
+          }
+        ]
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleProceedToAccept = () => {
+    if (!jobDetails) return;
+
+    // Navigate to accept/reject page with bookingId
+    router.push({
+      pathname: "/AcceptRejectRequestScreen",
+      params: {
+        bookingId: jobDetails.bookingId,
+      }
+    });
+  };
+
+  const formatCurrency = (amount: number) => {
+    return `${amount} BHD`;
+  };
+
+  const calculateEarnings = (totalAmount: number) => {
+    // 85% of total amount goes to provider
+    return (totalAmount * 0.85).toFixed(2);
+  };
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#60A5FA" />
+          <Text style={styles.loadingText}>Loading job details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !jobDetails) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.errorContainer}>
+          <Feather name="alert-circle" size={48} color="#EF4444" />
+          <Text style={styles.errorText}>{error || 'Job not found'}</Text>
+          <TouchableOpacity 
+            style={styles.errorButton}
+            onPress={() => router.back()}
+          >
+            <Text style={styles.errorButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const isUrgent = jobDetails.urgency?.toLowerCase() === 'urgent' || 
+                   jobDetails.urgency?.toLowerCase() === 'emergency';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -30,12 +194,14 @@ const RequestDetails = () => {
         
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>REQUEST DETAILS</Text>
-          <Text style={styles.requestId}>REQ-7891</Text>
+          <Text style={styles.requestId}>{jobDetails.bookingId}</Text>
         </View>
         
-        <View style={styles.urgentBadge}>
-          <Text style={styles.urgentText}>URGENT</Text>
-        </View>
+        {isUrgent && (
+          <View style={styles.urgentBadge}>
+            <Text style={styles.urgentText}>URGENT</Text>
+          </View>
+        )}
       </View>
 
       <ScrollView 
@@ -54,8 +220,12 @@ const RequestDetails = () => {
               />
             </View>
             <View style={styles.serviceInfo}>
-              <Text style={styles.serviceTitle}>TOWING SERVICE</Text>
-              <Text style={styles.serviceSubtitle}>ASAP</Text>
+              <Text style={styles.serviceTitle}>
+                {jobDetails.serviceName?.toUpperCase() || jobDetails.serviceType?.toUpperCase()}
+              </Text>
+              <Text style={styles.serviceSubtitle}>
+                {isUrgent ? 'ASAP' : 'SCHEDULED'}
+              </Text>
             </View>
           </View>
           
@@ -64,13 +234,14 @@ const RequestDetails = () => {
               <Feather name="dollar-sign" size={20} color="#000" />
               <Text style={styles.earningsLabel}>YOUR EARNINGS</Text>
             </View>
-            <Text style={styles.earningsValue}>95 BHD</Text>
+            <Text style={styles.earningsValue}>
+              {formatCurrency(parseFloat(calculateEarnings(jobDetails.payment.totalAmount)))}
+            </Text>
           </View>
         </View>
 
         {/* Customer Information */}
         <View style={styles.section}>
-
           <Text style={styles.sectionTitle}>CUSTOMER INFORMATION</Text>
           <View style={styles.customerCard}>
             <View style={styles.customerLeft}>
@@ -78,10 +249,14 @@ const RequestDetails = () => {
                 <Feather name="user" size={24} color="#87CEFA" />
               </View>
               <View>
-                <Text style={styles.customerName}>MOHAMMED A.</Text>
+                <Text style={styles.customerName}>
+                  {jobDetails.customer?.name?.toUpperCase() || 'CUSTOMER'}
+                </Text>
                 <View style={styles.ratingRow}>
                   <Feather name="star" size={12} color="#000" />
-                  <Text style={styles.ratingText}>4.5 CUSTOMER RATING</Text>
+                  <Text style={styles.ratingText}>
+                    {jobDetails.customer?.rating || '4.5'} CUSTOMER RATING
+                  </Text>
                 </View>
               </View>
             </View>
@@ -103,18 +278,24 @@ const RequestDetails = () => {
               <Feather name="truck" size={20} color="#9CA3AF" />
               <View style={styles.vehicleInfo}>
                 <Text style={styles.vehicleLabel}>TYPE & MODEL</Text>
-                <Text style={styles.vehicleValue}>SEDAN - TOYOTA CAMRY 2020</Text>
+                <Text style={styles.vehicleValue}>
+                  {jobDetails.vehicle?.type?.toUpperCase() || 'SEDAN'} - {jobDetails.vehicle?.makeModel || 'TOYOTA CAMRY 2020'}
+                </Text>
               </View>
             </View>
             
             <View style={styles.detailsGrid}>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>LICENSE PLATE:</Text>
-                <Text style={styles.detailValue}>ABC 1234</Text>
+                <Text style={styles.detailValue}>
+                  {jobDetails.vehicle?.licensePlate || 'ABC 1234'}
+                </Text>
               </View>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>COLOR:</Text>
-                <Text style={styles.detailValue}>WHITE</Text>
+                <Text style={styles.detailValue}>
+                  {jobDetails.vehicle?.color?.toUpperCase() || 'WHITE'}
+                </Text>
               </View>
             </View>
           </View>
@@ -136,37 +317,47 @@ const RequestDetails = () => {
               <View style={styles.locationDot} />
               <View style={styles.locationInfo}>
                 <Text style={styles.locationLabel}>PICKUP LOCATION</Text>
-                <Text style={styles.locationAddress}>MAIN STREET, MANAMA, NEAR CITY MALL</Text>
+                <Text style={styles.locationAddress}>
+                  {jobDetails.pickup?.address?.toUpperCase() || 'MAIN STREET, MANAMA'}
+                </Text>
               </View>
             </View>
             
-            <View style={styles.locationDivider} />
-            
-            <View style={styles.locationItem}>
-              <View style={[styles.locationDot, styles.locationDotOutline]} />
-              <View style={styles.locationInfo}>
-                <Text style={styles.locationLabel}>DROP-OFF LOCATION</Text>
-                <Text style={styles.locationAddress}>AL SEEF GARAGE, BAHRAIN</Text>
-              </View>
-            </View>
+            {jobDetails.dropoff && (
+              <>
+                <View style={styles.locationDivider} />
+                
+                <View style={styles.locationItem}>
+                  <View style={[styles.locationDot, styles.locationDotOutline]} />
+                  <View style={styles.locationInfo}>
+                    <Text style={styles.locationLabel}>DROP-OFF LOCATION</Text>
+                    <Text style={styles.locationAddress}>
+                      {jobDetails.dropoff.address?.toUpperCase()}
+                    </Text>
+                  </View>
+                </View>
+              </>
+            )}
             
             <View style={styles.distanceCard}>
               <Feather name="navigation" size={16} color="#87CEFA" />
               <Text style={styles.distanceLabel}>DISTANCE FROM YOU</Text>
-              <Text style={styles.distanceValue}>2.5 KM AWAY</Text>
+              <Text style={styles.distanceValue}>{jobDetails.distance || '2.5 KM AWAY'}</Text>
             </View>
           </View>
         </View>
 
         {/* Customer Notes */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>CUSTOMER NOTES</Text>
-          <View style={styles.notesCard}>
-            <Text style={styles.notesText}>
-              VEHICLE WON'T START. BATTERY ISSUE SUSPECTED. LOCATED IN UNDERGROUND PARKING.
-            </Text>
+        {(jobDetails.description || (jobDetails.issues && jobDetails.issues.length > 0)) && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>CUSTOMER NOTES</Text>
+            <View style={styles.notesCard}>
+              <Text style={styles.notesText}>
+                {jobDetails.description || (jobDetails.issues?.join(', ') || 'No additional notes')}
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Payment Information */}
         <View style={styles.section}>
@@ -178,37 +369,56 @@ const RequestDetails = () => {
             </View>
             <View style={styles.paymentRow}>
               <Text style={styles.paymentLabel}>SERVICE FEE:</Text>
-              <Text style={styles.paymentValue}>95 BHD</Text>
+              <Text style={styles.paymentValue}>
+                {formatCurrency(jobDetails.payment.baseServiceFee)}
+              </Text>
             </View>
+            {jobDetails.payment.selectedTip > 0 && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>TIP:</Text>
+                <Text style={styles.paymentValue}>
+                  {formatCurrency(jobDetails.payment.selectedTip)}
+                </Text>
+              </View>
+            )}
             <View style={[styles.paymentRow, styles.earningsHighlight]}>
               <Text style={styles.paymentLabelBold}>YOUR EARNINGS (85%):</Text>
-              <Text style={styles.paymentValueBold}>81 BHD</Text>
+              <Text style={styles.paymentValueBold}>
+                {formatCurrency(parseFloat(calculateEarnings(jobDetails.payment.totalAmount)))}
+              </Text>
             </View>
           </View>
         </View>
 
         {/* Urgent Request Alert */}
-        <View style={styles.urgentAlert}>
-          <Feather name="alert-circle" size={20} color="#EF4444" />
-          <View style={styles.urgentAlertContent}>
-            <Text style={styles.urgentAlertTitle}>URGENT REQUEST</Text>
-            <Text style={styles.urgentAlertText}>
-              THIS IS A PRIORITY REQUEST. CUSTOMER IS WAITING AND NEEDS IMMEDIATE ASSISTANCE.
-            </Text>
+        {isUrgent && (
+          <View style={styles.urgentAlert}>
+            <Feather name="alert-circle" size={20} color="#EF4444" />
+            <View style={styles.urgentAlertContent}>
+              <Text style={styles.urgentAlertTitle}>URGENT REQUEST</Text>
+              <Text style={styles.urgentAlertText}>
+                THIS IS A PRIORITY REQUEST. CUSTOMER IS WAITING AND NEEDS IMMEDIATE ASSISTANCE.
+              </Text>
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Estimated Arrival */}
         <View style={styles.arrivalCard}>
           <Feather name="clock" size={20} color="#0891B2" />
           <View style={styles.arrivalInfo}>
             <Text style={styles.arrivalTitle}>ESTIMATED ARRIVAL TIME</Text>
-            <Text style={styles.arrivalTime}>8-10 MINUTES BASED ON CURRENT TRAFFIC</Text>
+            <Text style={styles.arrivalTime}>
+              {jobDetails.estimatedArrival || '8-10 MINUTES BASED ON CURRENT TRAFFIC'}
+            </Text>
           </View>
         </View>
 
         {/* Action Buttons */}
-        <TouchableOpacity style={styles.acceptButton}>
+        <TouchableOpacity 
+          style={styles.acceptButton}
+          onPress={handleProceedToAccept}
+        >
           <Text style={styles.acceptButtonText}>PROCEED TO ACCEPT/REJECT</Text>
         </TouchableOpacity>
 
@@ -275,6 +485,44 @@ const styles = StyleSheet.create({
     color: '#EF4444',
     fontWeight: '500',
     letterSpacing: 0,
+  },
+
+  // Loading and Error
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    padding: 24,
+  },
+  errorText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#EF4444',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  errorButton: {
+    backgroundColor: '#60A5FA',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  errorButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 
   // Scroll View
@@ -630,13 +878,7 @@ const styles = StyleSheet.create({
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: "space-between",
-
     marginBottom: 24,
-     paddingHorizontal: 24,
-    paddingVertical: 16,
-     borderBottomWidth: 1.77,
-    borderBottomColor: "#d1d5dc",
   },
   arrivalInfo: {
     marginLeft: 12,
@@ -675,6 +917,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    marginBottom: 16,
   },
   homeButtonText: {
     fontSize: 15,

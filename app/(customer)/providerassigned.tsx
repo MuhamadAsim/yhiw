@@ -9,6 +9,7 @@ import {
   Image,
   Linking,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -19,45 +20,60 @@ import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 
 const { height, width } = Dimensions.get('window');
 
-// Google Maps API Keys
-const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
-const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
+// Move API keys to environment variables!
+const ANDROID_API_KEY = process.env.GOOGLE_MAPS_ANDROID_API_KEY || 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
+const IOS_API_KEY = process.env.GOOGLE_MAPS_IOS_API_KEY || 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
 
-interface ProviderLocation {
-  latitude: number;
-  longitude: number;
-  heading?: number;
-  lastUpdate?: string;
-}
-
-interface Coordinates {
-  latitude: number;
-  longitude: number;
-}
-
-interface ProviderData {
-  id: string;
-  name: string;
-  rating: number;
-  totalRatings?: number;
-  profileImage?: string;
-  vehicleDetails?: string;
-  phone?: string;
-  licensePlate?: string;
-  email?: string;
-  yearsOfExperience?: number;
-  completedJobs?: number;
-}
-
-interface JobStatusResponse {
+interface JobDetails {
+  bookingId: string;
   status: 'searching' | 'accepted' | 'en-route' | 'arrived' | 'started' | 'completed' | 'cancelled';
-  eta?: string;
-  distance?: string;
+  serviceType: string;
+  serviceName: string;
+  vehicleType: string;
+  pickup: {
+    address: string;
+    coordinates: {
+      lat: number;
+      lng: number;
+    };
+  };
+  dropoff?: {
+    address: string;
+    coordinates: {
+      lat: number;
+      lng: number;
+    };
+  };
   provider?: {
+    id: string;
     name: string;
     phone: string;
     rating: number;
+    profileImage?: string;
+    yearsOfExperience?: number;
+    completedJobs?: number;
+    vehicle?: {
+      type: string;
+      makeModel: string;
+      licensePlate: string;
+      color?: string;
+      description: string;
+    };
   };
+  providerLocation?: {
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    updatedAt: string;
+  };
+  payment: {
+    totalAmount: number;
+    baseFee: number;
+    tip: number;
+  };
+  estimatedArrival: string;
+  distance?: string;
+  createdAt: string;
 }
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
@@ -69,134 +85,30 @@ const ProviderAssignedScreen = () => {
   const pollingTimer = useRef<NodeJS.Timeout | null>(null);
   const isMounted = useRef(true);
   const navigationInProgress = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
+  // State
+  const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [timeRemaining, setTimeRemaining] = useState<number>(0);
-  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
+  const [providerLocation, setProviderLocation] = useState<{latitude: number; longitude: number} | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [eta, setEta] = useState<string>('');
+  const [timeRemaining, setTimeRemaining] = useState<number>(0);
   const [pollingAttempts, setPollingAttempts] = useState<number>(0);
-  const [providerDetails, setProviderDetails] = useState<ProviderData | null>(null);
-  const [currentStatus, setCurrentStatus] = useState<string>('accepted');
   const [hasShownArrivedAlert, setHasShownArrivedAlert] = useState(false);
 
-  // Helper function to safely get string from params
-  const getStringParam = (param: string | string[] | undefined): string => {
-    if (!param) return '';
-    return Array.isArray(param) ? param[0] : param;
-  };
-
-  // Helper function to safely get number from params
-  const getNumberParam = (param: string | string[] | undefined): number | null => {
-    if (!param) return null;
-    const value = Array.isArray(param) ? param[0] : param;
-    const num = parseFloat(value);
-    return isNaN(num) ? null : num;
-  };
-
-  // Get provider data from params
-  const providerName = getStringParam(params.providerName) || 'Ahmed Al-Khalifa';
-  const providerRating = getStringParam(params.providerRating) || '4.8';
-  const providerImage = getStringParam(params.providerImage);
-  const providerPhone = getStringParam(params.providerPhone) || '+973 3312 4567';
-  const providerId = getStringParam(params.providerId);
-  const vehicleDetails = getStringParam(params.vehicleDetails) || 'White Flatbed Truck';
-  const licensePlate = getStringParam(params.licensePlate) || 'BHR 5432';
-  const estimatedArrival = getStringParam(params.estimatedArrival) || '15';
-  const serviceType = getStringParam(params.serviceName) || 'Roadside Towing';
-
-  // Get booking data from params
-  const bookingId = getStringParam(params.bookingId);
-  const serviceName = getStringParam(params.serviceName) || 'Roadside Towing';
-  const vehicleType = getStringParam(params.vehicleType) || 'Sedan';
-  const pickupAddress = getStringParam(params.pickupAddress) || '123 Main Street, Manama';
-  const dropoffAddress = getStringParam(params.dropoffAddress);
-  const totalAmount = getStringParam(params.totalAmount) || '89.25';
-
-  // Get coordinates
-  const pickupLat = getNumberParam(params.pickupLat) || 26.2285;
-  const pickupLng = getNumberParam(params.pickupLng) || 50.5860;
-  const providerLat = getNumberParam(params.providerLat);
-  const providerLng = getNumberParam(params.providerLng);
-  const dropoffLat = getNumberParam(params.dropoffLat);
-  const dropoffLng = getNumberParam(params.dropoffLng);
-
-  // Check if this is a "no providers" scenario
-  const noProviders = getStringParam(params.noProviders) === 'true';
+  // Get ONLY bookingId from params
+  const bookingId = useLocalSearchParams().bookingId as string;
 
   // Debug logger
   const addDebug = (message: string) => {
     console.log(`🔍 [ProviderAssigned] ${message}`);
   };
 
-  // Set initial ETA
-  useEffect(() => {
-    addDebug(`Initializing with bookingId: ${bookingId}, providerId: ${providerId}`);
-    addDebug(`Pickup location: ${pickupLat}, ${pickupLng}`);
-    
-    setEta(`${estimatedArrival} min`);
-    const etaMinutes = parseInt(estimatedArrival);
-    if (!isNaN(etaMinutes)) {
-      setTimeRemaining(etaMinutes * 60);
-    }
-
-    // Set initial provider location if provided
-    if (providerLat && providerLng) {
-      addDebug(`Initial provider location from params: ${providerLat}, ${providerLng}`);
-      setProviderLocation({
-        latitude: providerLat,
-        longitude: providerLng,
-        lastUpdate: new Date().toISOString(),
-      });
-      setIsLoading(false);
-    } else {
-      addDebug('No initial provider location in params');
-    }
-
-    // Start polling for provider location and job status
-    if (bookingId) {
-      startPolling();
-    }
-
-    // Start ETA countdown
-    startEtaCountdown();
-
-    // Cleanup on unmount
-    return () => {
-      addDebug('Cleaning up - stopping polling');
-      isMounted.current = false;
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
-        pollingTimer.current = null;
-      }
-    };
-  }, [bookingId, providerId]);
-
-  const startPolling = () => {
-    addDebug('🔄 Starting polling for provider location & job status (every 10 seconds)');
-    
-    const poll = async () => {
-      if (!isMounted.current || navigationInProgress.current) return;
-      
-      // Fetch both location and status in parallel
-      await Promise.all([
-        fetchProviderLocation(),
-        fetchJobStatus()
-      ]);
-      
-      // Schedule next poll
-      if (isMounted.current && !navigationInProgress.current) {
-        pollingTimer.current = setTimeout(poll, 10000); // Poll every 10 seconds
-      }
-    };
-    
-    // Start polling immediately
-    poll();
-  };
-
-  const fetchProviderLocation = async () => {
+  // Fetch complete job details
+  const fetchJobDetails = async () => {
     if (!bookingId) {
-      addDebug('❌ No bookingId available for location fetch');
+      addDebug('❌ No bookingId provided');
       return;
     }
 
@@ -207,82 +119,67 @@ const ProviderAssignedScreen = () => {
         return;
       }
 
-      const url = `${API_BASE_URL}/api/jobs/${bookingId}/provider-location`;
-      addDebug(`📍 Polling #${pollingAttempts + 1} - Fetching provider location`);
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
+      addDebug(`📡 Fetching job details from: ${url}`);
       
       const response = await fetch(url, {
-        method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
         },
       });
 
-      if (!isMounted.current) return;
-
       if (!response.ok) {
-        addDebug(`❌ Location fetch failed: ${response.status}`);
-        return;
+        throw new Error(`HTTP ${response.status}`);
       }
 
       const data = await response.json();
-      setPollingAttempts(prev => prev + 1);
-
-      if (data.success && data.location) {
-        addDebug(`✅ Location received: ${data.location.latitude}, ${data.location.longitude}`);
+      
+      if (data.success && data.job) {
+        addDebug(`✅ Job details fetched successfully`);
+        setJobDetails(data.job);
         
-        const newLocation = {
-          latitude: data.location.latitude,
-          longitude: data.location.longitude,
-          heading: data.location.heading,
-          lastUpdate: data.timestamp || new Date().toISOString(),
-        };
-
-        setProviderLocation(newLocation);
-
-        // Fetch route and ETA
-        fetchRoute(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
-        getEtaFromGoogleMaps(newLocation.latitude, newLocation.longitude, pickupLat, pickupLng);
-
-        // Center map to show both provider and pickup on first location
-        if (isLoading && mapRef.current) {
-          mapRef.current.fitToCoordinates(
-            [
-              { latitude: newLocation.latitude, longitude: newLocation.longitude },
-              { latitude: pickupLat, longitude: pickupLng }
-            ],
-            {
-              edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
-              animated: true,
-            }
-          );
+        // Set initial provider location if available
+        if (data.job.providerLocation) {
+          setProviderLocation({
+            latitude: data.job.providerLocation.latitude,
+            longitude: data.job.providerLocation.longitude,
+          });
         }
-
-        setIsLoading(false);
-      } else {
-        addDebug(`ℹ️ No location update available`);
+        
+        // Set initial ETA
+        setEta(data.job.estimatedArrival || '15 min');
+        const etaMinutes = parseInt(data.job.estimatedArrival || '15');
+        if (!isNaN(etaMinutes)) {
+          setTimeRemaining(etaMinutes * 60);
+        }
+        
+        // Center map on pickup
+        if (mapRef.current && data.job.pickup.coordinates) {
+          mapRef.current.animateToRegion({
+            latitude: data.job.pickup.coordinates.lat,
+            longitude: data.job.pickup.coordinates.lng,
+            latitudeDelta: 0.05,
+            longitudeDelta: 0.05,
+          }, 1000);
+        }
       }
-
-      // Also fetch provider details if not already loaded
-      if (!providerDetails) {
-        fetchProviderDetails();
-      }
-
     } catch (error) {
-      addDebug(`❌ Error fetching location: ${error}`);
+      addDebug(`❌ Error fetching job details: ${error}`);
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const fetchJobStatus = async () => {
-    if (!bookingId || navigationInProgress.current) return;
+  // Fetch provider location (separate endpoint for real-time updates)
+  const fetchProviderLocation = async () => {
+    if (!bookingId) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const url = `${API_BASE_URL}/api/jobs/${bookingId}/status`;
-      addDebug(`📊 Checking job status...`);
-      
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/provider-location`;
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -291,98 +188,161 @@ const ProviderAssignedScreen = () => {
 
       if (!response.ok) return;
 
-      const data: JobStatusResponse = await response.json();
-      addDebug(`📊 Job status: ${data.status}`);
-
-      // Update current status
-      setCurrentStatus(data.status);
-
-      // Update ETA if provided
-      if (data.eta) {
-        setEta(data.eta);
-      }
-
-      // ===== HANDLE PROVIDER ARRIVAL =====
-      if (data.status === 'arrived' && !hasShownArrivedAlert) {
-        addDebug('✅ Provider has ARRIVED!');
-        setHasShownArrivedAlert(true);
+      const data = await response.json();
+      
+      if (data.success && data.location) {
+        setPollingAttempts(prev => prev + 1);
         
-        // Show alert to user
-        Alert.alert(
-          'Provider Arrived',
-          `${providerName} has arrived at your location. Please go outside to meet them.`,
-          [{ text: 'OK' }]
-        );
-      }
-
-      // ===== HANDLE SERVICE STARTED =====
-      if (data.status === 'started') {
-        addDebug('✅✅✅ SERVICE HAS STARTED - Navigating to ServiceInProgress');
+        const newLocation = {
+          latitude: data.location.latitude,
+          longitude: data.location.longitude,
+        };
         
-        // Navigate to ServiceInProgress if not already navigating
-        if (!navigationInProgress.current) {
-          navigationInProgress.current = true;
-          
-          // Stop polling
-          if (pollingTimer.current) {
-            clearTimeout(pollingTimer.current);
-            pollingTimer.current = null;
-          }
-
-          // Navigate to ServiceInProgress
-          setTimeout(() => {
-            if (isMounted.current) {
-              router.push({
-                pathname: '/(customer)/ServiceInProgress',
-                params: {
-                  bookingId,
-                  providerName,
-                  providerId,
-                  providerPhone,
-                  serviceType,
-                  vehicleType,
-                  pickupLocation: pickupAddress,
-                  pickupLat: pickupLat.toString(),
-                  pickupLng: pickupLng.toString(),
-                  totalAmount,
-                }
-              });
-            }
-          }, 500);
+        setProviderLocation(newLocation);
+        
+        // Update route and ETA
+        if (jobDetails?.pickup.coordinates) {
+          fetchRoute(
+            newLocation.latitude, 
+            newLocation.longitude,
+            jobDetails.pickup.coordinates.lat,
+            jobDetails.pickup.coordinates.lng
+          );
+          getEtaFromGoogleMaps(
+            newLocation.latitude, 
+            newLocation.longitude,
+            jobDetails.pickup.coordinates.lat,
+            jobDetails.pickup.coordinates.lng
+          );
         }
       }
-
     } catch (error) {
-      addDebug(`Error checking job status: ${error}`);
+      addDebug(`❌ Error fetching location: ${error}`);
     }
   };
 
-  const fetchProviderDetails = async () => {
-    if (!providerId) return;
+  // Fetch job status
+  const fetchJobStatus = async () => {
+    if (!bookingId || navigationInProgress.current) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const url = `${API_BASE_URL}/api/providers/${providerId}`;
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/status`;
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setProviderDetails(data.provider);
+      if (!response.ok) return;
+
+      const data = await response.json();
+      
+      if (data.status) {
+        // Update job status
+        setJobDetails(prev => prev ? { ...prev, status: data.status } : null);
+        
+        // Handle ARRIVED
+        if (data.status === 'arrived' && !hasShownArrivedAlert) {
+          setHasShownArrivedAlert(true);
+          Alert.alert(
+            'Provider Arrived',
+            `${jobDetails?.provider?.name || 'Your provider'} has arrived at your location.`,
+            [{ text: 'OK' }]
+          );
+        }
+        
+        // Handle STARTED - navigate to ServiceInProgress
+        if (data.status === 'started' && !navigationInProgress.current) {
+          navigationInProgress.current = true;
+          
+          if (pollingTimer.current) {
+            clearTimeout(pollingTimer.current);
+            pollingTimer.current = null;
+          }
+          
+          setTimeout(() => {
+            if (isMounted.current) {
+              router.push({
+                pathname: '/(customer)/ServiceInProgress',
+                params: {
+                  bookingId,
+                  providerName: jobDetails?.provider?.name || '',
+                  providerId: jobDetails?.provider?.id || '',
+                  providerPhone: jobDetails?.provider?.phone || '',
+                  serviceType: jobDetails?.serviceName || '',
+                  vehicleType: jobDetails?.vehicleType || '',
+                  pickupLocation: jobDetails?.pickup.address || '',
+                  pickupLat: jobDetails?.pickup.coordinates.lat.toString() || '',
+                  pickupLng: jobDetails?.pickup.coordinates.lng.toString() || '',
+                  totalAmount: jobDetails?.payment.totalAmount.toString() || '0',
+                }
+              });
+            }
+          }, 500);
+        }
       }
     } catch (error) {
-      addDebug(`Error fetching provider details: ${error}`);
+      addDebug(`❌ Error fetching status: ${error}`);
     }
   };
 
-  // Decode Google Maps polyline
-  const decodePolyline = (t: string): Coordinates[] => {
-    let points: Coordinates[] = [];
+  // Polling loop
+  const startPolling = () => {
+    addDebug('🔄 Starting polling (every 10 seconds)');
+    
+    const poll = async () => {
+      if (!isMounted.current || navigationInProgress.current) return;
+      
+      await Promise.all([
+        fetchProviderLocation(),
+        fetchJobStatus()
+      ]);
+      
+      if (isMounted.current && !navigationInProgress.current) {
+        pollingTimer.current = setTimeout(poll, 10000);
+      }
+    };
+    
+    poll();
+  };
+
+  // Initial load
+  useEffect(() => {
+    addDebug(`Initializing with bookingId: ${bookingId}`);
+    
+    if (!bookingId) {
+      Alert.alert('Error', 'No booking ID provided');
+      router.back();
+      return;
+    }
+    
+    // Fetch initial data
+    fetchJobDetails().then(() => {
+      // Start polling after initial data loads
+      startPolling();
+    });
+    
+    // Start ETA countdown
+    const interval = setInterval(() => {
+      setTimeRemaining(prev => prev > 1 ? prev - 1 : 0);
+    }, 1000);
+    
+    return () => {
+      addDebug('Cleaning up');
+      isMounted.current = false;
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+      }
+      clearInterval(interval);
+    };
+  }, [bookingId]);
+
+  // Google Maps functions (same as before)
+  const decodePolyline = (t: string): any[] => {
+    let points = [];
     let lat = 0;
     let lng = 0;
     let index = 0;
@@ -424,10 +384,8 @@ const ProviderAssignedScreen = () => {
     return points;
   };
 
-  // Fetch route from Google Maps
   const fetchRoute = async (startLat: number, startLng: number, endLat: number, endLng: number) => {
     try {
-      addDebug(`Fetching route from ${startLat},${startLng} to ${endLat},${endLng}`);
       const apiKey = Platform.select({
         android: ANDROID_API_KEY,
         ios: IOS_API_KEY,
@@ -441,14 +399,12 @@ const ProviderAssignedScreen = () => {
       if (data.routes.length > 0) {
         const points = decodePolyline(data.routes[0].overview_polyline.points);
         setRouteCoordinates(points);
-        addDebug(`Route found with ${points.length} points`);
       }
     } catch (error) {
       addDebug(`Error fetching route: ${error}`);
     }
   };
 
-  // Get ETA from Google Maps
   const getEtaFromGoogleMaps = async (originLat: number, originLng: number, destLat: number, destLng: number) => {
     try {
       const apiKey = Platform.select({
@@ -464,8 +420,7 @@ const ProviderAssignedScreen = () => {
       if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
         const durationText = data.rows[0].elements[0].duration.text;
         setEta(durationText);
-        addDebug(`ETA updated: ${durationText}`);
-
+        
         const durationInSeconds = data.rows[0].elements[0].duration.value;
         setTimeRemaining(durationInSeconds);
       }
@@ -474,40 +429,10 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  const forceRefresh = () => {
-    addDebug('🔄 Manually refreshing');
-    fetchProviderLocation();
-    fetchJobStatus();
-  };
-
-  const startEtaCountdown = () => {
-    const etaMinutes = parseInt(estimatedArrival);
-    if (isNaN(etaMinutes)) return;
-
-    setTimeRemaining(etaMinutes * 60);
-
-    const interval = setInterval(() => {
-      setTimeRemaining(prev => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  };
-
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
+  // Action handlers
   const handleCall = () => {
-    if (providerPhone) {
-      Linking.openURL(`tel:${providerPhone}`);
+    if (jobDetails?.provider?.phone) {
+      Linking.openURL(`tel:${jobDetails.provider.phone}`);
     } else {
       Alert.alert('Error', 'Provider phone number not available');
     }
@@ -517,51 +442,47 @@ const ProviderAssignedScreen = () => {
     router.push({
       pathname: '/(customer)/Chat',
       params: {
-        providerName,
         bookingId,
-        providerId,
+        providerId: jobDetails?.provider?.id,
+        providerName: jobDetails?.provider?.name,
       }
     });
   };
 
   const handleOpenInMaps = () => {
-    if (providerLocation && pickupLat && pickupLng) {
+    if (providerLocation && jobDetails?.pickup.coordinates) {
       const url = Platform.select({
-        ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${pickupLat},${pickupLng}`,
-        android: `google.navigation:q=${pickupLat},${pickupLng}`,
+        ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${jobDetails.pickup.coordinates.lat},${jobDetails.pickup.coordinates.lng}`,
+        android: `google.navigation:q=${jobDetails.pickup.coordinates.lat},${jobDetails.pickup.coordinates.lng}`,
       });
 
       if (url) {
         Linking.openURL(url);
       }
-    } else {
-      Alert.alert('Error', 'Location information not available');
     }
   };
 
   const handleTrackProvider = () => {
-    if (providerLocation) {
-      addDebug(`🔄 Navigating to TrackProviderScreen`);
+    if (providerLocation && jobDetails) {
       router.push({
         pathname: '/(customer)/TrackProvider',
         params: {
-          bookingId: bookingId,
-          providerId: providerId,
-          providerName: providerName,
-          providerPhone: providerPhone,
+          bookingId,
+          providerId: jobDetails.provider?.id,
+          providerName: jobDetails.provider?.name,
+          providerPhone: jobDetails.provider?.phone,
           providerLat: providerLocation.latitude.toString(),
           providerLng: providerLocation.longitude.toString(),
-          pickupLat: pickupLat.toString(),
-          pickupLng: pickupLng.toString(),
-          pickupAddress: pickupAddress,
-          dropoffLat: dropoffLat?.toString() || '',
-          dropoffLng: dropoffLng?.toString() || '',
+          pickupLat: jobDetails.pickup.coordinates.lat.toString(),
+          pickupLng: jobDetails.pickup.coordinates.lng.toString(),
+          pickupAddress: jobDetails.pickup.address,
+          dropoffLat: jobDetails.dropoff?.coordinates.lat.toString() || '',
+          dropoffLng: jobDetails.dropoff?.coordinates.lng.toString() || '',
           estimatedArrival: timeRemaining.toString(),
-          eta: eta,
-          serviceType: serviceType,
-          vehicleType: vehicleType,
-          totalAmount: totalAmount,
-          lastUpdate: providerLocation.lastUpdate || new Date().toISOString()
+          eta,
+          serviceType: jobDetails.serviceName,
+          vehicleType: jobDetails.vehicleType,
+          totalAmount: jobDetails.payment.totalAmount.toString(),
         }
       });
     } else {
@@ -581,7 +502,7 @@ const ProviderAssignedScreen = () => {
           onPress: async () => {
             try {
               const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/cancel`, {
+              await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -589,14 +510,12 @@ const ProviderAssignedScreen = () => {
                 },
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
-
-              // Remove bookingId from storage since job is cancelled
-              await AsyncStorage.removeItem('currentBookingId');
               
-              router.back();
+              await AsyncStorage.removeItem('currentBookingId');
+              router.replace('/(customer)/HomePage');
             } catch (error) {
               console.error('Cancel error:', error);
-              router.back();
+              router.replace('/(customer)/HomePage');
             }
           }
         }
@@ -604,38 +523,59 @@ const ProviderAssignedScreen = () => {
     );
   };
 
-  // If no providers found, show appropriate message
-  if (noProviders) {
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchJobDetails();
+  };
+
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#68bdee" />
+        <Text style={styles.loadingText}>Loading job details...</Text>
+      </View>
+    );
+  }
+
+  // No job found
+  if (!jobDetails) {
     return (
       <View style={styles.container}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.iconContainer}>
-            <Ionicons name="alert-circle-outline" size={80} color="#ff4444" />
-          </View>
-          <Text style={styles.title}>No Providers Available</Text>
+          <Ionicons name="alert-circle-outline" size={80} color="#ff4444" />
+          <Text style={styles.title}>Job Not Found</Text>
           <Text style={styles.subtitle}>
-            We couldn't find any providers in your area at this time. Please try again later.
+            We couldn't find details for this job. Please try again.
           </Text>
-
           <TouchableOpacity
             style={[styles.trackButton, { marginTop: 30 }]}
-            onPress={() => router.back()}
+            onPress={() => router.replace('/(customer)/HomePage')}
           >
-            <Text style={styles.trackButtonText}>Go Back</Text>
+            <Text style={styles.trackButtonText}>Go Home</Text>
           </TouchableOpacity>
         </ScrollView>
       </View>
     );
   }
 
-  // Check if provider has arrived
-  const hasProviderArrived = currentStatus === 'arrived';
+  const hasProviderArrived = jobDetails.status === 'arrived';
+  const provider = jobDetails.provider;
 
   return (
     <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
         {/* Success Icon */}
         <View style={styles.iconContainer}>
@@ -648,8 +588,6 @@ const ProviderAssignedScreen = () => {
 
         {/* Title */}
         <Text style={styles.title}>Provider Assigned!</Text>
-
-        {/* Subtitle */}
         <Text style={styles.subtitle}>Your service provider is on the way</Text>
 
         {/* Status Badge */}
@@ -658,29 +596,25 @@ const ProviderAssignedScreen = () => {
           hasProviderArrived ? styles.statusBadgeGreen : styles.statusBadgeBlue
         ]}>
           <Text style={styles.statusText}>
-            {currentStatus === 'arrived' ? 'PROVIDER ARRIVED' : 
-             currentStatus === 'started' ? 'SERVICE STARTED' :
-             currentStatus === 'en-route' ? 'ON THE WAY' :
-             currentStatus?.toUpperCase() || 'PROVIDER ASSIGNED'}
+            {jobDetails.status === 'arrived' ? 'PROVIDER ARRIVED' : 
+             jobDetails.status === 'started' ? 'SERVICE STARTED' :
+             jobDetails.status === 'en-route' ? 'ON THE WAY' :
+             jobDetails.status?.toUpperCase() || 'PROVIDER ASSIGNED'}
           </Text>
         </View>
 
-        {/* Debug Panel - TEMPORARY for testing */}
+        {/* Debug Panel - REMOVE IN PRODUCTION */}
         <View style={styles.debugPanel}>
           <Text style={styles.debugTitle}>🔍 DEBUG INFO</Text>
           <ScrollView style={styles.debugScroll} horizontal>
             <View>
               <Text style={styles.debugText}>• Booking ID: {bookingId}</Text>
-              <Text style={styles.debugText}>• Provider ID: {providerId}</Text>
-              <Text style={styles.debugText}>• Status: {currentStatus}</Text>
+              <Text style={styles.debugText}>• Status: {jobDetails.status}</Text>
+              <Text style={styles.debugText}>• Provider: {provider?.name || 'Not assigned'}</Text>
               <Text style={styles.debugText}>• Polling: #{pollingAttempts}</Text>
               <Text style={styles.debugText}>• Location: {providerLocation ? '✓' : '✗'}</Text>
-              <Text style={styles.debugText}>• Last update: {providerLocation?.lastUpdate ? new Date(providerLocation.lastUpdate).toLocaleTimeString() : 'N/A'}</Text>
             </View>
           </ScrollView>
-          <TouchableOpacity style={styles.debugButton} onPress={forceRefresh}>
-            <Text style={styles.debugButtonText}>🔄 FORCE REFRESH</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Map Section */}
@@ -693,37 +627,38 @@ const ProviderAssignedScreen = () => {
             </Text>
           </View>
 
-          {/* Google Maps */}
           <MapView
             ref={mapRef}
             provider={PROVIDER_GOOGLE}
             style={styles.map}
             initialRegion={{
-              latitude: pickupLat,
-              longitude: pickupLng,
+              latitude: jobDetails.pickup.coordinates.lat,
+              longitude: jobDetails.pickup.coordinates.lng,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
             showsUserLocation={true}
             showsMyLocationButton={false}
-            showsTraffic={true}
           >
-            {/* Pickup Location Marker */}
+            {/* Pickup Marker */}
             <Marker
-              coordinate={{ latitude: pickupLat, longitude: pickupLng }}
+              coordinate={{
+                latitude: jobDetails.pickup.coordinates.lat,
+                longitude: jobDetails.pickup.coordinates.lng
+              }}
               title="Pickup Location"
-              description={pickupAddress}
+              description={jobDetails.pickup.address}
             >
               <View style={styles.pickupMarkerContainer}>
                 <View style={styles.pickupMarkerDot} />
               </View>
             </Marker>
 
-            {/* Provider Location Marker */}
+            {/* Provider Marker */}
             {providerLocation && (
               <Marker
                 coordinate={providerLocation}
-                title={providerName}
+                title={provider?.name || 'Provider'}
                 description="Your provider"
               >
                 <View style={styles.providerMarkerContainer}>
@@ -732,12 +667,15 @@ const ProviderAssignedScreen = () => {
               </Marker>
             )}
 
-            {/* Dropoff Location Marker (if available) */}
-            {dropoffLat && dropoffLng && (
+            {/* Dropoff Marker */}
+            {jobDetails.dropoff && (
               <Marker
-                coordinate={{ latitude: dropoffLat, longitude: dropoffLng }}
+                coordinate={{
+                  latitude: jobDetails.dropoff.coordinates.lat,
+                  longitude: jobDetails.dropoff.coordinates.lng
+                }}
                 title="Dropoff Location"
-                description={dropoffAddress}
+                description={jobDetails.dropoff.address}
               >
                 <View style={styles.dropoffMarkerContainer}>
                   <Ionicons name="flag" size={20} color="#10B981" />
@@ -745,7 +683,7 @@ const ProviderAssignedScreen = () => {
               </Marker>
             )}
 
-            {/* Route Polyline */}
+            {/* Route */}
             {routeCoordinates.length > 0 && (
               <Polyline
                 coordinates={routeCoordinates}
@@ -755,7 +693,7 @@ const ProviderAssignedScreen = () => {
             )}
           </MapView>
 
-          {/* Map Overlay Buttons */}
+          {/* Map Controls */}
           <TouchableOpacity
             style={styles.recenterButton}
             onPress={() => {
@@ -779,129 +717,123 @@ const ProviderAssignedScreen = () => {
             <Ionicons name="navigate-outline" size={20} color="#68bdee" />
           </TouchableOpacity>
 
-          {/* Polling Info */}
           <View style={styles.pollingBadge}>
             <Text style={styles.pollingText}>Live • {pollingAttempts}</Text>
           </View>
         </View>
 
         {/* Provider Card */}
-        <View style={styles.providerCard}>
-          <View style={styles.providerHeader}>
-            {/* Profile Image */}
-            <View style={styles.profileImageContainer}>
-              {providerImage ? (
-                <Image source={{ uri: providerImage }} style={styles.profileImage} />
-              ) : (
-                <Ionicons name="person" size={40} color="#68bdee" />
-              )}
-            </View>
+        {provider && (
+          <View style={styles.providerCard}>
+            <View style={styles.providerHeader}>
+              <View style={styles.profileImageContainer}>
+                {provider.profileImage ? (
+                  <Image source={{ uri: provider.profileImage }} style={styles.profileImage} />
+                ) : (
+                  <Ionicons name="person" size={40} color="#68bdee" />
+                )}
+              </View>
 
-            {/* Provider Info */}
-            <View style={styles.providerInfo}>
-              <Text style={styles.providerName}>{providerName}</Text>
-              <View style={styles.ratingContainer}>
-                <Ionicons name="star" size={16} color="#FFB800" />
-                <Text style={styles.ratingText}>{providerRating}</Text>
-                <Text style={styles.reviewsText}>
-                  • {providerDetails?.totalRatings || '127'} reviews
+              <View style={styles.providerInfo}>
+                <Text style={styles.providerName}>{provider.name}</Text>
+                <View style={styles.ratingContainer}>
+                  <Ionicons name="star" size={16} color="#FFB800" />
+                  <Text style={styles.ratingText}>{provider.rating}</Text>
+                  <Text style={styles.reviewsText}>
+                    • {provider.completedJobs || 127} jobs
+                  </Text>
+                </View>
+                <Text style={styles.vehicleInfo}>
+                  {provider.vehicle?.description || 'Professional Service Vehicle'}
+                </Text>
+                <Text style={styles.plateNumber}>
+                  {provider.vehicle?.licensePlate || 'BHR 1234'}
                 </Text>
               </View>
-              <Text style={styles.vehicleInfo}>{vehicleDetails}</Text>
-              <Text style={styles.plateNumber}>{licensePlate}</Text>
+            </View>
+
+            {providerLocation && (
+              <View style={styles.locationInfoContainer}>
+                <Ionicons name="location" size={14} color="#68bdee" />
+                <Text style={styles.locationInfoText}>
+                  Last updated: {new Date().toLocaleTimeString()}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.divider} />
+
+            <View style={styles.actionButtonsContainer}>
+              <TouchableOpacity
+                style={styles.callButton}
+                onPress={handleCall}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="call-outline" size={20} color="#68bdee" />
+                <Text style={styles.callButtonText}>Call</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.messageButton}
+                onPress={handleMessage}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
+                <Text style={styles.messageButtonText}>Message</Text>
+              </TouchableOpacity>
             </View>
           </View>
-
-          {/* Provider Location Info */}
-          {providerLocation ? (
-            <View style={styles.locationInfoContainer}>
-              <Ionicons name="location" size={14} color="#68bdee" />
-              <Text style={styles.locationInfoText}>
-                Last updated: {new Date(providerLocation.lastUpdate || '').toLocaleTimeString()}
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.locationInfoContainer}>
-              <ActivityIndicator size="small" color="#68bdee" />
-              <Text style={styles.locationInfoText}>Waiting for provider location...</Text>
-            </View>
-          )}
-
-          {/* Divider */}
-          <View style={styles.divider} />
-
-          {/* Action Buttons */}
-          <View style={styles.actionButtonsContainer}>
-            <TouchableOpacity
-              style={styles.callButton}
-              onPress={handleCall}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="call-outline" size={20} color="#68bdee" />
-              <Text style={styles.callButtonText}>Call</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.messageButton}
-              onPress={handleMessage}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
-              <Text style={styles.messageButtonText}>Message</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        )}
 
         {/* Service Details Card */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>SERVICE DETAILS</Text>
-
           <View style={styles.cardDivider} />
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Booking ID</Text>
-            <Text style={styles.detailValue}>{bookingId?.slice(-8) || 'N/A'}</Text>
+            <Text style={styles.detailValue}>{bookingId?.slice(-8)}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Service</Text>
-            <Text style={styles.detailValue}>{serviceName}</Text>
+            <Text style={styles.detailValue}>{jobDetails.serviceName}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Vehicle</Text>
-            <Text style={styles.detailValue}>{vehicleType}</Text>
+            <Text style={styles.detailValue}>{jobDetails.vehicleType}</Text>
           </View>
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Pickup</Text>
             <Text style={styles.detailValue} numberOfLines={2}>
-              {pickupAddress}
+              {jobDetails.pickup.address}
             </Text>
           </View>
 
-          {dropoffAddress ? (
+          {jobDetails.dropoff && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Dropoff</Text>
               <Text style={styles.detailValue} numberOfLines={2}>
-                {dropoffAddress}
+                {jobDetails.dropoff.address}
               </Text>
             </View>
-          ) : null}
+          )}
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Estimated Cost</Text>
-            <Text style={styles.detailValueHighlight}>{totalAmount} BHD</Text>
+            <Text style={styles.detailValueHighlight}>
+              {jobDetails.payment.totalAmount} BHD
+            </Text>
           </View>
         </View>
 
-        {/* Status Card */}
+        {/* Status Timeline */}
         <View style={[styles.card, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>JOB STATUS</Text>
-
           <View style={styles.cardDivider} />
 
-          {/* Status Item 1 - Active */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxActive}>
               <View style={styles.statusDotActive} />
@@ -912,26 +844,33 @@ const ProviderAssignedScreen = () => {
             </View>
           </View>
 
-          {/* Status Item 2 - In progress (current) */}
           <View style={styles.statusItem}>
-            <View style={[styles.statusCheckboxInactive, (providerLocation || hasProviderArrived) && styles.statusCheckboxActive]}>
+            <View style={[
+              styles.statusCheckboxInactive,
+              (providerLocation || hasProviderArrived) && styles.statusCheckboxActive
+            ]}>
               {(providerLocation || hasProviderArrived) && <View style={styles.statusDotActive} />}
             </View>
             <View style={styles.statusTextContainer}>
-              <Text style={[styles.statusTextInactive, (providerLocation || hasProviderArrived) && styles.statusTextActive]}>
+              <Text style={[
+                styles.statusTextInactive,
+                (providerLocation || hasProviderArrived) && styles.statusTextActive
+              ]}>
                 {hasProviderArrived ? 'Provider Arrived' : 'Provider On the Way'}
               </Text>
-              <Text style={[styles.statusTimeInactive, (providerLocation || hasProviderArrived) && styles.statusTimeActive]}>
+              <Text style={[
+                styles.statusTimeInactive,
+                (providerLocation || hasProviderArrived) && styles.statusTimeActive
+              ]}>
                 {hasProviderArrived 
                   ? 'Provider has arrived' 
                   : providerLocation 
                     ? 'Live tracking active' 
-                    : `ETA: ${estimatedArrival} minutes`}
+                    : `ETA: ${eta}`}
               </Text>
             </View>
           </View>
 
-          {/* Status Item 3 - Waiting */}
           <View style={styles.statusItem}>
             <View style={styles.statusCheckboxInactive} />
             <View style={styles.statusTextContainer}>
@@ -966,7 +905,37 @@ const ProviderAssignedScreen = () => {
   );
 };
 
+// Add loading styles
+const loadingStyles = {
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#8c8c8c',
+  },
+};
+// At the bottom of the file, replace the styles with:
+
 const styles = StyleSheet.create({
+  // Loading styles
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#8c8c8c',
+  },
+  
+  // Main container styles
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -1023,7 +992,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
-  // Debug Panel
   debugPanel: {
     width: '100%',
     backgroundColor: '#1a1a1a',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,25 @@ import {
   StyleSheet,
   SafeAreaView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// ─── Icon components (no external deps) ─────────────────────────────────────
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
+// ─── Decline Reasons ─────────────────────────────────────────────────────────
+const DECLINE_REASONS = [
+  { id: 'too_far', label: 'Too far from current location' },
+  { id: 'another_job', label: 'Already have another job' },
+  { id: 'vehicle_type', label: 'Vehicle type not suitable' },
+  { id: 'outside_hours', label: 'Outside service hours' },
+  { id: 'other', label: 'Other reason' },
+];
+
+// ─── Icon components ─────────────────────────────────────────────────────
 const DollarIcon = () => (
   <View style={styles.iconWrap}>
     <Feather name="dollar-sign" size={24} color="#87CEFA" />
@@ -42,44 +56,45 @@ const WarningIcon = () => (
   <Text style={{ fontSize: 18, color: '#FFA000' }}>⚠</Text>
 );
 
-// ─── Decline Reasons ─────────────────────────────────────────────────────────
-
-const DECLINE_REASONS = [
-  { id: 'too_far', label: 'Too far from current location' },
-  { id: 'another_job', label: 'Already have another job' },
-  { id: 'vehicle_type', label: 'Vehicle type not suitable' },
-  { id: 'outside_hours', label: 'Outside service hours' },
-  { id: 'other', label: 'Other reason' },
-];
-
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-const RequestSummary = () => (
+interface RequestSummaryProps {
+  earnings: number;
+  distance: string;
+  eta: string;
+}
+
+const RequestSummary = ({ earnings, distance, eta }: RequestSummaryProps) => (
   <View style={styles.summaryCard}>
     <Text style={styles.sectionLabel}>REQUEST SUMMARY</Text>
     <View style={styles.summaryRow}>
       <View style={styles.summaryItem}>
         <DollarIcon />
-        <Text style={styles.summaryValue}>81 BHD</Text>
+        <Text style={styles.summaryValue}>{earnings} BHD</Text>
         <Text style={styles.summarySubLabel}>Earnings</Text>
       </View>
       <View style={styles.summaryDivider} />
       <View style={styles.summaryItem}>
         <PinIcon />
-        <Text style={styles.summaryValue}>2.5 KM</Text>
+        <Text style={styles.summaryValue}>{distance}</Text>
         <Text style={styles.summarySubLabel}>Distance</Text>
       </View>
       <View style={styles.summaryDivider} />
       <View style={styles.summaryItem}>
         <ClockIcon />
-        <Text style={styles.summaryValue}>8-10</Text>
+        <Text style={styles.summaryValue}>{eta}</Text>
         <Text style={styles.summarySubLabel}>Minutes</Text>
       </View>
     </View>
   </View>
 );
 
-const AcceptSection = ({ onAccept }) => (
+interface AcceptSectionProps {
+  onAccept: () => void;
+  isLoading: boolean;
+}
+
+const AcceptSection = ({ onAccept, isLoading }: AcceptSectionProps) => (
   <View style={styles.acceptCard}>
     <View style={styles.acceptSection}>
       <View style={styles.cardHeader}>
@@ -110,27 +125,35 @@ const AcceptSection = ({ onAccept }) => (
       </View>
 
       <TouchableOpacity
-        style={styles.acceptBtn}
+        style={[styles.acceptBtn, isLoading && styles.buttonDisabled]}
         onPress={onAccept}
+        disabled={isLoading}
         activeOpacity={0.85}
       >
-        <Text style={styles.acceptBtnText}>Accept & Start Navigation</Text>
+        {isLoading ? (
+          <ActivityIndicator color="#FFFFFF" />
+        ) : (
+          <Text style={styles.acceptBtnText}>Accept & Start Navigation</Text>
+        )}
       </TouchableOpacity>
     </View>
   </View>
 );
 
-// ─── Decline Section (with reason selection) ─────────────────────────────────
+interface DeclineSectionProps {
+  onDecline: (reason: string) => void;
+  isLoading: boolean;
+}
 
-const DeclineSection = ({ onDecline }) => {
-  const [selectedReason, setSelectedReason] = useState(null);
+const DeclineSection = ({ onDecline, isLoading }: DeclineSectionProps) => {
+  const [selectedReason, setSelectedReason] = useState<string | null>(null);
 
   const handleConfirmDecline = () => {
     if (!selectedReason) {
       Alert.alert('Select a Reason', 'Please select a reason before declining.');
       return;
     }
-    const reason = DECLINE_REASONS.find(r => r.id === selectedReason)?.label;
+    const reason = DECLINE_REASONS.find(r => r.id === selectedReason)?.label || '';
     onDecline(reason);
   };
 
@@ -140,7 +163,6 @@ const DeclineSection = ({ onDecline }) => {
 
   return (
     <View style={styles.declineCard}>
-
       {/* 🔴 Top Header Section */}
       <View style={styles.declineTop}>
         <View style={styles.cardHeader}>
@@ -159,7 +181,6 @@ const DeclineSection = ({ onDecline }) => {
 
       {/* ⚪ Bottom White Section — Reason Selection */}
       <View style={styles.declineBottom}>
-
         <Text style={styles.reasonLabel}>SELECT A REASON (REQUIRED):</Text>
 
         {DECLINE_REASONS.map((reason) => (
@@ -170,6 +191,7 @@ const DeclineSection = ({ onDecline }) => {
               selectedReason === reason.id && styles.radioOptionSelected,
             ]}
             onPress={() => setSelectedReason(reason.id)}
+            disabled={isLoading}
             activeOpacity={0.7}
           >
             <View style={[
@@ -193,29 +215,38 @@ const DeclineSection = ({ onDecline }) => {
         <TouchableOpacity
           style={[
             styles.confirmDeclineBtn,
-            !selectedReason && styles.confirmDeclineBtnDisabled,
+            (!selectedReason || isLoading) && styles.confirmDeclineBtnDisabled,
           ]}
           onPress={handleConfirmDecline}
+          disabled={!selectedReason || isLoading}
           activeOpacity={0.85}
         >
-          <Text style={styles.confirmDeclineBtnText}>Confirm Decline</Text>
+          {isLoading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.confirmDeclineBtnText}>Confirm Decline</Text>
+          )}
         </TouchableOpacity>
 
         {/* Cancel Button */}
         <TouchableOpacity
           style={styles.cancelBtn}
           onPress={handleCancel}
+          disabled={isLoading}
           activeOpacity={0.7}
         >
           <Text style={styles.cancelBtnText}>Cancel</Text>
         </TouchableOpacity>
-
       </View>
     </View>
   );
 };
 
-const ImportantWarning = () => (
+interface ImportantWarningProps {
+  acceptanceRate: number;
+}
+
+const ImportantWarning = ({ acceptanceRate }: ImportantWarningProps) => (
   <View style={styles.warningCard}>
     <View style={styles.warningHeader}>
       <WarningIcon />
@@ -224,12 +255,18 @@ const ImportantWarning = () => (
     <Text style={styles.warningText}>
       High rejection rate may affect your account standing and future request
       priority. Current acceptance rate:{' '}
-      <Text style={styles.warningBold}>98%</Text>
+      <Text style={styles.warningBold}>{acceptanceRate}%</Text>
     </Text>
   </View>
 );
 
-const ImpactStats = () => (
+interface ImpactStatsProps {
+  earnings: number;
+  currentRate: number;
+  newRate: number;
+}
+
+const ImpactStats = ({ earnings, currentRate, newRate }: ImpactStatsProps) => (
   <View style={styles.impactCard}>
     <Text style={styles.sectionLabel}>IMPACT ON YOUR STATS</Text>
     <View style={styles.impactRow}>
@@ -237,11 +274,11 @@ const ImpactStats = () => (
         <Text style={styles.impactColHead}>If you Accept:</Text>
         <View style={styles.impactStatRow}>
           <Text style={styles.impactIconGreen}>✓</Text>
-          <Text style={styles.impactStatGreen}>+81 BHD earnings</Text>
+          <Text style={styles.impactStatGreen}>+{earnings} BHD earnings</Text>
         </View>
         <View style={styles.impactStatRow}>
           <Text style={styles.impactIconGreen}>✓</Text>
-          <Text style={styles.impactStatGreen}>Maintain 98% rate</Text>
+          <Text style={styles.impactStatGreen}>Maintain {currentRate}% rate</Text>
         </View>
       </View>
 
@@ -253,7 +290,7 @@ const ImpactStats = () => (
         </View>
         <View style={styles.impactStatRow}>
           <Text style={styles.impactIconRed}>✕</Text>
-          <Text style={styles.impactStatRed}>Rate drops to 96%</Text>
+          <Text style={styles.impactStatRed}>Rate drops to {newRate}%</Text>
         </View>
       </View>
     </View>
@@ -263,12 +300,145 @@ const ImpactStats = () => (
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 export default function MakeYourDecisionScreen() {
-  const handleAccept = () => {
-    Alert.alert('Request Accepted', 'Navigate to pickup location now.');
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  const bookingId = params.bookingId as string;
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [jobData, setJobData] = useState({
+    earnings: 81,
+    distance: '2.5 KM',
+    eta: '8-10',
+    acceptanceRate: 98,
+  });
+
+  // Fetch job data on mount
+  useEffect(() => {
+    if (!bookingId) {
+      Alert.alert('Error', 'No booking ID provided');
+      router.back();
+      return;
+    }
+    fetchJobSummary();
+  }, []);
+
+  const fetchJobSummary = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.job) {
+          // Update with real data
+          setJobData({
+            earnings: Math.round(data.job.payment.totalAmount * 0.85),
+            distance: data.job.distance || '2.5 KM',
+            eta: data.job.estimatedArrival?.split(' ')[0] || '8-10',
+            acceptanceRate: 98, // This would come from provider's stats
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching job summary:', error);
+    }
   };
 
-  const handleDecline = (reason) => {
-    Alert.alert('Request Declined', reason ? `Reason: ${reason}` : 'The request has been declined.');
+  const handleAccept = async () => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (!token) {
+        Alert.alert('Error', 'Authentication failed');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/accept-job`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to accept job');
+      }
+
+      Alert.alert(
+        'Request Accepted',
+        'Navigate to pickup location now.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              // Navigate to navigation/tracking screen
+              router.push({
+                pathname: '/NavigationScreen',
+                params: { bookingId }
+              });
+            }
+          }
+        ]
+      );
+    } catch (error: any) {
+      console.error('Accept error:', error);
+      Alert.alert(
+        'Failed to Accept',
+        error.message || 'Could not accept the job. It may have been taken by another provider.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.back()
+          }
+        ]
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDecline = async (reason: string) => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+      
+      if (!token) {
+        Alert.alert('Error', 'Authentication failed');
+        return;
+      }
+
+      // Mock API call - replace with actual endpoint when ready
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      console.log('Decline reason:', reason);
+
+      Alert.alert(
+        'Request Declined',
+        reason ? `Reason: ${reason}` : 'The request has been declined.',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.back()
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Decline error:', error);
+      Alert.alert('Error', 'Failed to decline the request');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -285,19 +455,37 @@ export default function MakeYourDecisionScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <RequestSummary />
-        <AcceptSection onAccept={handleAccept} />
-        <DeclineSection onDecline={handleDecline} />
-        <ImportantWarning />
-        <ImpactStats />
+        <RequestSummary 
+          earnings={jobData.earnings}
+          distance={jobData.distance}
+          eta={jobData.eta}
+        />
+        
+        <AcceptSection 
+          onAccept={handleAccept}
+          isLoading={isLoading}
+        />
+        
+        <DeclineSection 
+          onDecline={handleDecline}
+          isLoading={isLoading}
+        />
+        
+        <ImportantWarning acceptanceRate={jobData.acceptanceRate} />
+        
+        <ImpactStats 
+          earnings={jobData.earnings}
+          currentRate={jobData.acceptanceRate}
+          newRate={jobData.acceptanceRate - 2}
+        />
+        
         <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-
+// ─── Styles (keep exactly as provided) ─────────────────────────────────────
 const styles = StyleSheet.create({
   // ── Safe Area ──
   safeArea: {
@@ -703,5 +891,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#F44336',
+  },
+  buttonDisabled: {
+    opacity: 0.7,
   },
 });

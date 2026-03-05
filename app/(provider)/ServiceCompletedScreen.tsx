@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,27 +9,144 @@ import {
   Alert,
   TextInput,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function MarkServiceCompletedScreen() {
+export default function ServiceCompleteScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  
+  // Get data passed from ServiceInProgressScreen
+  const bookingId = params.bookingId as string;
+  const earnings = params.earnings as string || '81';
+  const serviceType = params.serviceType as string || 'Towing Service';
+  const customerName = params.customerName as string || 'Mohammed A.';
+  const customerPhone = params.customerPhone as string || '+973 3XXX XXXX';
+  const vehicleType = params.vehicleType as string || 'Sedan';
+  const licensePlate = params.licensePlate as string || 'ABC 1234';
+  const vehicleModel = params.vehicleModel as string || 'Toyota Camry 2020';
+  const duration = params.duration as string || '00:35:00';
+  const durationSeconds = parseInt(params.durationSeconds as string) || 2100;
+
+  // Local state
   const [notes, setNotes] = useState('');
   const [paymentChecked, setPaymentChecked] = useState(false);
   const [ratingChecked, setRatingChecked] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [todayEarnings, setTodayEarnings] = useState(0);
+  const [jobsCompleted, setJobsCompleted] = useState(0);
 
-  const handleViewAll = () => Alert.alert('Photos', 'Viewing all photos...');
-  const handleConfirm = () => {
+  // Format completion time
+  const completionTime = new Date().toLocaleTimeString([], { 
+    hour: '2-digit', 
+    minute: '2-digit' 
+  });
+
+  // Calculate fees
+  const totalFee = parseFloat(earnings) / 0.85; // 85% of total (since earnings = total - 15% fee)
+  const platformFee = totalFee * 0.15;
+
+  // Fetch provider's today's stats on mount
+  useEffect(() => {
+    fetchTodayStats();
+  }, []);
+
+  const fetchTodayStats = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
+      if (!firebaseUserId) return;
+
+      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/performance`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        setTodayEarnings(parseFloat(data.data.earnings) || 0);
+        setJobsCompleted(data.data.jobs || 0);
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
+  const handleViewAll = () => {
+    Alert.alert('Photos', 'View all photos feature coming soon');
+  };
+
+  const handleConfirm = async () => {
     if (!paymentChecked) {
       Alert.alert('Payment Required', 'Please confirm payment received to complete.');
       return;
     }
-    Alert.alert('Confirmed', 'Service marked as completed!');
+
+    setIsSubmitting(true);
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        Alert.alert('Error', 'Authentication failed');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Call API to mark job as completed
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/complete`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          notes,
+          paymentReceived: paymentChecked,
+          customerConfirmed: true, // This would come from customer's confirmation
+          completedAt: new Date().toISOString(),
+          duration: durationSeconds,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to complete service');
+      }
+
+      // Show success message
+      Alert.alert(
+        'Success!',
+        'Service completed successfully. Thank you for your hard work!',
+        [
+          {
+            text: 'OK',
+            onPress: () => router.replace('/(provider)/HomePage')
+          }
+        ]
+      );
+
+    } catch (error) {
+      console.error('Complete service error:', error);
+      Alert.alert(
+        'Error',
+        error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
-  // const handleBackToHome = () => Alert.alert('Home', 'Going back to home...');
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -54,15 +171,18 @@ export default function MarkServiceCompletedScreen() {
           <Text style={styles.cardLabel}>SERVICE SUMMARY</Text>
           <View style={styles.cardDivider} />
           {[
-            { label: 'Service ID:', value: 'REQ-7891', bold: true },
-            { label: 'Service Type:', value: 'Towing Service', bold: false },
-            { label: 'Customer:', value: 'Mohammed A.', bold: false },
-            { label: 'Duration:', value: '35 minutes', bold: false },
-            { label: 'Completed:', value: '3:20 PM', bold: false },
+            { label: 'Booking ID:', value: bookingId?.slice(-8) || 'REQ-7891', bold: true },
+            { label: 'Service Type:', value: serviceType, bold: false },
+            { label: 'Customer:', value: customerName, bold: false },
+            { label: 'Vehicle:', value: `${vehicleType} - ${licensePlate}`, bold: false },
+            { label: 'Duration:', value: duration, bold: false },
+            { label: 'Completed:', value: completionTime, bold: false },
           ].map((row, i) => (
             <View key={i} style={styles.detailRow}>
               <Text style={styles.detailLabel}>{row.label}</Text>
-              <Text style={[styles.detailValue, row.bold && styles.detailValueBold]}>{row.value}</Text>
+              <Text style={[styles.detailValue, row.bold && styles.detailValueBold]}>
+                {row.value}
+              </Text>
             </View>
           ))}
         </View>
@@ -73,15 +193,15 @@ export default function MarkServiceCompletedScreen() {
           <View style={styles.cardDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Total Service Fee:</Text>
-            <Text style={styles.detailValue}>95 BHD</Text>
+            <Text style={styles.detailValue}>{totalFee.toFixed(2)} BHD</Text>
           </View>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Platform Fee (15%):</Text>
-            <Text style={styles.detailValue}>-14 BHD</Text>
+            <Text style={styles.detailValue}>-{platformFee.toFixed(2)} BHD</Text>
           </View>
           <View style={styles.earningsRow}>
             <Text style={styles.earningsLabel}>Your Earnings:</Text>
-            <Text style={styles.earningsValue}>81 BHD</Text>
+            <Text style={styles.earningsValue}>{parseFloat(earnings).toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.cardDivider} />
@@ -91,13 +211,16 @@ export default function MarkServiceCompletedScreen() {
             style={styles.checkboxRow}
             onPress={() => setPaymentChecked(p => !p)}
             activeOpacity={0.8}
+            disabled={isSubmitting}
           >
             <View style={[styles.checkbox, paymentChecked && styles.checkboxChecked]}>
               {paymentChecked && <Feather name="check" size={12} color="#fff" />}
             </View>
             <View style={styles.checkboxTextBlock}>
               <Text style={styles.checkboxTitle}>Payment Received</Text>
-              <Text style={styles.checkboxSub}>Confirm you received 95 BHD in cash</Text>
+              <Text style={styles.checkboxSub}>
+                Confirm you received {totalFee.toFixed(2)} BHD in cash
+              </Text>
             </View>
           </TouchableOpacity>
         </View>
@@ -111,7 +234,7 @@ export default function MarkServiceCompletedScreen() {
             </View>
             <View style={styles.checkboxTextBlock}>
               <Text style={styles.checkboxTitle}>Customer Approved Service</Text>
-              <Text style={styles.checkboxSub}>Customer confirms service completion</Text>
+              <Text style={styles.checkboxSub}>Customer has confirmed service completion</Text>
             </View>
           </View>
         </View>
@@ -149,6 +272,7 @@ export default function MarkServiceCompletedScreen() {
             value={notes}
             onChangeText={setNotes}
             textAlignVertical="top"
+            editable={!isSubmitting}
           />
           <Text style={styles.notesHint}>These notes will be visible to the customer</Text>
         </View>
@@ -166,6 +290,7 @@ export default function MarkServiceCompletedScreen() {
             style={styles.ratingCheckRow}
             onPress={() => setRatingChecked(p => !p)}
             activeOpacity={0.8}
+            disabled={isSubmitting}
           >
             <View style={[styles.squareCheckbox, ratingChecked && styles.squareCheckboxChecked]}>
               {ratingChecked && <Feather name="check" size={11} color="#fff" />}
@@ -179,27 +304,47 @@ export default function MarkServiceCompletedScreen() {
           <View style={styles.earningsCardTopRow}>
             <View>
               <Text style={styles.earningsCardLabel}>Today's Total Earnings</Text>
-              <Text style={styles.earningsCardValue}>326 BHD</Text>
+              <Text style={styles.earningsCardValue}>{todayEarnings.toFixed(2)} BHD</Text>
             </View>
             <View style={styles.earningsCardRight}>
               <Text style={styles.earningsCardLabel}>Jobs Completed</Text>
-              <Text style={styles.earningsCardJobs}>9</Text>
+              <Text style={styles.earningsCardJobs}>{jobsCompleted}</Text>
             </View>
           </View>
-          <Text style={styles.earningsCardMotivation}>Great work! You're having a productive day.</Text>
+          <Text style={styles.earningsCardMotivation}>
+            Great work! You're having a productive day.
+          </Text>
         </View>
 
         {/* ── CONFIRM BUTTON ── */}
-        <TouchableOpacity style={styles.confirmBtn} onPress={handleConfirm} activeOpacity={0.85}>
-          <Feather name="check-circle" size={17} color="#fff" style={{ marginRight: 8 }} />
-          <Text style={styles.confirmBtnText}>Confirm & Complete</Text>
+        <TouchableOpacity 
+          style={[styles.confirmBtn, isSubmitting && styles.buttonDisabled]} 
+          onPress={handleConfirm} 
+          activeOpacity={0.85}
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Feather name="check-circle" size={17} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.confirmBtnText}>Confirm & Complete</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         {/* ── PAYMENT WARNING ── */}
-        <Text style={styles.paymentWarning}>Please confirm payment received to complete</Text>
+        {!paymentChecked && (
+          <Text style={styles.paymentWarning}>Please confirm payment received to complete</Text>
+        )}
 
         {/* ── BACK TO HOME ── */}
-        <TouchableOpacity style={styles.backHomeBtn} onPress={() => router.back()} activeOpacity={0.8}>
+        <TouchableOpacity 
+          style={styles.backHomeBtn} 
+          onPress={() => router.replace('/(provider)/HomePage')} 
+          activeOpacity={0.8}
+          disabled={isSubmitting}
+        >
           <Feather name="home" size={15} color="#555" style={{ marginRight: 7 }} />
           <Text style={styles.backHomeBtnText}>Back to Home</Text>
         </TouchableOpacity>
@@ -210,8 +355,7 @@ export default function MarkServiceCompletedScreen() {
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-
+// ─── Styles (keep exactly as provided) ─────────────────────────────────────
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -528,6 +672,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 1,
     textTransform: 'uppercase',
+  },
+  buttonDisabled: {
+    opacity: 0.7,
+    backgroundColor: '#888888',
   },
 
   // ── Payment Warning ──

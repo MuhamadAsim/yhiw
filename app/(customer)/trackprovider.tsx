@@ -195,7 +195,7 @@ const TrackProviderScreen = () => {
         return;
       }
 
-      const url = `${API_BASE_URL}/api/jobs/${bookingId}/provider-location`;
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/provider-location`;
       console.log(`📍 Polling #${pollingAttempts + 1} - Fetching provider location`);
       
       const response = await fetch(url, {

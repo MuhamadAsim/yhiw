@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,21 +8,362 @@ import {
   SafeAreaView,
   Alert,
   StatusBar,
+  Platform,
+  Linking,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import * as Location from 'expo-location';
 
-// ─── Main Screen ─────────────────────────────────────────────────────────────
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+// Google Maps API Key
+const GOOGLE_MAPS_API_KEY = Platform.select({
+  ios: 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU',
+  android: 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A',
+});
+
+interface JobDetails {
+  bookingId: string;
+  customerName: string;
+  customerPhone: string;
+  customerRating: number;
+  pickupLocation: string;
+  pickupLat?: number;
+  pickupLng?: number;
+  dropoffLocation?: string;
+  dropoffLat?: number;
+  dropoffLng?: number;
+  distance: string;
+  eta: string;
+  navigationTips?: string;
+}
 
 export default function NavigateToCustomerScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const bookingId = params.bookingId as string;
 
-  const handleCompass = () => Alert.alert('Compass', 'Recenter map');
-  const handleCall = () => Alert.alert('Call', 'Calling Mohammed A...');
-  const handleMessage = () => Alert.alert('Message', 'Opening message...');
-  const handleArrived = () => Alert.alert('Arrived', "You've arrived at the location!");
-  const handleReportIssue = () => Alert.alert('Report Issue', 'Opening report form...');
-  const handleCancelService = () => Alert.alert('Cancel Service', 'Are you sure you want to cancel?');
+  const mapRef = useRef<MapView>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
+  const [locationSubscription, setLocationSubscription] = useState<any>(null);
+
+  // Fetch job details on mount
+  useEffect(() => {
+    if (!bookingId) {
+      Alert.alert('Error', 'No booking ID provided');
+      router.back();
+      return;
+    }
+    fetchJobDetails();
+    startLocationTracking();
+
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, []);
+
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+
+      if (!token) {
+        Alert.alert('Error', 'Authentication failed');
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch job details');
+      }
+
+      const data = await response.json();
+
+      if (data.success && data.job) {
+        setJobDetails({
+          bookingId: data.job.bookingId,
+          customerName: data.job.customer?.name || 'Mohammed A.',
+          customerPhone: data.job.customer?.phone || '+973 1234 5678',
+          customerRating: data.job.customer?.rating || 4.5,
+          pickupLocation: data.job.pickup?.address || 'Main Street, Manama',
+          pickupLat: data.job.pickup?.coordinates?.lat,
+          pickupLng: data.job.pickup?.coordinates?.lng,
+          dropoffLocation: data.job.dropoff?.address,
+          dropoffLat: data.job.dropoff?.coordinates?.lat,
+          dropoffLng: data.job.dropoff?.coordinates?.lng,
+          distance: data.job.distance || '2.5 km',
+          eta: data.job.estimatedArrival || '8-10 minutes',
+          navigationTips: data.job.description || 'Located in underground parking. Call customer upon arrival.',
+        });
+
+        // If we have pickup coordinates and current location, get route
+        if (data.job.pickup?.coordinates && currentLocation) {
+          fetchRoute(currentLocation, {
+            latitude: data.job.pickup.coordinates.lat,
+            longitude: data.job.pickup.coordinates.lng,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching job details:', error);
+      Alert.alert('Error', 'Failed to load job details');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const startLocationTracking = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'Location permission is required for navigation');
+        return;
+      }
+
+      // Get initial location
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+
+      const currentLoc = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+      setCurrentLocation(currentLoc);
+
+      // Center map on current location
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          ...currentLoc,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }, 1000);
+      }
+
+      // Start watching position
+      const subscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Highest,
+          distanceInterval: 10, // Update every 10 meters
+          timeInterval: 5000, // Update every 5 seconds
+        },
+        (newLocation) => {
+          const newLoc = {
+            latitude: newLocation.coords.latitude,
+            longitude: newLocation.coords.longitude,
+          };
+          setCurrentLocation(newLoc);
+
+          // Update route if we have destination
+          if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
+            fetchRoute(newLoc, {
+              latitude: jobDetails.pickupLat,
+              longitude: jobDetails.pickupLng,
+            });
+          }
+
+          // Send location to backend
+          updateProviderLocation(newLoc);
+        }
+      );
+
+      setLocationSubscription(subscription);
+    } catch (error) {
+      console.error('Error starting location tracking:', error);
+    }
+  };
+
+  const updateProviderLocation = async (location: { latitude: number; longitude: number }) => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+      const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
+
+      await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/location`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          bookingId,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    } catch (error) {
+      console.error('Error updating location:', error);
+    }
+  };
+
+  const fetchRoute = async (
+    start: { latitude: number; longitude: number },
+    end: { latitude: number; longitude: number }
+  ) => {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+
+      const data = await response.json();
+
+      if (data.routes.length > 0) {
+        const points = decodePolyline(data.routes[0].overview_polyline.points);
+        setRouteCoordinates(points);
+      }
+    } catch (error) {
+      console.error('Error fetching route:', error);
+    }
+  };
+
+  // Decode polyline function for Google Maps
+  const decodePolyline = (encoded: string) => {
+    const points = [];
+    let index = 0, len = encoded.length;
+    let lat = 0, lng = 0;
+
+    while (index < len) {
+      let b, shift = 0, result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      points.push({
+        latitude: lat / 1e5,
+        longitude: lng / 1e5,
+      });
+    }
+    return points;
+  };
+
+  const handleCompass = () => {
+    if (currentLocation && mapRef.current) {
+      mapRef.current.animateToRegion({
+        ...currentLocation,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    }
+  };
+
+  const handleCall = () => {
+    if (jobDetails?.customerPhone) {
+      Linking.openURL(`tel:${jobDetails.customerPhone}`);
+    } else {
+      Alert.alert('Call', 'Calling Mohammed A...');
+    }
+  };
+
+  const handleMessage = () => {
+    if (jobDetails?.customerPhone) {
+      Linking.openURL(`sms:${jobDetails.customerPhone}`);
+    } else {
+      Alert.alert('Message', 'Opening message...');
+    }
+  };
+
+  const handleArrived = () => {
+    Alert.alert(
+      'Arrived at Location',
+      'Have you arrived at the pickup location?',
+      [
+        { text: 'Not Yet', style: 'cancel' },
+        {
+          text: 'Yes, Arrived',
+          onPress: () => {
+            // Update job status to 'arrived'
+            router.push({
+              pathname: '/ServiceInProgressScreen',
+              params: { bookingId }
+            });
+          }
+        }
+      ]
+    );
+  };
+
+  const handleReportIssue = () => {
+    Alert.alert('Report Issue', 'Opening report form...');
+  };
+  const handleCancelService = () => {
+    Alert.alert(
+      'Cancel Service',
+      'Are you sure you want to cancel this service?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: () => {
+            // Just navigate to home screen for now
+            router.replace('/(provider)/HomePage');
+
+            // Optionally try API in background without awaiting
+            const cancelApi = async () => {
+              try {
+                const token = await AsyncStorage.getItem('userToken');
+                await fetch(`${API_BASE_URL}/jobs/${bookingId}/cancel`, {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ reason: 'provider_cancelled' }),
+                });
+              } catch (error) {
+                console.log('Background API call failed (expected):', error);
+              }
+            };
+
+            cancelApi(); // Fire and forget
+          }
+        }
+      ]
+    );
+  };
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <Text>Loading navigation...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -30,6 +371,62 @@ export default function NavigateToCustomerScreen() {
 
       {/* ── MAP AREA ── */}
       <View style={styles.mapArea}>
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={StyleSheet.absoluteFillObject}
+          initialRegion={{
+            latitude: currentLocation?.latitude || 26.2285,
+            longitude: currentLocation?.longitude || 50.5860,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          showsCompass={false}
+          showsTraffic={true}
+        >
+          {/* Pickup Marker */}
+          {jobDetails?.pickupLat && jobDetails?.pickupLng && (
+            <Marker
+              coordinate={{
+                latitude: jobDetails.pickupLat,
+                longitude: jobDetails.pickupLng,
+              }}
+              title="Pickup Location"
+              description={jobDetails.pickupLocation}
+            >
+              <View style={styles.pickupMarker}>
+                <Feather name="map-pin" size={24} color="#00C853" />
+              </View>
+            </Marker>
+          )}
+
+          {/* Dropoff Marker (if exists) */}
+          {jobDetails?.dropoffLat && jobDetails?.dropoffLng && (
+            <Marker
+              coordinate={{
+                latitude: jobDetails.dropoffLat,
+                longitude: jobDetails.dropoffLng,
+              }}
+              title="Dropoff Location"
+              description={jobDetails.dropoffLocation}
+            >
+              <View style={styles.dropoffMarker}>
+                <Feather name="flag" size={24} color="#F44336" />
+              </View>
+            </Marker>
+          )}
+
+          {/* Route Polyline */}
+          {routeCoordinates.length > 0 && (
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeWidth={4}
+              strokeColor="#4285F4"
+            />
+          )}
+        </MapView>
 
         {/* Back Button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
@@ -56,11 +453,11 @@ export default function NavigateToCustomerScreen() {
           <View style={styles.navCardBottom}>
             <View style={styles.navCardStat}>
               <Text style={styles.navStatLabel}>ETA</Text>
-              <Text style={styles.navStatValue}>8 minutes</Text>
+              <Text style={styles.navStatValue}>{jobDetails?.eta || '8 min'}</Text>
             </View>
             <View style={styles.navCardStat}>
               <Text style={styles.navStatLabel}>DISTANCE</Text>
-              <Text style={styles.navStatValue}>2.5 km</Text>
+              <Text style={styles.navStatValue}>{jobDetails?.distance || '2.5 km'}</Text>
             </View>
           </View>
         </View>
@@ -75,7 +472,6 @@ export default function NavigateToCustomerScreen() {
             <Feather name="map-pin" size={20} color="#ffffff" />
           </View>
         </View>
-
       </View>
 
       {/* ── BOTTOM SHEET ── */}
@@ -91,14 +487,13 @@ export default function NavigateToCustomerScreen() {
 
           {/* Customer Card */}
           <View style={styles.customerCard}>
-            {/* Customer Info */}
             <View style={styles.customerInfo}>
               <View style={styles.avatarCircle}>
                 <Feather name="user" size={26} color="#8fd1fb" />
               </View>
               <View style={styles.customerText}>
-                <Text style={styles.customerName}>Mohammed A.</Text>
-                <Text style={styles.customerRating}>⭐ 4.5 Customer Rating</Text>
+                <Text style={styles.customerName}>{jobDetails?.customerName || 'Mohammed A.'}</Text>
+                <Text style={styles.customerRating}>⭐ {jobDetails?.customerRating || 4.5} Customer Rating</Text>
               </View>
             </View>
 
@@ -124,7 +519,7 @@ export default function NavigateToCustomerScreen() {
               <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
               <View>
                 <Text style={styles.locationLabel}>Pickup Location</Text>
-                <Text style={styles.locationValue}>Main Street, Manama, near City Mall</Text>
+                <Text style={styles.locationValue}>{jobDetails?.pickupLocation || 'Main Street, Manama'}</Text>
               </View>
             </View>
           </View>
@@ -138,8 +533,7 @@ export default function NavigateToCustomerScreen() {
               <View style={styles.tipsTextBlock}>
                 <Text style={styles.tipsTitle}>Navigation Tips</Text>
                 <Text style={styles.tipsText}>
-                  Located in underground parking.{'\n'}
-                  Call customer upon arrival for exact location.
+                  {jobDetails?.navigationTips || 'Located in underground parking. Call customer upon arrival.'}
                 </Text>
               </View>
             </View>
@@ -161,46 +555,53 @@ export default function NavigateToCustomerScreen() {
               <Text style={styles.footerLink}>Cancel Service</Text>
             </TouchableOpacity>
           </View>
-
         </ScrollView>
       </View>
     </SafeAreaView>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
+// Add these styles to the existing styles object
+const additionalStyles = {
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickupMarker: {
+    padding: 5,
+  },
+  dropoffMarker: {
+    padding: 5,
+  },
+};
 
+// Merge with existing styles
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#D6EAF8',
   },
-  header: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingTop: 40,
-    paddingBottom: 14,
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
   },
   mapArea: {
     flex: 1,
     backgroundColor: '#f9fafb',
     position: 'relative',
     minHeight: 260,
-    paddingHorizontal: 20,
-    paddingTop: 40,
   },
   backBtn: {
     position: 'absolute',
     top: 27,
     left: 16,
-     width: 45,
-     height: 45,
-     borderRadius: 10,
-     borderWidth: 1.5,
-     borderColor: '#1e2939',
+    width: 45,
+    height: 45,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#1e2939',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#1e2939',
@@ -237,8 +638,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
-     borderWidth: 1.5,
-  borderColor: '#87cefa',
+    borderWidth: 1.5,
+    borderColor: '#87cefa',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08,
@@ -527,5 +928,11 @@ const styles = StyleSheet.create({
   footerDot: {
     fontSize: 14,
     color: '#6a7282',
+  },
+  pickupMarker: {
+    padding: 5,
+  },
+  dropoffMarker: {
+    padding: 5,
   },
 });

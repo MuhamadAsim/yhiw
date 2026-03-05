@@ -115,7 +115,7 @@ const NewRequestNotification = () => {
       const bookingId = jobData.bookingId;
       if (!bookingId) return;
 
-      const response = await fetch(`${API_BASE_URL}/jobs/status/${bookingId}`, {
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/status`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
