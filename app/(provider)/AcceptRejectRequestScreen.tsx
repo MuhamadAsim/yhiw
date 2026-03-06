@@ -351,30 +351,50 @@ export default function MakeYourDecisionScreen() {
     }
   };
 
-  const handleAccept = async () => {
-    try {
-      setIsLoading(true);
-      const token = await AsyncStorage.getItem('userToken');
-      
-      if (!token) {
-        Alert.alert('Error', 'Authentication failed');
+
+
+
+
+  
+const handleAccept = async () => {
+  try {
+    setIsLoading(true);
+    const token = await AsyncStorage.getItem('userToken');
+
+    if (!token) {
+      Alert.alert('Error', 'Authentication failed');
+      return;
+    }
+
+    console.log('✅ Accepting job:', bookingId);
+    console.log('📡 POST', `${API_BASE_URL}/provider/${bookingId}/accept-job`);
+
+    const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/accept-job`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      // Send empty object - the controller now gets email from notification
+      body: JSON.stringify({}),
+    });
+
+    const data = await response.json();
+    console.log('📡 Accept response:', response.status, data);
+
+    if (!response.ok) {
+      if (response.status === 404 && data.message?.includes('already been taken')) {
+        Alert.alert(
+          'Job Already Taken',
+          'This job has already been accepted by another provider.',
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
         return;
       }
+      throw new Error(data.message || 'Failed to accept job');
+    }
 
-      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/accept-job`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to accept job');
-      }
-
+    if (data.success) {
       Alert.alert(
         'Request Accepted',
         'Navigate to pickup location now.',
@@ -382,37 +402,48 @@ export default function MakeYourDecisionScreen() {
           {
             text: 'OK',
             onPress: () => {
-              // Navigate to navigation/tracking screen
-              router.push({
-                pathname: '/NavigationScreen',
-                params: { bookingId }
+              router.replace({
+                pathname: '/NavigateToCustomerScreen',
+                params: { 
+                  bookingId,
+                  customerName: params.customerName,
+                  customerPhone: params.customerPhone,
+                  customerRating: params.customerRating,
+                  serviceType: params.serviceType,
+                  pickupLocation: params.pickupLocation,
+                  pickupLat: params.pickupLat,
+                  pickupLng: params.pickupLng,
+                  dropoffLocation: params.dropoffLocation,
+                  dropoffLat: params.dropoffLat,
+                  dropoffLng: params.dropoffLng,
+                  distance: params.distance,
+                  estimatedEarnings: params.estimatedEarnings,
+                  description: params.description,
+                  eta: data.job?.estimatedArrival || params.eta,
+                }
               });
             }
           }
         ]
       );
-    } catch (error: any) {
-      console.error('Accept error:', error);
-      Alert.alert(
-        'Failed to Accept',
-        error.message || 'Could not accept the job. It may have been taken by another provider.',
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back()
-          }
-        ]
-      );
-    } finally {
-      setIsLoading(false);
     }
-  };
+  } catch (error: any) {
+    console.error('❌ Accept error:', error);
+    Alert.alert(
+      'Failed to Accept',
+      error.message || 'Could not accept the job. Please try again.',
+      [{ text: 'OK' }]
+    );
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const handleDecline = async (reason: string) => {
     try {
       setIsLoading(true);
       const token = await AsyncStorage.getItem('userToken');
-      
+
       if (!token) {
         Alert.alert('Error', 'Authentication failed');
         return;
@@ -420,7 +451,7 @@ export default function MakeYourDecisionScreen() {
 
       // Mock API call - replace with actual endpoint when ready
       await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
       console.log('Decline reason:', reason);
 
       Alert.alert(
@@ -455,30 +486,30 @@ export default function MakeYourDecisionScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <RequestSummary 
+        <RequestSummary
           earnings={jobData.earnings}
           distance={jobData.distance}
           eta={jobData.eta}
         />
-        
-        <AcceptSection 
+
+        <AcceptSection
           onAccept={handleAccept}
           isLoading={isLoading}
         />
-        
-        <DeclineSection 
+
+        <DeclineSection
           onDecline={handleDecline}
           isLoading={isLoading}
         />
-        
+
         <ImportantWarning acceptanceRate={jobData.acceptanceRate} />
-        
-        <ImpactStats 
+
+        <ImpactStats
           earnings={jobData.earnings}
           currentRate={jobData.acceptanceRate}
           newRate={jobData.acceptanceRate - 2}
         />
-        
+
         <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>

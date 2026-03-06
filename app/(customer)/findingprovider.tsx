@@ -1,4 +1,4 @@
-// findingprovider.tsx - HTTP Polling Only Version
+// findingprovider.tsx - Fixed cleanup logic
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -8,13 +8,13 @@ import {
   Animated,
   AppState,
   AppStateStatus,
+  BackHandler,
   Dimensions,
   Image,
   ScrollView,
   StyleSheet,
   Text,
   View,
-  BackHandler,
 } from 'react-native';
 
 const { height } = Dimensions.get('window');
@@ -35,6 +35,8 @@ const FindingProviderScreen = () => {
   const [error, setError] = useState<string | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [pollingAttempts, setPollingAttempts] = useState<number>(0);
+  const [isExistingBooking, setIsExistingBooking] = useState<boolean>(false);
+  const [initialized, setInitialized] = useState<boolean>(false);
 
   const params = useLocalSearchParams();
   const router = useRouter();
@@ -44,6 +46,7 @@ const FindingProviderScreen = () => {
   const navigationInProgress = useRef(false);
   const isMounted = useRef(true);
   const hasCancelledOnUnmount = useRef(false);
+  const isTerminalState = useRef(false); // Track if we're in a terminal state
 
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
@@ -70,7 +73,10 @@ const FindingProviderScreen = () => {
     }
   };
 
-  // Get service info
+  // Get bookingId from params (this is the only required param for existing bookings)
+  const bookingIdFromParams = getStringParam(params.bookingId);
+  
+  // Get service info (may be empty for existing bookings)
   const serviceId = getStringParam(params.serviceId);
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
@@ -81,7 +87,7 @@ const FindingProviderScreen = () => {
   const isFuelDelivery = serviceId === '3';
   const isSpareParts = serviceId === '12';
 
-  // Get all data from previous screens
+  // Get all data from previous screens (may be empty for existing bookings)
   const pickupAddress = getStringParam(params.pickupAddress);
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const serviceTime = getStringParam(params.serviceTime);
@@ -135,8 +141,149 @@ const FindingProviderScreen = () => {
   // Log initial params
   console.log('🔍 ===== FINDING PROVIDER SCREEN MOUNTED =====');
   console.log('🔍 Timestamp:', new Date().toISOString());
+  console.log('🔍 Booking ID from params:', bookingIdFromParams || 'none');
   console.log('🔍 Service info:', { serviceId, serviceName, servicePrice, serviceCategory });
-  console.log('🔍 Pickup location:', { pickupAddress, pickupLat, pickupLng });
+
+  // Initialize - determine if this is an existing booking
+  useEffect(() => {
+    console.log('🔍 INITIALIZATION CHECK - bookingIdFromParams:', bookingIdFromParams);
+    
+    const initializeScreen = async () => {
+      try {
+        // If we have a bookingId in params, check if it's an existing booking
+        if (bookingIdFromParams) {
+          console.log('🔍 Found bookingId in params:', bookingIdFromParams);
+          
+          // Check if we have minimal data to determine if it's existing
+          const hasNewBookingData = serviceId || pickupAddress || fullName;
+          
+          if (!hasNewBookingData) {
+            console.log('📋 EXISTING BOOKING DETECTED - using bookingId:', bookingIdFromParams);
+            setIsExistingBooking(true);
+            setBookingId(bookingIdFromParams);
+            setConnectionStatus('searching');
+            setInitialized(true);
+            
+            // Start polling immediately
+            startPolling(bookingIdFromParams);
+          } else {
+            console.log('📋 Has new booking data - will create new notification');
+            setInitialized(true);
+            // Will create new notification in main useEffect
+          }
+        } else {
+          // Try to get bookingId from AsyncStorage as fallback
+          const storedBookingId = await AsyncStorage.getItem('currentBookingId');
+          if (storedBookingId) {
+            console.log('📋 Found bookingId in AsyncStorage:', storedBookingId);
+            setIsExistingBooking(true);
+            setBookingId(storedBookingId);
+            setConnectionStatus('searching');
+            setInitialized(true);
+            
+            // Start polling immediately
+            startPolling(storedBookingId);
+          } else {
+            console.log('📋 No bookingId found - new booking');
+            setInitialized(true);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Initialization error:', error);
+        setInitialized(true);
+      }
+    };
+
+    initializeScreen();
+  }, []); // Run once on mount
+
+  // Main useEffect for animations and event listeners
+  useEffect(() => {
+    if (!initialized) {
+      console.log('⏳ Waiting for initialization...');
+      return;
+    }
+
+    console.log('🔄 ===== MAIN USEFFECT TRIGGERED =====');
+    console.log('🔄 isExistingBooking:', isExistingBooking);
+    console.log('🔄 bookingId:', bookingId);
+    console.log('🔄 connectionStatus:', connectionStatus);
+
+    // Start spinning animation
+    Animated.loop(
+      Animated.timing(spinValue, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true,
+      })
+    ).start();
+
+    // Only create new notification if:
+    // 1. Not an existing booking
+    // 2. No bookingId set yet
+    // 3. Status is still 'creating'
+    if (!isExistingBooking && !bookingId && connectionStatus === 'creating') {
+      console.log('📤 New booking detected - creating notification');
+      createJobNotification();
+    }
+
+    // Handle Android back button
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+
+    // Handle app state changes
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // Set timeout for finding provider (2 minutes)
+    timeoutTimer.current = setTimeout(() => {
+      if (!isMounted.current) return;
+      console.log('⏰ 2-minute timeout reached');
+      if (connectionStatus === 'searching') {
+        handleTimeout();
+      }
+    }, 120000); // 2 minutes
+
+    // Cleanup on unmount
+    return () => {
+      console.log('🧹 ===== CLEANING UP FINDING PROVIDER SCREEN =====');
+      console.log('🧹 Current connectionStatus:', connectionStatus);
+      console.log('🧹 isTerminalState.current:', isTerminalState.current);
+      
+      isMounted.current = false;
+
+      // Cancel the booking ONLY if:
+      // 1. We have a bookingId
+      // 2. We're still in 'searching' state (not in a terminal state)
+      // 3. Haven't already cancelled on unmount
+      // 4. Not in a terminal state
+      if (bookingId && 
+          connectionStatus === 'searching' && 
+          !hasCancelledOnUnmount.current && 
+          !isTerminalState.current) {
+        console.log('🧹 Component unmounting while searching - cancelling booking');
+        hasCancelledOnUnmount.current = true;
+        cancelBooking(bookingId, false); // Don't navigate, just cancel
+      } else {
+        console.log('🧹 Not cancelling booking - reason:', {
+          hasBookingId: !!bookingId,
+          isSearching: connectionStatus === 'searching',
+          alreadyCancelled: hasCancelledOnUnmount.current,
+          isTerminal: isTerminalState.current
+        });
+      }
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+      if (timeoutTimer.current) {
+        clearTimeout(timeoutTimer.current);
+        timeoutTimer.current = null;
+      }
+
+      backHandler.remove();
+      subscription.remove();
+    };
+  }, [initialized, isExistingBooking, bookingId, connectionStatus]);
 
   // Add this useEffect at the beginning of your component, right after all the getStringParam calls
   useEffect(() => {
@@ -158,147 +305,101 @@ const FindingProviderScreen = () => {
     console.log('🔍 FindingProvider - RECEIVED DATA:');
     console.log('=====================================');
 
+    // Booking Info
+    console.log('🎫 BOOKING INFO:');
+    console.log('  • bookingId:', bookingIdFromParams || '(not provided)');
+    console.log('  • isExistingBooking:', isExistingBooking);
+
     // Service Info
     console.log('📦 SERVICE INFO:');
-    console.log('  • serviceId:', serviceId);
-    console.log('  • serviceName:', serviceName);
-    console.log('  • servicePrice:', servicePrice);
-    console.log('  • serviceCategory:', serviceCategory);
+    console.log('  • serviceId:', serviceId || '(not provided)');
+    console.log('  • serviceName:', serviceName || '(not provided)');
+    console.log('  • servicePrice:', servicePrice || '(not provided)');
+    console.log('  • serviceCategory:', serviceCategory || '(not provided)');
 
-    // Location Data - WITH COORDINATES
-    console.log('📍 LOCATION DATA:');
-    console.log('  • pickupAddress:', pickupAddress);
-    console.log('  • pickupLat:', pickupLat);
-    console.log('  • pickupLng:', pickupLng);
-    console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
-    console.log('  • dropoffLat:', dropoffLat || '(not provided)');
-    console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+    // Only log detailed data if it's a new booking
+    if (!isExistingBooking) {
+      // Location Data - WITH COORDINATES
+      console.log('📍 LOCATION DATA:');
+      console.log('  • pickupAddress:', pickupAddress);
+      console.log('  • pickupLat:', pickupLat);
+      console.log('  • pickupLng:', pickupLng);
+      console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+      console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+      console.log('  • dropoffLng:', dropoffLng || '(not provided)');
 
-    // Waypoints Data
-    console.log('🛑 WAYPOINTS DATA:');
-    console.log('  • hasWaypoints:', hasWaypoints);
-    if (parsedWaypoints.length > 0) {
-      console.log('  • waypoints count:', parsedWaypoints.length);
-      parsedWaypoints.forEach((wp: any, index: number) => {
-        console.log(`    Stop ${index + 1}:`);
-        console.log(`      address: ${wp.address}`);
-        console.log(`      lat: ${wp.lat}`);
-        console.log(`      lng: ${wp.lng}`);
-        console.log(`      order: ${wp.order}`);
-      });
+      // Waypoints Data
+      console.log('🛑 WAYPOINTS DATA:');
+      console.log('  • hasWaypoints:', hasWaypoints);
+      if (parsedWaypoints.length > 0) {
+        console.log('  • waypoints count:', parsedWaypoints.length);
+        parsedWaypoints.forEach((wp: any, index: number) => {
+          console.log(`    Stop ${index + 1}:`);
+          console.log(`      address: ${wp.address}`);
+          console.log(`      lat: ${wp.lat}`);
+          console.log(`      lng: ${wp.lng}`);
+          console.log(`      order: ${wp.order}`);
+        });
+      } else {
+        console.log('  • waypoints: none');
+      }
+
+      // Vehicle Data
+      console.log('🚗 VEHICLE DATA:');
+      console.log('  • vehicleType:', vehicleType);
+      console.log('  • makeModel:', makeModel);
+      console.log('  • year:', year);
+      console.log('  • color:', color);
+      console.log('  • licensePlate:', licensePlate);
+
+      // Contact Data
+      console.log('👤 CONTACT DATA:');
+      console.log('  • fullName:', fullName);
+      console.log('  • phoneNumber:', phoneNumber);
+      console.log('  • email:', email);
+      console.log('  • emergencyContact:', emergencyContact);
+
+      // Special Fields
+      console.log('🔧 SPECIAL FIELDS:');
+      console.log('  • hasLicenseFront:', !!licenseFront);
+      console.log('  • hasLicenseBack:', !!licenseBack);
+      console.log('  • fuelType:', fuelType || '(not provided)');
+      console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
+
+      // Additional Details
+      console.log('📝 ADDITIONAL DETAILS:');
+      console.log('  • urgency:', urgency);
+      console.log('  • issues count:', issues.length);
+      console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
+      console.log('  • photos count:', photos.length);
+      console.log('  • hasInsurance:', hasInsurance);
+      console.log('  • needSpecificTruck:', needSpecificTruck);
+      console.log('  • hasModifications:', hasModifications);
+      console.log('  • needMultilingual:', needMultilingual);
+
+      // Schedule Data
+      console.log('📅 SCHEDULE DATA:');
+      console.log('  • serviceTime:', serviceTime);
+      console.log('  • scheduledDate:', scheduledDate || '(not provided)');
+      console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
+
+      // Payment Data
+      console.log('💰 PAYMENT DATA:');
+      console.log('  • selectedTip:', selectedTip);
+      console.log('  • totalAmount:', totalAmount);
+
+      // Service Types & Flags
+      console.log('⚙️ SERVICE TYPES:');
+      console.log('  • isCarRental:', isCarRental);
+      console.log('  • isFuelDelivery:', isFuelDelivery);
+      console.log('  • isSpareParts:', isSpareParts);
+      console.log('  • locationSkipped:', locationSkipped);
     } else {
-      console.log('  • waypoints: none');
+      console.log('📋 EXISTING BOOKING - detailed data not available');
     }
-
-    // Vehicle Data
-    console.log('🚗 VEHICLE DATA:');
-    console.log('  • vehicleType:', vehicleType);
-    console.log('  • makeModel:', makeModel);
-    console.log('  • year:', year);
-    console.log('  • color:', color);
-    console.log('  • licensePlate:', licensePlate);
-
-    // Contact Data
-    console.log('👤 CONTACT DATA:');
-    console.log('  • fullName:', fullName);
-    console.log('  • phoneNumber:', phoneNumber);
-    console.log('  • email:', email);
-    console.log('  • emergencyContact:', emergencyContact);
-
-    // Special Fields
-    console.log('🔧 SPECIAL FIELDS:');
-    console.log('  • hasLicenseFront:', !!licenseFront);
-    console.log('  • hasLicenseBack:', !!licenseBack);
-    console.log('  • fuelType:', fuelType || '(not provided)');
-    console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
-
-    // Additional Details
-    console.log('📝 ADDITIONAL DETAILS:');
-    console.log('  • urgency:', urgency);
-    console.log('  • issues count:', issues.length);
-    console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
-    console.log('  • photos count:', photos.length);
-    console.log('  • hasInsurance:', hasInsurance);
-    console.log('  • needSpecificTruck:', needSpecificTruck);
-    console.log('  • hasModifications:', hasModifications);
-    console.log('  • needMultilingual:', needMultilingual);
-
-    // Schedule Data
-    console.log('📅 SCHEDULE DATA:');
-    console.log('  • serviceTime:', serviceTime);
-    console.log('  • scheduledDate:', scheduledDate || '(not provided)');
-    console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
-
-    // Payment Data
-    console.log('💰 PAYMENT DATA:');
-    console.log('  • selectedTip:', selectedTip);
-    console.log('  • totalAmount:', totalAmount);
-
-    // Service Types & Flags
-    console.log('⚙️ SERVICE TYPES:');
-    console.log('  • isCarRental:', isCarRental);
-    console.log('  • isFuelDelivery:', isFuelDelivery);
-    console.log('  • isSpareParts:', isSpareParts);
-    console.log('  • locationSkipped:', locationSkipped);
 
     console.log('=====================================');
 
-  }, []);
-
-  useEffect(() => {
-    console.log('🔄 ===== USEFFECT TRIGGERED =====');
-
-    // Start spinning animation
-    Animated.loop(
-      Animated.timing(spinValue, {
-        toValue: 1,
-        duration: 1500,
-        useNativeDriver: true,
-      })
-    ).start();
-
-    // Send booking request to create notification
-    createJobNotification();
-
-    // Handle Android back button
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
-
-    // Handle app state changes
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-
-    // Set timeout for finding provider (2 minutes)
-    timeoutTimer.current = setTimeout(() => {
-      if (!isMounted.current) return;
-      console.log('⏰ 2-minute timeout reached');
-      if (connectionStatus === 'searching') {
-        handleTimeout();
-      }
-    }, 120000); // 2 minutes
-
-    // Cleanup on unmount
-    return () => {
-      console.log('🧹 ===== CLEANING UP FINDING PROVIDER SCREEN =====');
-      isMounted.current = false;
-
-      // Cancel the booking if still searching and not already cancelled
-      if (bookingId && connectionStatus === 'searching' && !hasCancelledOnUnmount.current) {
-        console.log('🧹 Component unmounting while searching - cancelling booking');
-        hasCancelledOnUnmount.current = true;
-        cancelBooking(bookingId, false); // Don't navigate, just cancel
-      }
-
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
-        pollingTimer.current = null;
-      }
-      if (timeoutTimer.current) {
-        clearTimeout(timeoutTimer.current);
-        timeoutTimer.current = null;
-      }
-
-      backHandler.remove();
-      subscription.remove();
-    };
   }, []);
 
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
@@ -337,6 +438,7 @@ const FindingProviderScreen = () => {
             style: 'destructive',
             onPress: () => {
               if (bookingId) {
+                isTerminalState.current = true; // Mark as terminal since we're cancelling
                 cancelBooking(bookingId, true); // Navigate back after cancel
               } else {
                 router.back();
@@ -530,7 +632,7 @@ const FindingProviderScreen = () => {
         return;
       }
 
-      const url = `${API_BASE_URL}/api/jobs/status/${id}`;
+      const url = `${API_BASE_URL}/api/jobs/${id}/status`;
       console.log(`🔄 Polling #${pollingAttempts + 1} - Checking status for booking:`, id);
 
       const response = await fetch(url, {
@@ -561,6 +663,7 @@ const FindingProviderScreen = () => {
       } 
       else if (data.status === 'expired') {
         console.log('❌ Booking expired');
+        isTerminalState.current = true; // Mark as terminal state
         handleNoProviders('expired');
       }
       // If status is 'searching', continue polling
@@ -576,6 +679,7 @@ const FindingProviderScreen = () => {
     console.log('✅✅✅ ===== PROVIDER ACCEPTED! =====');
     console.log('✅ Booking ID:', id);
 
+    isTerminalState.current = true; // Mark as terminal state
     navigationInProgress.current = true;
     setConnectionStatus('found');
 
@@ -620,6 +724,8 @@ const FindingProviderScreen = () => {
 
     console.log('⏰ ===== SEARCH TIMEOUT (2 minutes) =====');
 
+    isTerminalState.current = true; // Mark as terminal state
+
     if (bookingId) {
       cancelBooking(bookingId, false, 'timeout');
     } else {
@@ -628,7 +734,7 @@ const FindingProviderScreen = () => {
 
       setTimeout(() => {
         router.push({
-          pathname: '/(customer)/NoProvidersAvailable',
+          pathname: '/(customer)/NoProviderAvailable',
           params: { reason: 'timeout', ...params },
         });
       }, 1000);
@@ -641,6 +747,7 @@ const FindingProviderScreen = () => {
     console.log('❌ ===== NO PROVIDERS AVAILABLE =====');
     console.log('❌ Reason:', reason);
 
+    isTerminalState.current = true; // Mark as terminal state
     navigationInProgress.current = true;
     setConnectionStatus('no_providers');
 
@@ -661,7 +768,7 @@ const FindingProviderScreen = () => {
 
     setTimeout(() => {
       router.push({
-        pathname: '/(customer)/NoProvidersAvailable',
+        pathname: '/(customer)/NoProviderAvailable',
         params: { reason, ...params },
       });
     }, 1000);
@@ -725,7 +832,7 @@ const FindingProviderScreen = () => {
       case 'creating':
         return 'Creating your booking...';
       case 'searching':
-        return `Searching for providers... (Polling #${pollingAttempts})`;
+        return `Searching for providers...`;
       case 'found':
         return 'Provider found! Redirecting...';
       case 'no_providers':

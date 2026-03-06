@@ -10,6 +10,7 @@ import {
   TextInput,
   StatusBar,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -42,6 +43,8 @@ export default function ServiceCompleteScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [jobsCompleted, setJobsCompleted] = useState(0);
+  const [jobData, setJobData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Format completion time
   const completionTime = new Date().toLocaleTimeString([], { 
@@ -49,14 +52,42 @@ export default function ServiceCompleteScreen() {
     minute: '2-digit' 
   });
 
-  // Calculate fees
-  const totalFee = parseFloat(earnings) / 0.85; // 85% of total (since earnings = total - 15% fee)
-  const platformFee = totalFee * 0.15;
+  // FIXED: Calculate fees correctly
+  const totalAmount = parseFloat(earnings); // This is the total paid by customer
+  const platformFee = totalAmount * 0.15; // 15% platform fee
+  const providerEarnings = totalAmount - platformFee; // Provider gets 85%
 
-  // Fetch provider's today's stats on mount
+  // Fetch provider's today's stats and job details on mount
   useEffect(() => {
     fetchTodayStats();
+    fetchJobDetails();
   }, []);
+
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.job) {
+          setJobData(data.job);
+          console.log('📦 Job details loaded:', data.job);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching job details:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const fetchTodayStats = async () => {
     try {
@@ -84,7 +115,7 @@ export default function ServiceCompleteScreen() {
   };
 
   const handleViewAll = () => {
-    Alert.alert('Photos', 'View all photos feature coming soon');
+    Alert.alert('Photos', 'Photo gallery coming soon');
   };
 
   const handleConfirm = async () => {
@@ -103,23 +134,29 @@ export default function ServiceCompleteScreen() {
         return;
       }
 
+      console.log('📡 Completing service for booking:', bookingId);
+
       // Call API to mark job as completed
-      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/complete`, {
-        method: 'POST',
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          notes,
-          paymentReceived: paymentChecked,
-          customerConfirmed: true, // This would come from customer's confirmation
-          completedAt: new Date().toISOString(),
-          duration: durationSeconds,
+          status: 'completed',
+          completionDetails: {
+            notes,
+            paymentReceived: paymentChecked,
+            customerConfirmed: ratingChecked,
+            completedAt: new Date().toISOString(),
+            duration: durationSeconds,
+          }
         }),
       });
 
       const data = await response.json();
+      console.log('📡 Complete response:', response.status, data);
 
       if (!response.ok) {
         throw new Error(data.message || 'Failed to complete service');
@@ -132,13 +169,13 @@ export default function ServiceCompleteScreen() {
         [
           {
             text: 'OK',
-            onPress: () => router.replace('/(provider)/HomePage')
+            onPress: () => router.replace('/(provider)/Home')
           }
         ]
       );
 
     } catch (error) {
-      console.error('Complete service error:', error);
+      console.error('❌ Complete service error:', error);
       Alert.alert(
         'Error',
         error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
@@ -147,6 +184,17 @@ export default function ServiceCompleteScreen() {
       setIsSubmitting(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#5B9BD5" />
+          <Text style={styles.loadingText}>Loading completion details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -193,7 +241,7 @@ export default function ServiceCompleteScreen() {
           <View style={styles.cardDivider} />
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Total Service Fee:</Text>
-            <Text style={styles.detailValue}>{totalFee.toFixed(2)} BHD</Text>
+            <Text style={styles.detailValue}>{totalAmount.toFixed(2)} BHD</Text>
           </View>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Platform Fee (15%):</Text>
@@ -201,7 +249,7 @@ export default function ServiceCompleteScreen() {
           </View>
           <View style={styles.earningsRow}>
             <Text style={styles.earningsLabel}>Your Earnings:</Text>
-            <Text style={styles.earningsValue}>{parseFloat(earnings).toFixed(2)} BHD</Text>
+            <Text style={styles.earningsValue}>{providerEarnings.toFixed(2)} BHD</Text>
           </View>
 
           <View style={styles.cardDivider} />
@@ -219,7 +267,7 @@ export default function ServiceCompleteScreen() {
             <View style={styles.checkboxTextBlock}>
               <Text style={styles.checkboxTitle}>Payment Received</Text>
               <Text style={styles.checkboxSub}>
-                Confirm you received {totalFee.toFixed(2)} BHD in cash
+                Confirm you received {totalAmount.toFixed(2)} BHD in cash
               </Text>
             </View>
           </TouchableOpacity>
@@ -239,7 +287,7 @@ export default function ServiceCompleteScreen() {
           </View>
         </View>
 
-        {/* ── SERVICE PHOTOS ── */}
+        {/* ── SERVICE PHOTOS (Frontend only for now) ── */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>SERVICE PHOTOS</Text>
           <View style={styles.photosHeader}>
@@ -258,6 +306,7 @@ export default function ServiceCompleteScreen() {
               </View>
             ))}
           </View>
+          <Text style={styles.photoHint}>Photo upload will be available soon</Text>
         </View>
 
         {/* ── SERVICE NOTES ── */}
@@ -265,7 +314,7 @@ export default function ServiceCompleteScreen() {
           <Text style={styles.cardLabel}>SERVICE NOTES (OPTIONAL)</Text>
           <TextInput
             style={styles.notesInput}
-            placeholder="Add any notes about the service, issues"
+            placeholder="Add any notes about the service, issues, or special instructions"
             placeholderTextColor="#CCCCCC"
             multiline
             numberOfLines={4}
@@ -295,7 +344,7 @@ export default function ServiceCompleteScreen() {
             <View style={[styles.squareCheckbox, ratingChecked && styles.squareCheckboxChecked]}>
               {ratingChecked && <Feather name="check" size={11} color="#fff" />}
             </View>
-            <Text style={styles.ratingCheckLabel}>Rating notification will be sent</Text>
+            <Text style={styles.ratingCheckLabel}>Send rating notification to customer</Text>
           </TouchableOpacity>
         </View>
 
@@ -355,11 +404,21 @@ export default function ServiceCompleteScreen() {
   );
 }
 
-// ─── Styles (keep exactly as provided) ─────────────────────────────────────
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#F7F7F7',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
   },
   scroll: { flex: 1 },
   scrollContent: {
@@ -540,6 +599,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  photoHint: {
+    fontSize: 11,
+    color: '#AAAAAA',
+    marginTop: 8,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
 
   // ── Notes ──
   notesInput: {
@@ -706,3 +772,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 });
+

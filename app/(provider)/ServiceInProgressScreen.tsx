@@ -256,7 +256,7 @@ export default function ServiceInProgressScreen() {
           onPress: () => {
             // Just navigate to next page with all the data - NO API CALL
             router.push({
-              pathname: '/(provider)/ServiceComplete',
+              pathname: '/(provider)/ServiceCompletedScreen',
               params: {
                 bookingId,
                 earnings: jobData.estimatedEarnings.toString(),

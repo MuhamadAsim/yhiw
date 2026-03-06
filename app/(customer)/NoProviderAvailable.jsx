@@ -26,7 +26,7 @@ export default function NoProvidersAvailableScreen() {
   };
 
   const handleViewAllServices = () => {
-    router.push("/(customer)/services");
+    router.push("/(customer)/PopularServices");
   };
 
   const handleGoHome = () => {

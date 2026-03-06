@@ -10,12 +10,15 @@ import {
   StatusBar,
   Platform,
   Linking,
+  Dimensions,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
+
+const { height, width } = Dimensions.get('window');
 
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
@@ -47,7 +50,12 @@ export default function NavigateToCustomerScreen() {
   const params = useLocalSearchParams();
   const bookingId = params.bookingId as string;
 
+  console.log('🚀 NavigateToCustomerScreen mounted with bookingId:', bookingId);
+
   const mapRef = useRef<MapView>(null);
+  const locationInterval = useRef<NodeJS.Timeout | null>(null);
+  const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+  
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
   const [currentLocation, setCurrentLocation] = useState<{
@@ -55,90 +63,142 @@ export default function NavigateToCustomerScreen() {
     longitude: number;
   } | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
-  const [locationSubscription, setLocationSubscription] = useState<any>(null);
+  const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
 
-  // Fetch job details on mount
+  // Debug logger
+  const addDebug = (message: string, data?: any) => {
+    console.log(`🔍 [NavigateToCustomer] ${message}`, data || '');
+  };
+
+  // Fetch fresh job details from backend
+  const fetchActiveJobDetails = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      addDebug(`📡 Fetching active job details for: ${bookingId}`);
+      
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.job) {
+          addDebug('📦 Fresh job details received:', data.job);
+          setJobDetails(prev => ({
+            ...prev,
+            ...data.job
+          }));
+        }
+      } else {
+        addDebug(`⚠️ Failed to fetch active job: ${response.status}`);
+      }
+    } catch (error) {
+      addDebug('❌ Error fetching active job:', error);
+    }
+  };
+
+  // Initialize with params data and fetch fresh data
   useEffect(() => {
     if (!bookingId) {
       Alert.alert('Error', 'No booking ID provided');
       router.back();
       return;
     }
-    fetchJobDetails();
-    startLocationTracking();
+    
+    addDebug('📦 Setting initial job data from navigation params');
+    
+    // Set initial data from params (fast UI)
+    const jobFromParams = {
+      bookingId: bookingId,
+      customerName: params.customerName as string || 'Customer',
+      customerPhone: params.customerPhone as string || '',
+      customerRating: parseFloat(params.customerRating as string) || 4.5,
+      pickupLocation: params.pickupLocation as string || 'Pickup location',
+      pickupLat: params.pickupLat ? parseFloat(params.pickupLat as string) : undefined,
+      pickupLng: params.pickupLng ? parseFloat(params.pickupLng as string) : undefined,
+      dropoffLocation: params.dropoffLocation as string || undefined,
+      dropoffLat: params.dropoffLat ? parseFloat(params.dropoffLat as string) : undefined,
+      dropoffLng: params.dropoffLng ? parseFloat(params.dropoffLng as string) : undefined,
+      distance: params.distance as string || '2.5 km',
+      eta: params.eta as string || '8-10 minutes',
+      navigationTips: params.description as string || 'Located in underground parking. Call customer upon arrival.',
+    };
+    
+    setJobDetails(jobFromParams as JobDetails);
+    
+    // Then fetch fresh data from backend
+    fetchActiveJobDetails();
+    
+    // Check location permission and start tracking
+    checkLocationPermission();
+
+    // Refresh job details every 30 seconds
+    jobRefreshInterval.current = setInterval(fetchActiveJobDetails, 30000);
 
     return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
+      // Clean up location tracking on unmount
+      if (locationInterval.current) {
+        clearInterval(locationInterval.current);
+        locationInterval.current = null;
       }
+      if (jobRefreshInterval.current) {
+        clearInterval(jobRefreshInterval.current);
+        jobRefreshInterval.current = null;
+      }
+      addDebug('🧹 Cleanup complete');
     };
   }, []);
 
-  const fetchJobDetails = async () => {
+  // Start location tracking when we have permission and job is loaded
+  useEffect(() => {
+    if (locationPermission && jobDetails) {
+      startLocationTracking();
+    }
+  }, [locationPermission, jobDetails]);
+
+  const checkLocationPermission = async () => {
     try {
-      setIsLoading(true);
-      const token = await AsyncStorage.getItem('userToken');
+      const { status } = await Location.getForegroundPermissionsAsync();
+      setLocationPermission(status === 'granted');
 
-      if (!token) {
-        Alert.alert('Error', 'Authentication failed');
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/details`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch job details');
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.job) {
-        setJobDetails({
-          bookingId: data.job.bookingId,
-          customerName: data.job.customer?.name || 'Mohammed A.',
-          customerPhone: data.job.customer?.phone || '+973 1234 5678',
-          customerRating: data.job.customer?.rating || 4.5,
-          pickupLocation: data.job.pickup?.address || 'Main Street, Manama',
-          pickupLat: data.job.pickup?.coordinates?.lat,
-          pickupLng: data.job.pickup?.coordinates?.lng,
-          dropoffLocation: data.job.dropoff?.address,
-          dropoffLat: data.job.dropoff?.coordinates?.lat,
-          dropoffLng: data.job.dropoff?.coordinates?.lng,
-          distance: data.job.distance || '2.5 km',
-          eta: data.job.estimatedArrival || '8-10 minutes',
-          navigationTips: data.job.description || 'Located in underground parking. Call customer upon arrival.',
-        });
-
-        // If we have pickup coordinates and current location, get route
-        if (data.job.pickup?.coordinates && currentLocation) {
-          fetchRoute(currentLocation, {
-            latitude: data.job.pickup.coordinates.lat,
-            longitude: data.job.pickup.coordinates.lng,
-          });
-        }
+      if (status === 'granted') {
+        await getCurrentLocation();
+      } else {
+        requestLocationPermission();
       }
     } catch (error) {
-      console.error('Error fetching job details:', error);
-      Alert.alert('Error', 'Failed to load job details');
-    } finally {
-      setIsLoading(false);
+      addDebug('Error checking location permission:', error);
+      setLocationPermission(false);
     }
   };
 
-  const startLocationTracking = async () => {
+  const requestLocationPermission = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission denied', 'Location permission is required for navigation');
-        return;
-      }
+      setLocationPermission(status === 'granted');
 
-      // Get initial location
+      if (status === 'granted') {
+        await getCurrentLocation();
+      } else {
+        Alert.alert(
+          'Location Permission Required',
+          'Please enable location services to use navigation.',
+          [
+            { text: 'OK', onPress: () => router.back() }
+          ]
+        );
+      }
+    } catch (error) {
+      addDebug('Error requesting location permission:', error);
+    }
+  };
+
+  const getCurrentLocation = async () => {
+    try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
@@ -147,71 +207,94 @@ export default function NavigateToCustomerScreen() {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       };
+      
+      addDebug('📍 Current location:', currentLoc);
       setCurrentLocation(currentLoc);
+      setIsLoading(false);
 
       // Center map on current location
       if (mapRef.current) {
         mapRef.current.animateToRegion({
           ...currentLoc,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
         }, 1000);
       }
 
-      // Start watching position
-      const subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Highest,
-          distanceInterval: 10, // Update every 10 meters
-          timeInterval: 5000, // Update every 5 seconds
-        },
-        (newLocation) => {
-          const newLoc = {
-            latitude: newLocation.coords.latitude,
-            longitude: newLocation.coords.longitude,
-          };
-          setCurrentLocation(newLoc);
-
-          // Update route if we have destination
-          if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
-            fetchRoute(newLoc, {
-              latitude: jobDetails.pickupLat,
-              longitude: jobDetails.pickupLng,
-            });
-          }
-
-          // Send location to backend
-          updateProviderLocation(newLoc);
-        }
-      );
-
-      setLocationSubscription(subscription);
+      return currentLoc;
     } catch (error) {
-      console.error('Error starting location tracking:', error);
+      addDebug('Error getting current location:', error);
+      setIsLoading(false);
+      return null;
     }
   };
 
-  const updateProviderLocation = async (location: { latitude: number; longitude: number }) => {
+  const startLocationTracking = () => {
+    if (locationInterval.current) {
+      clearInterval(locationInterval.current);
+    }
+
+    addDebug('📍 Starting location tracking (every 10 seconds)');
+
+    // Send location immediately
+    updateProviderLocation();
+
+    // Then send every 10 seconds
+    locationInterval.current = setInterval(() => {
+      updateProviderLocation();
+    }, 10000);
+  };
+
+  const updateProviderLocation = async () => {
     try {
+      // Get fresh location
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+
+      const newLoc = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      };
+
+      addDebug('📍 Sending location update:', newLoc);
+      setCurrentLocation(newLoc);
+
+      // Update route if we have destination
+      if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
+        fetchRoute(newLoc, {
+          latitude: jobDetails.pickupLat,
+          longitude: jobDetails.pickupLng,
+        });
+      }
+
+      // Send to backend
       const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
 
-      await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/location`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          bookingId,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          timestamp: new Date().toISOString(),
-        }),
-      });
+      if (token && firebaseUserId) {
+        const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/location`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            bookingId,
+            latitude: newLoc.latitude,
+            longitude: newLoc.longitude,
+            timestamp: new Date().toISOString(),
+          }),
+        });
+
+        if (response.ok) {
+          addDebug('✅ Location sent successfully');
+        } else {
+          addDebug('⚠️ Location send failed:', response.status);
+        }
+      }
     } catch (error) {
-      console.error('Error updating location:', error);
+      addDebug('Error updating location:', error);
     }
   };
 
@@ -229,9 +312,21 @@ export default function NavigateToCustomerScreen() {
       if (data.routes.length > 0) {
         const points = decodePolyline(data.routes[0].overview_polyline.points);
         setRouteCoordinates(points);
+        addDebug(`🗺️ Route updated with ${points.length} points`);
+
+        // Update ETA and distance from route data
+        if (jobDetails) {
+          const leg = data.routes[0].legs[0];
+          setJobDetails(prev => ({
+            ...prev!,
+            distance: leg.distance.text,
+            eta: leg.duration.text,
+          }));
+          addDebug(`📊 New ETA: ${leg.duration.text}, Distance: ${leg.distance.text}`);
+        }
       }
     } catch (error) {
-      console.error('Error fetching route:', error);
+      addDebug('Error fetching route:', error);
     }
   };
 
@@ -273,8 +368,8 @@ export default function NavigateToCustomerScreen() {
     if (currentLocation && mapRef.current) {
       mapRef.current.animateToRegion({
         ...currentLocation,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
       }, 1000);
     }
   };
@@ -283,7 +378,7 @@ export default function NavigateToCustomerScreen() {
     if (jobDetails?.customerPhone) {
       Linking.openURL(`tel:${jobDetails.customerPhone}`);
     } else {
-      Alert.alert('Call', 'Calling Mohammed A...');
+      Alert.alert('Call', 'Calling customer...');
     }
   };
 
@@ -304,10 +399,17 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'Yes, Arrived',
           onPress: () => {
-            // Update job status to 'arrived'
+            // Just navigate - no API calls needed here
             router.push({
               pathname: '/ServiceInProgressScreen',
-              params: { bookingId }
+              params: { 
+                bookingId,
+                customerName: jobDetails?.customerName,
+                customerPhone: jobDetails?.customerPhone,
+                serviceType: params.serviceType,
+                vehicleType: params.vehicleType,
+                estimatedEarnings: params.estimatedEarnings,
+              }
             });
           }
         }
@@ -318,6 +420,7 @@ export default function NavigateToCustomerScreen() {
   const handleReportIssue = () => {
     Alert.alert('Report Issue', 'Opening report form...');
   };
+
   const handleCancelService = () => {
     Alert.alert(
       'Cancel Service',
@@ -328,10 +431,9 @@ export default function NavigateToCustomerScreen() {
           text: 'Yes, Cancel',
           style: 'destructive',
           onPress: () => {
-            // Just navigate to home screen for now
             router.replace('/(provider)/HomePage');
-
-            // Optionally try API in background without awaiting
+            
+            // Background cancellation
             const cancelApi = async () => {
               try {
                 const token = await AsyncStorage.getItem('userToken');
@@ -344,22 +446,22 @@ export default function NavigateToCustomerScreen() {
                   body: JSON.stringify({ reason: 'provider_cancelled' }),
                 });
               } catch (error) {
-                console.log('Background API call failed (expected):', error);
+                console.log('Background API call failed:', error);
               }
             };
-
-            cancelApi(); // Fire and forget
+            cancelApi();
           }
         }
       ]
     );
   };
 
+  // Show loading only while getting location
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingContainer}>
-          <Text>Loading navigation...</Text>
+          <Text>Getting your location...</Text>
         </View>
       </SafeAreaView>
     );
@@ -369,7 +471,7 @@ export default function NavigateToCustomerScreen() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#E8F4FB" />
 
-      {/* ── MAP AREA ── */}
+      {/* MAP AREA - Now takes half the screen */}
       <View style={styles.mapArea}>
         <MapView
           ref={mapRef}
@@ -378,8 +480,8 @@ export default function NavigateToCustomerScreen() {
           initialRegion={{
             latitude: currentLocation?.latitude || 26.2285,
             longitude: currentLocation?.longitude || 50.5860,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
           }}
           showsUserLocation={true}
           showsMyLocationButton={false}
@@ -438,7 +540,7 @@ export default function NavigateToCustomerScreen() {
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
 
-        {/* Navigation Card */}
+        {/* Navigation Card - Now positioned better with larger map */}
         <View style={styles.navCard}>
           <View style={styles.navCardTop}>
             <View style={styles.navIconWrap}>
@@ -446,18 +548,20 @@ export default function NavigateToCustomerScreen() {
             </View>
             <View style={styles.navCardTextBlock}>
               <Text style={styles.navCardLabel}>NEXT TURN</Text>
-              <Text style={styles.navCardTurn}>Turn right on Main Street</Text>
+              <Text style={styles.navCardTurn}>
+                {routeCoordinates.length > 0 ? 'Route loaded - follow GPS' : 'Calculating route...'}
+              </Text>
             </View>
           </View>
           <View style={styles.navCardDivider} />
           <View style={styles.navCardBottom}>
             <View style={styles.navCardStat}>
               <Text style={styles.navStatLabel}>ETA</Text>
-              <Text style={styles.navStatValue}>{jobDetails?.eta || '8 min'}</Text>
+              <Text style={styles.navStatValue}>{jobDetails?.eta || 'Calculating...'}</Text>
             </View>
             <View style={styles.navCardStat}>
               <Text style={styles.navStatLabel}>DISTANCE</Text>
-              <Text style={styles.navStatValue}>{jobDetails?.distance || '2.5 km'}</Text>
+              <Text style={styles.navStatValue}>{jobDetails?.distance || 'Calculating...'}</Text>
             </View>
           </View>
         </View>
@@ -474,7 +578,7 @@ export default function NavigateToCustomerScreen() {
         </View>
       </View>
 
-      {/* ── BOTTOM SHEET ── */}
+      {/* BOTTOM SHEET - Now takes remaining space */}
       <View style={styles.bottomSheet}>
         {/* Drag Handle */}
         <View style={styles.dragHandle} />
@@ -518,11 +622,24 @@ export default function NavigateToCustomerScreen() {
             <View style={styles.locationRow}>
               <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
               <View>
-                <Text style={styles.locationLabel}>Pickup Location</Text>
-                <Text style={styles.locationValue}>{jobDetails?.pickupLocation || 'Main Street, Manama'}</Text>
+                <Text style={styles.locationLabel}>PICKUP LOCATION</Text>
+                <Text style={styles.locationValue}>{jobDetails?.pickupLocation || 'Loading...'}</Text>
               </View>
             </View>
           </View>
+
+          {/* Dropoff Location Card (if exists) */}
+          {jobDetails?.dropoffLocation && (
+            <View style={styles.locationCard}>
+              <View style={styles.locationRow}>
+                <Feather name="flag" size={16} color="#5B9BD5" style={styles.locationIcon} />
+                <View>
+                  <Text style={styles.locationLabel}>DROPOFF LOCATION</Text>
+                  <Text style={styles.locationValue}>{jobDetails.dropoffLocation}</Text>
+                </View>
+              </View>
+            </View>
+          )}
 
           {/* Navigation Tips Card */}
           <View style={styles.tipsCard}>
@@ -533,7 +650,7 @@ export default function NavigateToCustomerScreen() {
               <View style={styles.tipsTextBlock}>
                 <Text style={styles.tipsTitle}>Navigation Tips</Text>
                 <Text style={styles.tipsText}>
-                  {jobDetails?.navigationTips || 'Located in underground parking. Call customer upon arrival.'}
+                  {jobDetails?.navigationTips || 'Call customer upon arrival.'}
                 </Text>
               </View>
             </View>
@@ -561,22 +678,6 @@ export default function NavigateToCustomerScreen() {
   );
 }
 
-// Add these styles to the existing styles object
-const additionalStyles = {
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pickupMarker: {
-    padding: 5,
-  },
-  dropoffMarker: {
-    padding: 5,
-  },
-};
-
-// Merge with existing styles
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -587,11 +688,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  // Map area now takes half the screen (50%)
   mapArea: {
-    flex: 1,
+    height: height * 0.5,
     backgroundColor: '#f9fafb',
     position: 'relative',
-    minHeight: 260,
   },
   backBtn: {
     position: 'absolute',
@@ -736,11 +837,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   bottomSheet: {
+    flex: 1,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 10,
-    maxHeight: '62%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.08,

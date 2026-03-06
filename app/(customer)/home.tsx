@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Image,
   ScrollView,
@@ -9,7 +9,9 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Define types for our data structures
 type Service = {
@@ -38,6 +40,28 @@ const HomeScreen = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filteredServices, setFilteredServices] = useState<Service[]>([]);
   const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Check for existing booking ID when component mounts
+  useEffect(() => {
+    checkExistingBooking();
+  }, []);
+
+  const checkExistingBooking = async () => {
+    try {
+      setIsLoading(true);
+      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+      
+      if (currentBookingId) {
+        // If booking ID exists, navigate to FindProvider page
+        router.push('/(customer)/FindingProvider');
+      }
+    } catch (error) {
+      console.error('Error checking booking ID:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // EXACTLY 12 SERVICES as per SRS v1.1 Detailed Supplement
   const services: Service[] = [
@@ -260,6 +284,15 @@ const HomeScreen = () => {
     console.log('Menu pressed');
   };
 
+  // Show loading indicator while checking for booking
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#68bdee" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -452,6 +485,12 @@ const HomeScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#FFFFFF',
   },
   header: {

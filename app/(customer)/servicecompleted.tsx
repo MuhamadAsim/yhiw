@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Alert,
   Dimensions,
@@ -11,6 +11,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from 'react-native';
 
 const { height } = Dimensions.get('window');
@@ -24,24 +25,80 @@ const ServiceCompletedScreen = () => {
   
   const [rating, setRating] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [jobDetails, setJobDetails] = useState<any>(null);
 
-  // Get data from params (passed from ServiceInProgressScreen)
+  // Get data from params (as fallback)
   const bookingId = params.bookingId as string;
-  const providerName = params.providerName as string || 'Ahmed Al-Khalifa';
+  const providerNameParam = params.providerName as string;
   const providerId = params.providerId as string;
-  const serviceType = params.serviceType as string || 'Quick Tow (Flatbed)';
-  const totalAmount = params.totalAmount as string || '99.75';
-  const duration = params.duration as string || '35 minutes';
-  const pickupLocation = params.pickupLocation as string || '23 Main Street, Manama';
+  const serviceTypeParam = params.serviceType as string;
+  const totalAmountParam = params.totalAmount as string;
+  const durationParam = params.duration as string;
+  const pickupLocationParam = params.pickupLocation as string;
+  const completedAtParam = params.completedAt as string;
   
-  // Calculate completion time
-  const completionTime = new Date().toLocaleTimeString([], { 
-    hour: '2-digit', 
-    minute: '2-digit' 
-  });
-
   // Generate booking reference
   const bookingRef = `#YHIW-${bookingId?.slice(-5) || '96931'}`;
+
+  // Fetch job details on mount
+  useEffect(() => {
+    fetchJobDetails();
+  }, []);
+
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return;
+
+      // Fetch job details from backend
+      const response = await fetch(`${API_BASE_URL}/customer/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // The API returns data.job, not data.data
+        if (data.success && data.job) {
+          setJobDetails(data.job);
+          console.log('✅ Job details loaded:', data.job);
+        }
+      }
+
+      // Also check for existing rating
+      await checkExistingRating();
+      
+    } catch (error) {
+      console.error('Error fetching job details:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const checkExistingRating = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return;
+
+      const response = await fetch(`${API_BASE_URL}/job/${bookingId}/rating`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data?.rating) {
+          setRating(data.data.rating);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking rating:', error);
+    }
+  };
 
   const handleStarPress = (starIndex: number) => {
     setRating(starIndex);
@@ -64,6 +121,8 @@ const ServiceCompletedScreen = () => {
         return;
       }
 
+      console.log('📡 Submitting rating for booking:', bookingId);
+
       // Submit rating to backend
       const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
         method: 'POST',
@@ -79,6 +138,7 @@ const ServiceCompletedScreen = () => {
       });
 
       const result = await response.json();
+      console.log('📡 Rating response:', response.status, result);
 
       if (response.ok && result.success) {
         Alert.alert(
@@ -86,8 +146,14 @@ const ServiceCompletedScreen = () => {
           'Your feedback has been submitted successfully.',
           [{ text: 'OK' }]
         );
+        // Update rating to disable further submissions
+        setRating(rating);
       } else {
-        throw new Error(result.message || 'Failed to submit rating');
+        if (response.status === 400 && result.message?.includes('already rated')) {
+          Alert.alert('Already Rated', 'You have already rated this service.');
+        } else {
+          throw new Error(result.message || 'Failed to submit rating');
+        }
       }
     } catch (error) {
       console.error('Error submitting rating:', error);
@@ -102,13 +168,45 @@ const ServiceCompletedScreen = () => {
   };
 
   const handleBackToHome = () => {
-    router.push('/(customer)/home');
+    router.push('/(customer)/Home');
   };
 
+  // Calculate completion time - FIXED: Use correct path
+  const completionTime = jobDetails?.timeline?.completedAt || completedAtParam
+    ? new Date(jobDetails?.timeline?.completedAt || completedAtParam).toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      })
+    : new Date().toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+
+  // FIXED: Use correct paths based on actual API response
+  const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
+  const serviceType = jobDetails?.serviceName || serviceTypeParam || 'Quick Tow (Flatbed)';
+  const totalAmount = jobDetails?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
+  
+  // Duration might need to be calculated from timeTracking or use param
+  const duration = jobDetails?.timeTracking?.totalSeconds 
+    ? `${Math.floor(jobDetails.timeTracking.totalSeconds / 60)} minutes`
+    : durationParam || '35 minutes';
+    
+  const pickupLocation = jobDetails?.pickup?.address || pickupLocationParam || '23 Main Street, Manama';
+  
   // Calculate receipt breakdown
   const baseFee = parseFloat(totalAmount) * 0.75;
   const distanceFee = parseFloat(totalAmount) * 0.15;
   const serviceFee = parseFloat(totalAmount) * 0.10;
+
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#68bdee" />
+        <Text style={styles.loadingText}>Loading service details...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -200,7 +298,7 @@ const ServiceCompletedScreen = () => {
                 key={star}
                 onPress={() => handleStarPress(star)}
                 activeOpacity={0.7}
-                disabled={isSubmitting}
+                disabled={isSubmitting || rating > 0}
               >
                 <Ionicons
                   name={star <= rating ? 'star' : 'star-outline'}
@@ -211,17 +309,19 @@ const ServiceCompletedScreen = () => {
             ))}
           </View>
           
-          {rating > 0 && (
+          {rating > 0 && !isSubmitting && (
             <TouchableOpacity
-              style={[styles.submitRatingButton, isSubmitting && styles.disabledButton]}
+              style={styles.submitRatingButton}
               onPress={handleSubmitRating}
               disabled={isSubmitting}
               activeOpacity={0.7}
             >
-              <Text style={styles.submitRatingText}>
-                {isSubmitting ? 'Submitting...' : 'Submit Rating'}
-              </Text>
+              <Text style={styles.submitRatingText}>Submit Rating</Text>
             </TouchableOpacity>
+          )}
+
+          {isSubmitting && (
+            <ActivityIndicator size="small" color="#68bdee" style={{ marginTop: 15 }} />
           )}
         </View>
 
@@ -291,6 +391,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#8c8c8c',
   },
   scrollContent: {
     paddingTop: height * 0.05,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Dimensions,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,72 +17,224 @@ const { height } = Dimensions.get('window');
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
+interface JobDetailsResponse {
+  success: boolean;
+  data: {
+    bookingId: string;
+    status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed'; 
+    timeline: {
+      acceptedAt: string;
+      startedAt: string | null;
+      completedAt: string | null;
+      cancelledAt: string | null;
+      cancelledBy: string | null;
+    };
+    provider: {
+      id: string;
+      name: string;
+      phone: string;
+      email: string;
+      profileImage?: string;
+      serviceType: string[];
+      rating: number;
+      totalJobsCompleted: number;
+    };
+    bookingData: {
+      serviceId: string;
+      serviceName: string;
+      servicePrice: number;
+      serviceCategory: string;
+      pickup: {
+        address: string;
+        coordinates: {
+          lat: number;
+          lng: number;
+        };
+      };
+      dropoff?: {
+        address: string;
+        coordinates: {
+          lat: number;
+          lng: number;
+        };
+      };
+      vehicle: {
+        type: string;
+        makeModel: string;
+        year: string;
+        color: string;
+        licensePlate: string;
+      };
+      urgency: string;
+      issues: string[];
+      description: string;
+      payment: {
+        totalAmount: number;
+        selectedTip?: number;
+        baseServiceFee: number;
+      };
+      isCarRental?: boolean;
+      isFuelDelivery?: boolean;
+      isSpareParts?: boolean;
+      fuelType?: string;
+      partDescription?: string;
+      hasInsurance?: boolean;
+    };
+  };
+}
+
 interface JobStatusResponse {
-  status: 'en-route' | 'arrived' | 'started' | 'completed' | 'cancelled';
-  duration?: string;
+  status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed';
+  startedAt?: string;
   completedAt?: string;
   cancelledAt?: string;
+  cancelledBy?: string;
   cancellationReason?: string;
+  timeTracking?: {
+    totalSeconds: number;
+    isPaused: boolean;
+  };
 }
 
 const ServiceInProgressScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   
+  // Timer state
   const [duration, setDuration] = useState('00:00');
-  const [startTime] = useState(new Date());
+  const [startTime, setStartTime] = useState<Date | null>(null);
+  // FIXED: Added initial value null to useRef
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Data state
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [jobDetails, setJobDetails] = useState<JobDetailsResponse['data'] | null>(null);
+  
+  // Polling state
   const [pollingAttempts, setPollingAttempts] = useState(0);
-  const [jobStatus, setJobStatus] = useState('started');
+  const [jobStatus, setJobStatus] = useState('in_progress');
   const [isPolling, setIsPolling] = useState(true);
   const [hasShownCancelledAlert, setHasShownCancelledAlert] = useState(false);
 
-  // Get data from params
+  // Get data from params (as fallback)
   const bookingId = params.bookingId as string;
-  const providerName = params.providerName as string || 'Ahmed Al-Khalifa';
-  const providerId = params.providerId as string;
-  const providerPhone = params.providerPhone as string;
-  const serviceType = params.serviceType as string || 'Quick Tow (Flatbed)';
-  const vehicleType = params.vehicleType as string || 'SUV';
-  const pickupLocation = params.pickupLocation as string || '23 Main Street, Manama';
+  const providerNameParam = params.providerName as string;
+  const providerIdParam = params.providerId as string;
+  const providerPhoneParam = params.providerPhone as string;
+  const serviceTypeParam = params.serviceType as string;
+  const vehicleTypeParam = params.vehicleType as string;
+  const pickupLocationParam = params.pickupLocation as string;
   const pickupLat = params.pickupLat as string;
   const pickupLng = params.pickupLng as string;
-  const totalAmount = params.totalAmount as string || '99.75';
+  const totalAmountParam = params.totalAmount as string;
 
-  // Timer effect
+  // Fetch job details on mount
   useEffect(() => {
-    const timer = setInterval(() => {
+    if (bookingId) {
+      fetchJobDetails();
+    }
+  }, [bookingId]);
+
+  // Start timer when we have startTime
+  useEffect(() => {
+    if (!startTime) return;
+
+    timerRef.current = setInterval(() => {
       const now = new Date();
       const diff = Math.floor((now.getTime() - startTime.getTime()) / 1000);
-      const mins = Math.floor(diff / 60);
+      const hours = Math.floor(diff / 3600);
+      const mins = Math.floor((diff % 3600) / 60);
       const secs = diff % 60;
-      setDuration(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      
+      if (hours > 0) {
+        setDuration(`${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      } else {
+        setDuration(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      }
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, []);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [startTime]);
 
   // Polling effect - check job status every 5 seconds
   useEffect(() => {
-    if (!bookingId) {
-      console.log('❌ No bookingId available for polling');
+    if (!bookingId || !isPolling) {
+      console.log('❌ No bookingId or polling stopped');
       return;
     }
 
     console.log('🔄 Starting polling for job status (every 5 seconds)');
     
     const pollInterval = setInterval(async () => {
-      if (!isPolling) return;
-      
       await checkJobStatus();
       setPollingAttempts(prev => prev + 1);
-    }, 5000); // Poll every 5 seconds
+    }, 5000);
 
-    // Cleanup on unmount
     return () => {
       console.log('🧹 Stopping polling');
       clearInterval(pollInterval);
     };
   }, [bookingId, isPolling]);
+
+  // Fetch complete job details
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        console.log('❌ No token found');
+        setError('Authentication required');
+        return;
+      }
+
+      console.log(`🔍 Fetching job details for bookingId: ${bookingId}`);
+      
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details_inprogress`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch job details: ${response.status}`);
+      }
+
+      const data: JobDetailsResponse = await response.json();
+      console.log('✅ Job details fetched successfully');
+      
+      if (data.success) {
+        setJobDetails(data.data);
+        
+        // Set start time from backend if available
+        if (data.data.timeline.startedAt) {
+          setStartTime(new Date(data.data.timeline.startedAt));
+        } else {
+          // Fallback to current time
+          setStartTime(new Date());
+        }
+        
+        // Update job status
+        setJobStatus(data.data.status);
+      }
+    } catch (error) {
+      console.log('❌ Error fetching job details:', error);
+      setError('Failed to load job details');
+      
+      // Fallback to params if API fails
+      if (providerNameParam) {
+        setStartTime(new Date());
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const checkJobStatus = async () => {
     try {
@@ -111,26 +264,26 @@ const ServiceInProgressScreen = () => {
       setJobStatus(data.status);
 
       // ===== HANDLE JOB COMPLETED =====
-      if (data.status === 'completed') {
+      if (data.status === 'completed' || data.status === 'completed_confirmed') {
         console.log('✅✅✅ JOB COMPLETED - Navigating to ServiceCompleted');
         
         // Stop polling
         setIsPolling(false);
 
-        // Navigate to ServiceCompleted screen (keep bookingId in storage)
+        // Navigate to ServiceCompleted screen
         setTimeout(() => {
           router.push({
             pathname: '/(customer)/ServiceCompleted',
             params: {
               bookingId,
-              providerName,
-              providerId,
-              serviceType,
-              totalAmount,
+              providerName: jobDetails?.provider?.name || providerNameParam || '',
+              providerId: jobDetails?.provider?.id || providerIdParam || '',
+              serviceType: jobDetails?.bookingData?.serviceName || serviceTypeParam || '',
+              totalAmount: jobDetails?.bookingData?.payment?.totalAmount?.toString() || totalAmountParam || '0',
               duration,
-              pickupLocation,
-              pickupLat,
-              pickupLng,
+              pickupLocation: jobDetails?.bookingData?.pickup?.address || pickupLocationParam || '',
+              pickupLat: jobDetails?.bookingData?.pickup?.coordinates?.lat?.toString() || pickupLat || '',
+              pickupLng: jobDetails?.bookingData?.pickup?.coordinates?.lng?.toString() || pickupLng || '',
               completedAt: data.completedAt || new Date().toISOString(),
             }
           });
@@ -157,7 +310,6 @@ const ServiceInProgressScreen = () => {
             {
               text: 'OK',
               onPress: () => {
-                // Navigate to home screen
                 router.push('/(customer)/home');
               }
             }
@@ -171,10 +323,13 @@ const ServiceInProgressScreen = () => {
   };
 
   const handleCall = () => {
-    if (providerPhone) {
-      Alert.alert('Call', `Calling ${providerName} at ${providerPhone}...`);
+    const phone = jobDetails?.provider?.phone || providerPhoneParam;
+    const name = jobDetails?.provider?.name || providerNameParam || 'Provider';
+    
+    if (phone) {
+      Alert.alert('Call', `Calling ${name} at ${phone}...`);
     } else {
-      Alert.alert('Call', `Calling ${providerName}...`);
+      Alert.alert('Call', `Calling ${name}...`);
     }
   };
 
@@ -182,8 +337,8 @@ const ServiceInProgressScreen = () => {
     router.push({
       pathname: '/(customer)/Chat',
       params: { 
-        providerName, 
-        providerId,
+        providerName: jobDetails?.provider?.name || providerNameParam || '',
+        providerId: jobDetails?.provider?.id || providerIdParam || '',
         bookingId 
       }
     });
@@ -193,9 +348,55 @@ const ServiceInProgressScreen = () => {
     Alert.alert('Report Issue', 'Opening report form...');
   };
 
+  // Fixed formatTime function
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (!date) return '';
+    
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
   };
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#68bdee" />
+        <Text style={styles.loadingText}>Loading service details...</Text>
+      </View>
+    );
+  }
+
+  // Error state
+  if (error && !jobDetails) {
+    return (
+      <View style={styles.errorContainer}>
+        <Ionicons name="alert-circle-outline" size={48} color="#ff4444" />
+        <Text style={styles.errorTitle}>Something went wrong</Text>
+        <Text style={styles.errorMessage}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={fetchJobDetails}>
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Use real data from API or fallback to params with null checks
+  const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
+  const providerPhone = jobDetails?.provider?.phone || providerPhoneParam;
+  const providerRating = jobDetails?.provider?.rating || 4.5;
+  const providerJobs = jobDetails?.provider?.totalJobsCompleted || 1250;
+  const serviceType = jobDetails?.bookingData?.serviceName || serviceTypeParam || 'Quick Tow (Flatbed)';
+  const vehicleType = jobDetails?.bookingData?.vehicle?.type || vehicleTypeParam || 'SUV';
+  const vehicleMakeModel = jobDetails?.bookingData?.vehicle?.makeModel || '';
+  const vehicleLicense = jobDetails?.bookingData?.vehicle?.licensePlate || '';
+  const pickupLocation = jobDetails?.bookingData?.pickup?.address || pickupLocationParam || '23 Main Street, Manama';
+  const totalAmount = jobDetails?.bookingData?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
+  const selectedTip = jobDetails?.bookingData?.payment?.selectedTip;
+  const description = jobDetails?.bookingData?.description;
+  
+  // Format the started time
+  const startedAtTime = startTime ? formatTime(startTime) : 'Just now';
 
   return (
     <View style={styles.container}>
@@ -224,7 +425,7 @@ const ServiceInProgressScreen = () => {
         <View style={styles.durationCard}>
           <Text style={styles.durationLabel}>DURATION</Text>
           <Text style={styles.durationTime}>{duration}</Text>
-          <Text style={styles.startedTime}>Started at {formatTime(startTime)}</Text>
+          <Text style={styles.startedTime}>Started at {startedAtTime}</Text>
           
           {/* Live Indicator */}
           <View style={styles.liveIndicator}>
@@ -239,6 +440,14 @@ const ServiceInProgressScreen = () => {
             <View style={styles.providerTextContainer}>
               <Text style={styles.providerLabel}>Provider</Text>
               <Text style={styles.providerName}>{providerName}</Text>
+              <View style={styles.providerStats}>
+                <View style={styles.ratingContainer}>
+                  <Ionicons name="star" size={12} color="#FFB800" />
+                  <Text style={styles.ratingText}>{providerRating.toFixed(1)}</Text>
+                </View>
+                <Text style={styles.statsDivider}>•</Text>
+                <Text style={styles.jobsText}>{providerJobs}+ jobs</Text>
+              </View>
             </View>
             <View style={styles.profileIcon}>
               <Ionicons name="person" size={28} color="#68bdee" />
@@ -278,42 +487,60 @@ const ServiceInProgressScreen = () => {
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Vehicle</Text>
-            <Text style={styles.detailValue}>{vehicleType}</Text>
+            <Text style={styles.detailValue}>
+              {vehicleType}{vehicleMakeModel ? ` • ${vehicleMakeModel}` : ''}
+            </Text>
           </View>
+
+          {vehicleLicense ? (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>License Plate</Text>
+              <Text style={styles.detailValue}>{vehicleLicense}</Text>
+            </View>
+          ) : null}
 
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Location</Text>
             <Text style={styles.detailValue}>{pickupLocation}</Text>
           </View>
+
+          {jobDetails?.bookingData?.dropoff?.address ? (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Destination</Text>
+              <Text style={styles.detailValue}>{jobDetails.bookingData.dropoff.address}</Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Progress Card */}
         <View style={[styles.progressCard, styles.cardWithBorder]}>
           <Text style={styles.cardTitle}>PROGRESS</Text>
 
-          {/* Progress Item 1 - Completed */}
+          {/* Progress Item 1 - Provider Arrived */}
           <View style={styles.progressItem}>
             <View style={styles.progressIconCompleted}>
               <View style={styles.progressDotCompleted} />
             </View>
             <View style={styles.progressTextContainer}>
               <Text style={styles.progressTextCompleted}>Provider Arrived</Text>
-              <Text style={styles.progressTimeCompleted}>{formatTime(startTime)}</Text>
+              <Text style={styles.progressTimeCompleted}>{startedAtTime}</Text>
             </View>
           </View>
 
-          {/* Progress Item 2 - Active */}
+          {/* Progress Item 2 - Service In Progress */}
           <View style={styles.progressItem}>
             <View style={styles.progressIconActive}>
               <View style={styles.progressDotActive} />
             </View>
             <View style={styles.progressTextContainer}>
               <Text style={styles.progressTextActive}>Service In Progress</Text>
-              <Text style={styles.progressTimeActive}>Currently working...</Text>
+              <Text style={styles.progressTimeActive}>
+                {duration} elapsed
+              </Text>
             </View>
           </View>
 
-          {/* Progress Item 3 - Inactive */}
+          {/* Progress Item 3 - Service Complete */}
           <View style={styles.progressItem}>
             <View style={styles.progressIconInactive}>
               <View style={styles.progressDotInactive} />
@@ -331,8 +558,8 @@ const ServiceInProgressScreen = () => {
             <Text style={styles.updateTitle}>Service Update</Text>
           </View>
           <Text style={styles.updateText}>
-            The provider is currently working on your {serviceType.toLowerCase()}. 
-            You'll be notified when the service is complete.
+            {description || 
+              `The provider is currently working on your ${serviceType.toLowerCase()}. You'll be notified when the service is complete.`}
           </Text>
           
           {/* Polling status indicator */}
@@ -353,12 +580,18 @@ const ServiceInProgressScreen = () => {
             </View>
             <Text style={styles.costValue}>{totalAmount} BHD</Text>
           </View>
+          {selectedTip && selectedTip > 0 ? (
+            <View style={styles.tipRow}>
+              <Text style={styles.tipLabel}>Including tip</Text>
+              <Text style={styles.tipValue}>{selectedTip} BHD</Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* Bottom Buttons Footer - ONLY Report Issue button remains */}
+      {/* Bottom Buttons Footer */}
       <View style={styles.bottomContainer}>
         <TouchableOpacity
           style={styles.reportButton}
@@ -377,6 +610,48 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8f8f8',
     position: 'relative',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#8c8c8c',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+    paddingHorizontal: 20,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#3c3c3c',
+    marginTop: 10,
+    marginBottom: 5,
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: '#8c8c8c',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#68bdee',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   pollingBadge: {
     position: 'absolute',
@@ -528,6 +803,31 @@ const styles = StyleSheet.create({
     color: '#3c3c3c',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  providerStats: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 4,
+  },
+  ratingText: {
+    fontSize: 12,
+    color: '#3c3c3c',
+    fontWeight: '600',
+    marginLeft: 2,
+  },
+  statsDivider: {
+    fontSize: 12,
+    color: '#d0d0d0',
+    marginHorizontal: 4,
+  },
+  jobsText: {
+    fontSize: 12,
+    color: '#8c8c8c',
   },
   profileIcon: {
     width: 55,
@@ -768,6 +1068,23 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: '#68bdee',
     fontWeight: 'bold',
+  },
+  tipRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  tipLabel: {
+    fontSize: 11,
+    color: '#8c8c8c',
+  },
+  tipValue: {
+    fontSize: 11,
+    color: '#3c3c3c',
+    fontWeight: '600',
   },
   bottomContainer: {
     backgroundColor: '#FFFFFF',

@@ -1,28 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Dimensions,
+  Linking,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  Alert,
-  Platform,
-  ActivityIndicator,
-  Linking,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
-import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { height, width } = Dimensions.get('window');
 
-// Google Maps API Keys
-const ANDROID_API_KEY = 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
-const IOS_API_KEY = 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
 interface Coordinates {
@@ -38,13 +34,13 @@ interface ProviderLocation extends Coordinates {
 
 interface UpdateEvent {
   id: string;
-  type: 'accepted' | 'en-route' | 'arrived' | 'started' | 'completed';
+  type: 'accepted' | 'started' | 'completed' | 'completed_confirmed';
   message: string;
   timestamp: Date;
 }
 
 interface JobStatusResponse {
-  status: 'searching' | 'accepted' | 'en-route' | 'arrived' | 'started' | 'completed' | 'cancelled';
+  status: 'accepted' | 'started' | 'completed' | 'cancelled' | 'completed_confirmed';
   eta?: string;
   distance?: string;
   provider?: {
@@ -54,6 +50,60 @@ interface JobStatusResponse {
   };
 }
 
+interface RouteResponse {
+  success: boolean;
+  usingFallback?: boolean;
+  route: {
+    providerLocation: {
+      latitude: number;
+      longitude: number;
+      lastUpdate: string;
+      heading?: number;
+      speed?: number;
+    };
+    pickupLocation: {
+      latitude: number;
+      longitude: number;
+      address: string;
+    };
+    dropoffLocation?: {
+      latitude: number;
+      longitude: number;
+      address: string;
+    } | null;
+    polyline?: string;
+    distance: string;
+    eta: string;
+    distanceValue?: number;
+    etaValue?: number;
+    steps?: Array<{
+      instruction: string;
+      distance: string;
+      duration: string;
+    }>;
+    startAddress?: string;
+    endAddress?: string;
+    providerName: string;
+    providerPhone: string;
+  };
+}
+
+interface LiveTrackingResponse {
+  success: boolean;
+  location: {
+    latitude: number;
+    longitude: number;
+    heading?: number;
+    speed?: number;
+    lastUpdate: string;
+  } | null;
+  status: string;
+  eta?: string;
+  distance?: string;
+  providerName?: string;
+  providerPhone?: string;
+}
+
 const TrackProviderScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -61,20 +111,24 @@ const TrackProviderScreen = () => {
   const pollingTimer = useRef<NodeJS.Timeout | null>(null);
   const isMounted = useRef(true);
   const navigationInProgress = useRef(false);
+  const initialRouteFetched = useRef(false);
 
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
   const [pickupLocation, setPickupLocation] = useState<Coordinates | null>(null);
+  const [pickupAddress, setPickupAddress] = useState<string>('Loading address...');
   const [dropoffLocation, setDropoffLocation] = useState<Coordinates | null>(null);
+  const [dropoffAddress, setDropoffAddress] = useState<string>('');
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [eta, setEta] = useState<string>('5 min');
-  const [distance, setDistance] = useState<string>('1.2 km');
-  const [providerName, setProviderName] = useState<string>('Ahmed Al-Khalifa');
+  const [eta, setEta] = useState<string>('Calculating...');
+  const [distance, setDistance] = useState<string>('Calculating...');
+  const [providerName, setProviderName] = useState<string>('Provider');
   const [providerPhone, setProviderPhone] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [updates, setUpdates] = useState<UpdateEvent[]>([]);
   const [pollingAttempts, setPollingAttempts] = useState<number>(0);
-  const [currentStatus, setCurrentStatus] = useState<string>('en-route');
+  const [currentStatus, setCurrentStatus] = useState<string>('accepted');
+  const [apiError, setApiError] = useState<string | null>(null);
 
   const [region, setRegion] = useState<Region>({
     latitude: 26.2285,
@@ -97,29 +151,46 @@ const TrackProviderScreen = () => {
   const estimatedArrival = params.estimatedArrival as string;
   const serviceType = params.serviceType as string || 'Towing Service';
   const vehicleType = params.vehicleType as string || 'Sedan';
-  const pickupAddress = params.pickupAddress as string || 'Pickup Location';
-  const totalAmount = params.totalAmount as string || '89.25';
-  const lastUpdate = params.lastUpdate as string;
+  const pickupAddressParam = params.pickupAddress as string || 'Pickup Location';
+  const totalAmount = params.totalAmount as string || '0';
+
+  // Debug logger
+  const addDebug = (message: string, data?: any) => {
+    const logMessage = `🔍 [TrackProvider] ${message}`;
+    if (data) {
+      console.log(logMessage, data);
+    } else {
+      console.log(logMessage);
+    }
+  };
 
   useEffect(() => {
+    addDebug(`🚀 Component mounted with bookingId: ${bookingId}`);
+    
+    // Set provider info from params
     if (providerNameParam) setProviderName(providerNameParam);
     if (providerIdParam) setProviderId(providerIdParam);
     if (providerPhoneParam) setProviderPhone(providerPhoneParam);
+    if (pickupAddressParam) setPickupAddress(pickupAddressParam);
 
-    // Set initial locations from params
+    // Set initial locations from params (as fallback)
     if (!isNaN(providerLat) && !isNaN(providerLng)) {
+      addDebug(`📍 Initial provider location from params: ${providerLat}, ${providerLng}`);
       setProviderLocation({
         latitude: providerLat,
         longitude: providerLng,
-        lastUpdate: lastUpdate || new Date().toISOString(),
+        lastUpdate: new Date().toISOString(),
       });
     }
 
     if (!isNaN(pickupLat) && !isNaN(pickupLng)) {
+      addDebug(`📍 Pickup location from params: ${pickupLat}, ${pickupLng}`);
       setPickupLocation({ latitude: pickupLat, longitude: pickupLng });
     }
 
-    if (!isNaN(dropoffLat) && !isNaN(dropoffLng)) {
+    // Handle dropoff location - only set if both coordinates are valid
+    if (!isNaN(dropoffLat) && !isNaN(dropoffLng) && dropoffLat !== 0 && dropoffLng !== 0) {
+      addDebug(`📍 Dropoff location from params: ${dropoffLat}, ${dropoffLng}`);
       setDropoffLocation({ latitude: dropoffLat, longitude: dropoffLng });
     }
 
@@ -128,20 +199,15 @@ const TrackProviderScreen = () => {
     }
 
     // Add initial updates
-    setUpdates([
+    const initialUpdates: UpdateEvent[] = [
       {
         id: '1',
         type: 'accepted',
         message: 'Provider accepted your request',
         timestamp: new Date(Date.now() - 2 * 60000),
-      },
-      {
-        id: '2',
-        type: 'en-route',
-        message: 'Provider is on the way',
-        timestamp: new Date(Date.now() - 1 * 60000),
-      },
-    ]);
+      }
+    ];
+    setUpdates(initialUpdates);
 
     // Get current user location
     getUserLocation();
@@ -152,7 +218,7 @@ const TrackProviderScreen = () => {
     }
 
     return () => {
-      console.log('🧹 Cleaning up TrackProviderScreen');
+      addDebug('🧹 Cleaning up TrackProviderScreen');
       isMounted.current = false;
       if (pollingTimer.current) {
         clearTimeout(pollingTimer.current);
@@ -161,92 +227,158 @@ const TrackProviderScreen = () => {
     };
   }, []);
 
-  const startPolling = () => {
-    console.log('🔄 Starting polling for provider location & job status (every 10 seconds)');
+  // Fetch route data from backend (includes polyline and addresses)
+  const fetchRouteData = async () => {
+    if (!bookingId || initialRouteFetched.current) return;
     
-    const poll = async () => {
-      if (!isMounted.current || navigationInProgress.current) return;
-      
-      // Fetch both location and status in parallel
-      await Promise.all([
-        fetchProviderLocation(),
-        fetchJobStatus()
-      ]);
-      
-      if (isMounted.current && !navigationInProgress.current) {
-        pollingTimer.current = setTimeout(poll, 10000); // Poll every 10 seconds
-      }
-    };
-    
-    // Start polling immediately
-    poll();
-  };
-
-  const fetchProviderLocation = async () => {
-    if (!bookingId) {
-      console.log('❌ No bookingId available for location fetch');
-      return;
-    }
-
     try {
+      addDebug(`🗺️ Fetching route data from backend`);
       const token = await AsyncStorage.getItem('userToken');
+      
       if (!token) {
-        console.log('❌ No token found');
+        addDebug('❌ No token found');
         return;
       }
 
-      const url = `${API_BASE_URL}/api/customer/${bookingId}/provider-location`;
-      console.log(`📍 Polling #${pollingAttempts + 1} - Fetching provider location`);
-      
-      const response = await fetch(url, {
-        method: 'GET',
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/route`, {
         headers: {
           'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
         },
       });
 
-      if (!isMounted.current) return;
-
       if (!response.ok) {
-        console.log(`❌ Location fetch failed: ${response.status}`);
+        addDebug(`❌ Route fetch failed: ${response.status}`);
         return;
       }
 
-      const data = await response.json();
-      setPollingAttempts(prev => prev + 1);
-
-      if (data.success && data.location) {
-        console.log(`✅ Location received: ${data.location.latitude}, ${data.location.longitude}`);
+      const data: RouteResponse = await response.json();
+      addDebug(`✅ Route data received`, data);
+      
+      if (data.success && data.route) {
+        initialRouteFetched.current = true;
         
-        const newLocation = {
-          latitude: data.location.latitude,
-          longitude: data.location.longitude,
-          heading: data.location.heading,
-          speed: data.location.speed,
-          lastUpdate: data.timestamp || new Date().toISOString(),
-        };
-
-        setProviderLocation(newLocation);
-
-        // Update route between provider and pickup
-        if (pickupLocation) {
-          getRoute(newLocation, pickupLocation);
+        // Update locations with real data from backend
+        if (data.route.providerLocation) {
+          setProviderLocation({
+            latitude: data.route.providerLocation.latitude,
+            longitude: data.route.providerLocation.longitude,
+            heading: data.route.providerLocation.heading || 0,
+            speed: data.route.providerLocation.speed || 0,
+            lastUpdate: data.route.providerLocation.lastUpdate,
+          });
         }
-
-        // Fit map to show both provider and pickup (only on first location)
-        if (isLoading && pickupLocation) {
-          fitMapToCoordinates(newLocation, pickupLocation);
+        
+        if (data.route.pickupLocation) {
+          setPickupLocation({
+            latitude: data.route.pickupLocation.latitude,
+            longitude: data.route.pickupLocation.longitude,
+          });
+          setPickupAddress(data.route.pickupLocation.address);
         }
-
+        
+        // Handle dropoff location - only if it exists with valid coordinates
+        if (data.route.dropoffLocation && 
+            data.route.dropoffLocation.latitude && 
+            data.route.dropoffLocation.longitude) {
+          setDropoffLocation({
+            latitude: data.route.dropoffLocation.latitude,
+            longitude: data.route.dropoffLocation.longitude,
+          });
+          setDropoffAddress(data.route.dropoffLocation.address || 'Dropoff location');
+        } else {
+          setDropoffLocation(null);
+        }
+        
+        // Update ETA and distance
+        if (data.route.eta) setEta(data.route.eta);
+        if (data.route.distance) setDistance(data.route.distance);
+        
+        // Decode and set route polyline
+        if (data.route.polyline) {
+          const points = decodePolyline(data.route.polyline);
+          setRouteCoordinates(points);
+          addDebug(`🗺️ Decoded ${points.length} polyline points`);
+        }
+        
+        // Update provider info
+        if (data.route.providerName) setProviderName(data.route.providerName);
+        if (data.route.providerPhone) setProviderPhone(data.route.providerPhone);
+        
+        // Fit map to show both locations
+        if (data.route.providerLocation && data.route.pickupLocation) {
+          fitMapToCoordinates(
+            {
+              latitude: data.route.providerLocation.latitude,
+              longitude: data.route.providerLocation.longitude,
+            },
+            {
+              latitude: data.route.pickupLocation.latitude,
+              longitude: data.route.pickupLocation.longitude,
+            }
+          );
+        }
+        
         setIsLoading(false);
+        setApiError(null);
       }
-
     } catch (error) {
-      console.log(`❌ Error fetching location: ${error}`);
+      addDebug(`❌ Error fetching route: ${error}`);
+      setApiError('Failed to load route data');
     }
   };
 
+  // Fetch live tracking data (lightweight polling)
+  const fetchLiveTracking = async () => {
+    if (!bookingId) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/live-tracking`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        addDebug(`⚠️ Live tracking fetch failed: ${response.status}`);
+        return;
+      }
+
+      const data: LiveTrackingResponse = await response.json();
+      
+      if (data.success) {
+        setPollingAttempts(prev => prev + 1);
+        
+        // Update provider location
+        if (data.location) {
+          setProviderLocation({
+            latitude: data.location.latitude,
+            longitude: data.location.longitude,
+            heading: data.location.heading || 0,
+            speed: data.location.speed || 0,
+            lastUpdate: data.location.lastUpdate,
+          });
+        }
+        
+        // Update status
+        if (data.status) {
+          setCurrentStatus(data.status);
+        }
+        
+        // Update ETA if provided
+        if (data.eta) setEta(data.eta);
+        if (data.distance) setDistance(data.distance);
+        if (data.providerName) setProviderName(data.providerName);
+        if (data.providerPhone) setProviderPhone(data.providerPhone);
+      }
+    } catch (error) {
+      addDebug(`❌ Error fetching live tracking: ${error}`);
+    }
+  };
+
+  // Fetch job status - THIS IS THE KEY FUNCTION THAT POLLS EVERY 10 SECONDS
   const fetchJobStatus = async () => {
     if (!bookingId || navigationInProgress.current) return;
 
@@ -254,61 +386,32 @@ const TrackProviderScreen = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const url = `${API_BASE_URL}/api/jobs/${bookingId}/status`;
-      console.log(`📊 Checking job status...`);
-      
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/status`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
       });
 
-      if (!response.ok) return;
+      if (!response.ok) {
+        addDebug(`⚠️ Job status fetch failed: ${response.status}`);
+        return;
+      }
 
       const data: JobStatusResponse = await response.json();
-      console.log(`📊 Job status: ${data.status}`);
+      addDebug(`📊 Job status: ${data.status}`);
 
-      // Update current status
       setCurrentStatus(data.status);
 
       // Update ETA if provided
-      if (data.eta) {
-        setEta(data.eta);
-      }
+      if (data.eta) setEta(data.eta);
+      if (data.distance) setDistance(data.distance);
 
-      // Update distance if provided
-      if (data.distance) {
-        setDistance(data.distance);
-      }
-
-      // ===== HANDLE PROVIDER ARRIVAL =====
-      if (data.status === 'arrived') {
-        // Check if we've already added this update
-        if (!updates.some(u => u.type === 'arrived')) {
-          console.log('✅ Provider has ARRIVED!');
-          
-          const newUpdate: UpdateEvent = {
-            id: Date.now().toString(),
-            type: 'arrived',
-            message: 'Provider has arrived at your location',
-            timestamp: new Date(),
-          };
-          setUpdates(prev => [newUpdate, ...prev]);
-          
-          // Show alert to user
-          Alert.alert(
-            'Provider Arrived',
-            `${providerName} has arrived at your location. Please go outside to meet them.`,
-            [{ text: 'OK' }]
-          );
-        }
-      }
-
-      // ===== HANDLE SERVICE STARTED =====
+      // ===== AUTO-NAVIGATE WHEN SERVICE STARTS =====
+      // When provider starts service, status becomes 'in_progress' in backend,
+      // which is mapped to 'started' for frontend
       if (data.status === 'started') {
-        console.log('✅✅✅ SERVICE HAS STARTED - Navigating to ServiceInProgress');
+        addDebug('✅✅✅ SERVICE HAS STARTED - Auto-navigating to ServiceInProgress');
         
-        // Check if we've already added this update
         if (!updates.some(u => u.type === 'started')) {
           const newUpdate: UpdateEvent = {
             id: Date.now().toString(),
@@ -319,7 +422,6 @@ const TrackProviderScreen = () => {
           setUpdates(prev => [newUpdate, ...prev]);
         }
 
-        // Navigate to ServiceInProgress if not already navigating
         if (!navigationInProgress.current) {
           navigationInProgress.current = true;
           
@@ -352,70 +454,51 @@ const TrackProviderScreen = () => {
         }
       }
 
-      // ===== HANDLE SERVICE COMPLETED =====
-      if (data.status === 'completed') {
-        console.log('✅ Service completed');
-        
-        if (!updates.some(u => u.type === 'completed')) {
-          const newUpdate: UpdateEvent = {
-            id: Date.now().toString(),
-            type: 'completed',
-            message: 'Service completed',
-            timestamp: new Date(),
-          };
-          setUpdates(prev => [newUpdate, ...prev]);
-        }
-
-        // You could navigate to a completion/rating screen here
-        // router.push({ pathname: '/(customer)/ServiceCompleted', params: { bookingId } });
-      }
-
     } catch (error) {
-      console.log('Error checking job status:', error);
+      addDebug(`❌ Error checking job status: ${error}`);
     }
+  };
+
+  const startPolling = () => {
+    addDebug('🔄 Starting polling (every 10 seconds)');
+    
+    // Fetch route data first (only once)
+    fetchRouteData();
+    
+    const poll = async () => {
+      if (!isMounted.current || navigationInProgress.current) return;
+      
+      await Promise.all([
+        fetchLiveTracking(),
+        fetchJobStatus() // ← This runs every 10 seconds and checks for 'started' status
+      ]);
+      
+      if (isMounted.current && !navigationInProgress.current) {
+        pollingTimer.current = setTimeout(poll, 10000);
+      }
+    };
+    
+    // Start first poll after 2 seconds
+    setTimeout(poll, 2000);
   };
 
   const getUserLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
+        addDebug('⚠️ Location permission denied');
         Alert.alert('Permission denied', 'Location permission is required for tracking');
         return;
       }
+      addDebug('✅ Location permission granted');
     } catch (error) {
-      console.error('Error getting location permission:', error);
+      addDebug(`❌ Error getting location permission: ${error}`);
     }
   };
 
-  const getRoute = async (origin: Coordinates, destination: Coordinates) => {
-    try {
-      const apiKey = Platform.select({
-        android: ANDROID_API_KEY,
-        ios: IOS_API_KEY,
-      });
-
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&key=${apiKey}`;
-
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.routes.length > 0) {
-        const points = decodePolyline(data.routes[0].overview_polyline.points);
-        setRouteCoordinates(points);
-
-        // Update ETA and distance from route
-        if (data.routes[0].legs.length > 0) {
-          const leg = data.routes[0].legs[0];
-          setEta(leg.duration.text);
-          setDistance(leg.distance.text);
-        }
-      }
-    } catch (error) {
-      console.error('Error getting route:', error);
-    }
-  };
-
-  const decodePolyline = (t: string, e: number = 5) => {
+  const decodePolyline = (t: string) => {
+    if (!t) return [];
+    
     let points = [];
     let lat = 0;
     let lng = 0;
@@ -459,7 +542,7 @@ const TrackProviderScreen = () => {
   };
 
   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !coord1 || !coord2) return;
 
     const latitudes = [coord1.latitude, coord2.latitude];
     const longitudes = [coord1.longitude, coord2.longitude];
@@ -485,6 +568,7 @@ const TrackProviderScreen = () => {
 
   const handleCall = () => {
     if (providerPhone) {
+      addDebug(`📞 Calling provider: ${providerPhone}`);
       Linking.openURL(`tel:${providerPhone}`);
     } else {
       Alert.alert('Call', `Calling ${providerName}...`);
@@ -492,6 +576,7 @@ const TrackProviderScreen = () => {
   };
 
   const handleMessage = () => {
+    addDebug(`💬 Opening chat with provider`);
     router.push({
       pathname: '/(customer)/Chat',
       params: {
@@ -500,56 +585,6 @@ const TrackProviderScreen = () => {
         bookingId,
       }
     });
-  };
-
-  const handleStartService = () => {
-    // This button should only appear when provider has arrived
-    Alert.alert(
-      'Start Service',
-      'Have you met the provider and are you ready to start the service?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Yes, Start',
-          onPress: async () => {
-            try {
-              // Update status via API
-              const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/start`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-              });
-
-              // The next poll will detect 'started' status and navigate
-              // But we can also navigate immediately
-              navigationInProgress.current = true;
-              
-              router.push({
-                pathname: '/(customer)/ServiceInProgress',
-                params: {
-                  bookingId,
-                  providerName,
-                  providerId,
-                  providerPhone,
-                  serviceType,
-                  vehicleType,
-                  pickupLocation: pickupAddress,
-                  pickupLat: pickupLat.toString(),
-                  pickupLng: pickupLng.toString(),
-                  totalAmount,
-                }
-              });
-            } catch (error) {
-              console.error('Error starting service:', error);
-              Alert.alert('Error', 'Failed to start service. Please try again.');
-            }
-          }
-        }
-      ]
-    );
   };
 
   const handleContactSupport = () => {
@@ -566,6 +601,7 @@ const TrackProviderScreen = () => {
 
   const handleRecenter = () => {
     if (providerLocation && pickupLocation) {
+      addDebug(`🗺️ Recentering map`);
       fitMapToCoordinates(providerLocation, pickupLocation);
     } else if (providerLocation) {
       mapRef.current?.animateToRegion({
@@ -579,6 +615,7 @@ const TrackProviderScreen = () => {
 
   const handleOpenInMaps = () => {
     if (providerLocation && pickupLocation) {
+      addDebug(`🗺️ Opening in external maps app`);
       const url = Platform.select({
         ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${pickupLocation.latitude},${pickupLocation.longitude}`,
         android: `google.navigation:q=${pickupLocation.latitude},${pickupLocation.longitude}`,
@@ -591,12 +628,14 @@ const TrackProviderScreen = () => {
   };
 
   const forceRefresh = () => {
-    console.log('🔄 Manually refreshing');
-    fetchProviderLocation();
+    addDebug('🔄 Manually refreshing');
+    fetchLiveTracking();
     fetchJobStatus();
+    if (!initialRouteFetched.current) {
+      fetchRouteData();
+    }
   };
 
-  // Format time for updates
   const formatTime = (date: Date) => {
     const now = new Date();
     const diffMinutes = Math.floor((now.getTime() - date.getTime()) / 60000);
@@ -606,8 +645,15 @@ const TrackProviderScreen = () => {
     return `${diffMinutes} min ago`;
   };
 
-  // Check if provider has arrived (to show Start Service button)
-  const hasProviderArrived = currentStatus === 'arrived';
+  if (isLoading && !providerLocation) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#68bdee" />
+        <Text style={styles.loadingText}>Loading tracking data...</Text>
+        {apiError && <Text style={styles.errorText}>{apiError}</Text>}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -616,11 +662,11 @@ const TrackProviderScreen = () => {
         {isLoading && (
           <View style={styles.mapLoader}>
             <ActivityIndicator size="large" color="#68bdee" />
-            <Text style={styles.mapLoaderText}>Loading provider location...</Text>
+            <Text style={styles.mapLoaderText}>Loading route...</Text>
           </View>
         )}
 
-        {/* Debug Button - TEMPORARY for testing */}
+        {/* Debug Button */}
         <TouchableOpacity 
           style={styles.debugButton}
           onPress={forceRefresh}
@@ -637,11 +683,15 @@ const TrackProviderScreen = () => {
           showsMyLocationButton={false}
           showsTraffic={true}
           showsCompass={true}
+          onMapReady={() => addDebug('🗺️ Map is ready')}
         >
           {/* Provider Marker */}
           {providerLocation && (
             <Marker
-              coordinate={providerLocation}
+              coordinate={{
+                latitude: providerLocation.latitude,
+                longitude: providerLocation.longitude
+              }}
               title={providerName}
               description="Your provider"
             >
@@ -654,9 +704,12 @@ const TrackProviderScreen = () => {
           {/* Pickup Marker */}
           {pickupLocation && (
             <Marker
-              coordinate={pickupLocation}
+              coordinate={{
+                latitude: pickupLocation.latitude,
+                longitude: pickupLocation.longitude
+              }}
               title="Your Location"
-              description="Pickup point"
+              description={pickupAddress}
             >
               <View style={styles.pickupMarker}>
                 <Ionicons name="location" size={24} color="#ff4444" />
@@ -664,14 +717,20 @@ const TrackProviderScreen = () => {
             </Marker>
           )}
 
-          {/* Dropoff Marker (if available) */}
-          {dropoffLocation && (
+          {/* Dropoff Marker - Only show if coordinates exist */}
+          {dropoffLocation && dropoffLocation.latitude && dropoffLocation.longitude && (
             <Marker
-              coordinate={dropoffLocation}
+              coordinate={{
+                latitude: dropoffLocation.latitude,
+                longitude: dropoffLocation.longitude
+              }}
               title="Destination"
-              description="Dropoff point"
-              pinColor="#10B981"
-            />
+              description={dropoffAddress}
+            >
+              <View style={styles.dropoffMarker}>
+                <Ionicons name="flag" size={20} color="#10B981" />
+              </View>
+            </Marker>
           )}
 
           {/* Route Polyline */}
@@ -693,15 +752,14 @@ const TrackProviderScreen = () => {
           </View>
         </View>
 
-        {/* Status Badge - Shows current job status */}
+        {/* Status Badge */}
         <View style={[
           styles.statusBadge,
-          hasProviderArrived ? styles.statusBadgeGreen : styles.statusBadgeBlue
+          currentStatus === 'started' ? styles.statusBadgeGreen : styles.statusBadgeBlue
         ]}>
           <Text style={styles.statusText}>
-            {currentStatus === 'arrived' ? 'PROVIDER ARRIVED' : 
-             currentStatus === 'started' ? 'SERVICE STARTED' :
-             currentStatus === 'en-route' ? 'ON THE WAY' :
+            {currentStatus === 'started' ? 'SERVICE STARTED' :
+             currentStatus === 'accepted' ? 'ON THE WAY' :
              currentStatus?.toUpperCase() || 'EN ROUTE'}
           </Text>
         </View>
@@ -729,7 +787,6 @@ const TrackProviderScreen = () => {
 
       {/* Bottom Sheet */}
       <View style={styles.bottomSheet}>
-        {/* Drag Handle */}
         <View style={styles.dragHandle} />
 
         <ScrollView
@@ -741,8 +798,8 @@ const TrackProviderScreen = () => {
             <View style={styles.providerTextContainer}>
               <Text style={styles.providerName}>{providerName}</Text>
               <Text style={styles.providerStatus}>
-                {hasProviderArrived 
-                  ? 'Provider has arrived at your location' 
+                {currentStatus === 'started' 
+                  ? 'Service has started' 
                   : providerLocation 
                     ? 'Moving towards your location' 
                     : 'Waiting for location...'}
@@ -788,9 +845,9 @@ const TrackProviderScreen = () => {
               </View>
               <View style={styles.locationTextContainer}>
                 <Text style={styles.locationLabel}>Provider Current Location</Text>
-                <Text style={styles.locationValue}>
+                <Text style={styles.locationValue} numberOfLines={2}>
                   {providerLocation
-                    ? `${providerLocation.latitude.toFixed(4)}, ${providerLocation.longitude.toFixed(4)}`
+                    ? `${providerLocation.latitude.toFixed(6)}, ${providerLocation.longitude.toFixed(6)}`
                     : 'Loading...'
                   }
                 </Text>
@@ -803,14 +860,26 @@ const TrackProviderScreen = () => {
               <View style={styles.locationDotOutline} />
               <View style={styles.locationTextContainer}>
                 <Text style={styles.locationLabel}>Your Location</Text>
-                <Text style={styles.locationValue}>
-                  {pickupLocation
-                    ? `${pickupLocation.latitude.toFixed(4)}, ${pickupLocation.longitude.toFixed(4)}`
-                    : 'Loading...'
-                  }
+                <Text style={styles.locationValue} numberOfLines={2}>
+                  {pickupAddress}
                 </Text>
               </View>
             </View>
+
+            {dropoffLocation && dropoffLocation.latitude && dropoffLocation.longitude && (
+              <>
+                <View style={styles.locationConnector} />
+                <View style={styles.locationItem}>
+                  <View style={[styles.locationDotOutline, { borderColor: '#10B981' }]} />
+                  <View style={styles.locationTextContainer}>
+                    <Text style={styles.locationLabel}>Destination</Text>
+                    <Text style={styles.locationValue} numberOfLines={2}>
+                      {dropoffAddress || 'Dropoff location'}
+                    </Text>
+                  </View>
+                </View>
+              </>
+            )}
           </View>
 
           {/* Updates Card */}
@@ -821,7 +890,7 @@ const TrackProviderScreen = () => {
               <View key={update.id} style={styles.updateItem}>
                 <View style={[
                   styles.updateDot,
-                  update.type === 'accepted' || update.type === 'en-route' || update.type === 'arrived' || update.type === 'started'
+                  update.type === 'accepted' || update.type === 'started'
                     ? styles.updateDotGreen
                     : styles.updateDotGray
                 ]} />
@@ -832,26 +901,6 @@ const TrackProviderScreen = () => {
               </View>
             ))}
           </View>
-
-          {/* Start Service Button - Only show when provider has arrived */}
-          {hasProviderArrived && (
-            <TouchableOpacity
-              style={styles.startServiceButton}
-              onPress={handleStartService}
-              activeOpacity={0.8}
-            >
-              <LinearGradient
-                colors={['#68bdee', '#4a9fd6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.gradientButton}
-              >
-                <Text style={styles.startServiceText}>
-                  Provider Arrived - Start Service
-                </Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          )}
 
           {/* Contact Support Button */}
           <TouchableOpacity
@@ -873,6 +922,24 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#e8f4f8',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#8c8c8c',
+  },
+  errorText: {
+    marginTop: 10,
+    fontSize: 12,
+    color: '#ff4444',
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   mapSection: {
     height: height * 0.5,
@@ -928,6 +995,13 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 2,
     borderColor: '#ff4444',
+  },
+  dropoffMarker: {
+    backgroundColor: 'white',
+    padding: 6,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#10B981',
   },
   arrivingBadge: {
     position: 'absolute',
@@ -1282,23 +1356,6 @@ const styles = StyleSheet.create({
   updateTime: {
     fontSize: 11,
     color: '#b0b0b0',
-  },
-  startServiceButton: {
-    marginBottom: 12,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  gradientButton: {
-    paddingVertical: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  startServiceText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   supportButton: {
     backgroundColor: '#FFFFFF',

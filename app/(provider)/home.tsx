@@ -927,77 +927,80 @@ const HomePage = () => {
     setSidebarVisible(false);
   };
 
-  const handleNotificationPress = () => {
-    console.log('🔔 Notification pressed, current job:', currentJobRequest);
-    console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
+const handleNotificationPress = () => {
+  console.log('🔔 Notification pressed, current job:', currentJobRequest);
+  console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
 
-    if (currentJobRequest) {
-      const jobId = currentJobRequest.id || currentJobRequest.bookingId || '';
+  if (currentJobRequest) {
+    const jobId = currentJobRequest.id || currentJobRequest.bookingId || '';
 
-      // Mark this job as seen before navigating
-      if (jobId) {
-        markJobAsSeen(jobId);
-      }
-
-      // Log the data being sent
-      console.log('📤 Navigating with job data:', {
-        jobId: currentJobRequest.id,
-        customerName: currentJobRequest.customerName,
-        serviceType: currentJobRequest.serviceType,
-      });
-
-      // Remove this job from queue after marking as seen
-      setJobRequestQueue(prev => {
-        const newQueue = { ...prev };
-        delete newQueue[jobId];
-        return newQueue;
-      });
-
-      // Navigate with all job data
-      router.push({
-        pathname: '/NewRequestNotification',
-        params: {
-          jobId: currentJobRequest.id,
-          bookingId: currentJobRequest.bookingId || currentJobRequest.id,
-          customerName: currentJobRequest.customerName,
-          customerPhone: currentJobRequest.customerPhone || '',
-          customerRating: currentJobRequest.customerRating?.toString() || '',
-          serviceType: currentJobRequest.serviceType,
-          serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
-          serviceId: currentJobRequest.serviceId || '',
-          pickupLocation: currentJobRequest.pickupLocation,
-          pickupLat: currentJobRequest.pickupLat?.toString() || '',
-          pickupLng: currentJobRequest.pickupLng?.toString() || '',
-          dropoffLocation: currentJobRequest.dropoffLocation || '',
-          dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
-          dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
-          distance: currentJobRequest.distance,
-          estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
-          price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
-          urgency: currentJobRequest.urgency || 'normal',
-          timestamp: currentJobRequest.timestamp,
-          description: currentJobRequest.description || '',
-          vehicleType: currentJobRequest.vehicleType || currentJobRequest.vehicleDetails?.type || '',
-          vehicleMakeModel: currentJobRequest.vehicleMakeModel || currentJobRequest.vehicleDetails?.makeModel || '',
-          vehicleYear: currentJobRequest.vehicleYear || currentJobRequest.vehicleDetails?.year || '',
-          vehicleColor: currentJobRequest.vehicleColor || currentJobRequest.vehicleDetails?.color || '',
-          vehicleLicensePlate: currentJobRequest.vehicleLicensePlate || currentJobRequest.vehicleDetails?.licensePlate || '',
-          issues: JSON.stringify(currentJobRequest.issues || []),
-          photos: JSON.stringify(currentJobRequest.photos || []),
-          queueSize: Object.keys(jobRequestQueue).length.toString(),
-          isLastInQueue: (Object.keys(jobRequestQueue).length === 0).toString(),
-        }
-      });
-    } else {
-      Alert.alert(
-        'No Job Requests',
-        Object.keys(jobRequestQueue).length > 0
-          ? 'Loading next request...'
-          : 'No pending job requests at the moment.',
-        [{ text: 'OK' }]
-      );
+    // Mark this job as seen before navigating
+    if (jobId) {
+      markJobAsSeen(jobId);
     }
-  };
+
+    // Log the data being sent
+    console.log('📤 Navigating with job data:', {
+      jobId: currentJobRequest.id,
+      customerName: currentJobRequest.customerName,
+      serviceType: currentJobRequest.serviceType,
+    });
+
+    // ✅ FIXED: Remove this job from queue BEFORE navigating
+    setJobRequestQueue(prev => {
+      const newQueue = { ...prev };
+      delete newQueue[jobId];
+      return newQueue;
+    });
+
+    // ✅ Also clear currentJobRequest
+    setCurrentJobRequest(null);
+
+    // Navigate with all job data
+    router.push({
+      pathname: '/NewRequestNotificationScreen',
+      params: {
+        jobId: currentJobRequest.id,
+        bookingId: currentJobRequest.bookingId || currentJobRequest.id,
+        customerName: currentJobRequest.customerName,
+        customerPhone: currentJobRequest.customerPhone || '',
+        customerRating: currentJobRequest.customerRating?.toString() || '',
+        serviceType: currentJobRequest.serviceType,
+        serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
+        serviceId: currentJobRequest.serviceId || '',
+        pickupLocation: currentJobRequest.pickupLocation,
+        pickupLat: currentJobRequest.pickupLat?.toString() || '',
+        pickupLng: currentJobRequest.pickupLng?.toString() || '',
+        dropoffLocation: currentJobRequest.dropoffLocation || '',
+        dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
+        dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
+        distance: currentJobRequest.distance,
+        estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
+        price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
+        urgency: currentJobRequest.urgency || 'normal',
+        timestamp: currentJobRequest.timestamp,
+        description: currentJobRequest.description || '',
+        vehicleType: currentJobRequest.vehicleType || currentJobRequest.vehicleDetails?.type || '',
+        vehicleMakeModel: currentJobRequest.vehicleMakeModel || currentJobRequest.vehicleDetails?.makeModel || '',
+        vehicleYear: currentJobRequest.vehicleYear || currentJobRequest.vehicleDetails?.year || '',
+        vehicleColor: currentJobRequest.vehicleColor || currentJobRequest.vehicleDetails?.color || '',
+        vehicleLicensePlate: currentJobRequest.vehicleLicensePlate || currentJobRequest.vehicleDetails?.licensePlate || '',
+        issues: JSON.stringify(currentJobRequest.issues || []),
+        photos: JSON.stringify(currentJobRequest.photos || []),
+        queueSize: Object.keys(jobRequestQueue).length.toString(),
+        isLastInQueue: (Object.keys(jobRequestQueue).length === 0).toString(),
+      }
+    });
+  } else {
+    Alert.alert(
+      'No Job Requests',
+      Object.keys(jobRequestQueue).length > 0
+        ? 'Loading next request...'
+        : 'No pending job requests at the moment.',
+      [{ text: 'OK' }]
+    );
+  }
+};
 
   const markJobAsActive = (jobId: string) => {
     // Remove from queue
@@ -1274,14 +1277,14 @@ const HomePage = () => {
         )} */}
 
         {/* Active Job Queue Status */}
-        {Object.keys(jobRequestQueue).length > 0 && (
+        {/* {Object.keys(jobRequestQueue).length > 0 && (
           <View style={styles.queueStatusContainer}>
             <Ionicons name="notifications" size={16} color="#68bdee" />
             <Text style={styles.queueStatusText}>
               {Object.keys(jobRequestQueue).length} pending job request(s)
             </Text>
           </View>
-        )}
+        )} */}
 
         {/* Performance Container */}
         <View style={styles.performanceContainer}>
