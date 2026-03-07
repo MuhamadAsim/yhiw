@@ -15,7 +15,7 @@ import {
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 
 const { height, width } = Dimensions.get('window');
@@ -28,6 +28,11 @@ const GOOGLE_MAPS_API_KEY = Platform.select({
   ios: 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU',
   android: 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A',
 });
+
+interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
 
 interface JobDetails {
   bookingId: string;
@@ -55,15 +60,35 @@ export default function NavigateToCustomerScreen() {
   const mapRef = useRef<MapView>(null);
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
   const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
-  
+
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
-  const [currentLocation, setCurrentLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
-  const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
+  const [currentLocation, setCurrentLocation] = useState<Coordinates | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
+
+  const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
+    return !!coord &&
+      typeof coord.latitude === 'number' &&
+      typeof coord.longitude === 'number' &&
+      !isNaN(coord.latitude) &&
+      !isNaN(coord.longitude) &&
+      coord.latitude !== 0 &&
+      coord.longitude !== 0;
+  };
+
+  // Helper to safely parse float
+  const safeParseFloat = (value: any, defaultValue: number = 0): number => {
+    if (typeof value === 'undefined' || value === null) return defaultValue;
+    const parsed = parseFloat(String(value));
+    return isNaN(parsed) ? defaultValue : parsed;
+  };
+
+  // Helper to safely get string
+  const safeGetString = (value: any, defaultValue: string = ''): string => {
+    if (typeof value === 'undefined' || value === null) return defaultValue;
+    return String(value);
+  };
 
   // Debug logger
   const addDebug = (message: string, data?: any) => {
@@ -77,7 +102,7 @@ export default function NavigateToCustomerScreen() {
       if (!token) return;
 
       addDebug(`📡 Fetching active job details for: ${bookingId}`);
-      
+
       const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -89,9 +114,15 @@ export default function NavigateToCustomerScreen() {
         if (data.success && data.job) {
           addDebug('📦 Fresh job details received:', data.job);
           setJobDetails(prev => ({
-            ...prev,
-            ...data.job
-          }));
+            ...(prev || {}),
+            ...data.job,
+            // Ensure numbers are valid
+            pickupLat: safeParseFloat(data.job.pickupLat, prev?.pickupLat),
+            pickupLng: safeParseFloat(data.job.pickupLng, prev?.pickupLng),
+            dropoffLat: safeParseFloat(data.job.dropoffLat, prev?.dropoffLat),
+            dropoffLng: safeParseFloat(data.job.dropoffLng, prev?.dropoffLng),
+            customerRating: safeParseFloat(data.job.customerRating, 4.5),
+          } as JobDetails));
         }
       } else {
         addDebug(`⚠️ Failed to fetch active job: ${response.status}`);
@@ -108,31 +139,31 @@ export default function NavigateToCustomerScreen() {
       router.back();
       return;
     }
-    
+
     addDebug('📦 Setting initial job data from navigation params');
-    
-    // Set initial data from params (fast UI)
-    const jobFromParams = {
+
+    // Set initial data from params (fast UI) with safe parsing
+    const jobFromParams: JobDetails = {
       bookingId: bookingId,
-      customerName: params.customerName as string || 'Customer',
-      customerPhone: params.customerPhone as string || '',
-      customerRating: parseFloat(params.customerRating as string) || 4.5,
-      pickupLocation: params.pickupLocation as string || 'Pickup location',
-      pickupLat: params.pickupLat ? parseFloat(params.pickupLat as string) : undefined,
-      pickupLng: params.pickupLng ? parseFloat(params.pickupLng as string) : undefined,
-      dropoffLocation: params.dropoffLocation as string || undefined,
-      dropoffLat: params.dropoffLat ? parseFloat(params.dropoffLat as string) : undefined,
-      dropoffLng: params.dropoffLng ? parseFloat(params.dropoffLng as string) : undefined,
-      distance: params.distance as string || '2.5 km',
-      eta: params.eta as string || '8-10 minutes',
-      navigationTips: params.description as string || 'Located in underground parking. Call customer upon arrival.',
+      customerName: safeGetString(params.customerName, 'Customer'),
+      customerPhone: safeGetString(params.customerPhone, ''),
+      customerRating: safeParseFloat(params.customerRating, 4.5),
+      pickupLocation: safeGetString(params.pickupLocation, 'Pickup location'),
+      pickupLat: safeParseFloat(params.pickupLat, undefined),
+      pickupLng: safeParseFloat(params.pickupLng, undefined),
+      dropoffLocation: safeGetString(params.dropoffLocation, undefined),
+      dropoffLat: safeParseFloat(params.dropoffLat, undefined),
+      dropoffLng: safeParseFloat(params.dropoffLng, undefined),
+      distance: safeGetString(params.distance, '2.5 km'),
+      eta: safeGetString(params.eta, '8-10 minutes'),
+      navigationTips: safeGetString(params.description, 'Located in underground parking. Call customer upon arrival.'),
     };
-    
-    setJobDetails(jobFromParams as JobDetails);
-    
+
+    setJobDetails(jobFromParams);
+
     // Then fetch fresh data from backend
     fetchActiveJobDetails();
-    
+
     // Check location permission and start tracking
     checkLocationPermission();
 
@@ -173,6 +204,7 @@ export default function NavigateToCustomerScreen() {
     } catch (error) {
       addDebug('Error checking location permission:', error);
       setLocationPermission(false);
+      setIsLoading(false);
     }
   };
 
@@ -191,9 +223,11 @@ export default function NavigateToCustomerScreen() {
             { text: 'OK', onPress: () => router.back() }
           ]
         );
+        setIsLoading(false);
       }
     } catch (error) {
       addDebug('Error requesting location permission:', error);
+      setIsLoading(false);
     }
   };
 
@@ -207,13 +241,13 @@ export default function NavigateToCustomerScreen() {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       };
-      
+
       addDebug('📍 Current location:', currentLoc);
       setCurrentLocation(currentLoc);
       setIsLoading(false);
 
       // Center map on current location
-      if (mapRef.current) {
+      if (mapRef.current && isValidCoordinate(currentLoc)) {
         mapRef.current.animateToRegion({
           ...currentLoc,
           latitudeDelta: 0.02,
@@ -260,19 +294,23 @@ export default function NavigateToCustomerScreen() {
       addDebug('📍 Sending location update:', newLoc);
       setCurrentLocation(newLoc);
 
-      // Update route if we have destination
+      // Update route if we have valid destination
       if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
-        fetchRoute(newLoc, {
+        const destination = {
           latitude: jobDetails.pickupLat,
           longitude: jobDetails.pickupLng,
-        });
+        };
+
+        if (isValidCoordinate(newLoc) && isValidCoordinate(destination)) {
+          fetchRoute(newLoc, destination);
+        }
       }
 
       // Send to backend
       const token = await AsyncStorage.getItem('userToken');
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
 
-      if (token && firebaseUserId) {
+      if (token && firebaseUserId && isValidCoordinate(newLoc)) {
         const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/location`, {
           method: 'POST',
           headers: {
@@ -299,9 +337,15 @@ export default function NavigateToCustomerScreen() {
   };
 
   const fetchRoute = async (
-    start: { latitude: number; longitude: number },
-    end: { latitude: number; longitude: number }
+    start: Coordinates,
+    end: Coordinates
   ) => {
+    // Validate coordinates before fetching
+    if (!isValidCoordinate(start) || !isValidCoordinate(end)) {
+      addDebug('⚠️ Invalid coordinates for route fetch');
+      return;
+    }
+
     try {
       const response = await fetch(
         `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`
@@ -309,21 +353,30 @@ export default function NavigateToCustomerScreen() {
 
       const data = await response.json();
 
-      if (data.routes.length > 0) {
+      if (data.routes && data.routes.length > 0 && data.routes[0].overview_polyline) {
         const points = decodePolyline(data.routes[0].overview_polyline.points);
-        setRouteCoordinates(points);
-        addDebug(`🗺️ Route updated with ${points.length} points`);
+        // Filter out any invalid points
+        const validPoints = points.filter(point => isValidCoordinate(point));
 
-        // Update ETA and distance from route data
-        if (jobDetails) {
-          const leg = data.routes[0].legs[0];
-          setJobDetails(prev => ({
-            ...prev!,
-            distance: leg.distance.text,
-            eta: leg.duration.text,
-          }));
-          addDebug(`📊 New ETA: ${leg.duration.text}, Distance: ${leg.distance.text}`);
+        if (validPoints.length > 0) {
+          setRouteCoordinates(validPoints);
+          addDebug(`🗺️ Route updated with ${validPoints.length} points`);
+
+          // Update ETA and distance from route data
+          if (jobDetails && data.routes[0].legs && data.routes[0].legs.length > 0) {
+            const leg = data.routes[0].legs[0];
+            setJobDetails(prev => ({
+              ...prev!,
+              distance: leg.distance?.text || prev?.distance || 'Unknown',
+              eta: leg.duration?.text || prev?.eta || 'Unknown',
+            }));
+            addDebug(`📊 New ETA: ${leg.duration?.text}, Distance: ${leg.distance?.text}`);
+          }
+        } else {
+          addDebug('⚠️ No valid points in decoded polyline');
         }
+      } else {
+        addDebug('⚠️ No routes found in directions response');
       }
     } catch (error) {
       addDebug('Error fetching route:', error);
@@ -331,8 +384,12 @@ export default function NavigateToCustomerScreen() {
   };
 
   // Decode polyline function for Google Maps
-  const decodePolyline = (encoded: string) => {
-    const points = [];
+  const decodePolyline = (encoded: string): Coordinates[] => {
+    if (!encoded || typeof encoded !== 'string') {
+      return [];
+    }
+
+    const points: Coordinates[] = [];
     let index = 0, len = encoded.length;
     let lat = 0, lng = 0;
 
@@ -356,16 +413,21 @@ export default function NavigateToCustomerScreen() {
       const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
       lng += dlng;
 
-      points.push({
+      const point = {
         latitude: lat / 1e5,
         longitude: lng / 1e5,
-      });
+      };
+
+      // Only add if valid
+      if (!isNaN(point.latitude) && !isNaN(point.longitude)) {
+        points.push(point);
+      }
     }
     return points;
   };
 
   const handleCompass = () => {
-    if (currentLocation && mapRef.current) {
+    if (currentLocation && isValidCoordinate(currentLocation) && mapRef.current) {
       mapRef.current.animateToRegion({
         ...currentLocation,
         latitudeDelta: 0.02,
@@ -376,21 +438,54 @@ export default function NavigateToCustomerScreen() {
 
   const handleCall = () => {
     if (jobDetails?.customerPhone) {
-      Linking.openURL(`tel:${jobDetails.customerPhone}`);
+      const phoneNumber = `tel:${jobDetails.customerPhone}`;
+      Linking.canOpenURL(phoneNumber)
+        .then(supported => {
+          if (supported) {
+            return Linking.openURL(phoneNumber);
+          } else {
+            Alert.alert('Error', 'Cannot make phone calls from this device');
+          }
+        })
+        .catch(err => {
+          Alert.alert('Error', 'Failed to open phone app');
+        });
     } else {
-      Alert.alert('Call', 'Calling customer...');
+      Alert.alert('Call', 'No phone number available');
     }
   };
 
   const handleMessage = () => {
     if (jobDetails?.customerPhone) {
-      Linking.openURL(`sms:${jobDetails.customerPhone}`);
+      const smsUrl = Platform.select({
+        ios: `sms:${jobDetails.customerPhone}`,
+        android: `sms:${jobDetails.customerPhone}?body=Hello`,
+      });
+
+      if (smsUrl) {
+        Linking.canOpenURL(smsUrl)
+          .then(supported => {
+            if (supported) {
+              return Linking.openURL(smsUrl);
+            } else {
+              Alert.alert('Error', 'Cannot send messages from this device');
+            }
+          })
+          .catch(err => {
+            Alert.alert('Error', 'Failed to open messaging app');
+          });
+      }
     } else {
-      Alert.alert('Message', 'Opening message...');
+      Alert.alert('Message', 'No phone number available');
     }
   };
 
   const handleArrived = () => {
+    if (!jobDetails) {
+      Alert.alert('Error', 'Job details not loaded');
+      return;
+    }
+
     Alert.alert(
       'Arrived at Location',
       'Have you arrived at the pickup location?',
@@ -402,13 +497,13 @@ export default function NavigateToCustomerScreen() {
             // Just navigate - no API calls needed here
             router.push({
               pathname: '/ServiceInProgressScreen',
-              params: { 
-                bookingId,
-                customerName: jobDetails?.customerName,
-                customerPhone: jobDetails?.customerPhone,
-                serviceType: params.serviceType,
-                vehicleType: params.vehicleType,
-                estimatedEarnings: params.estimatedEarnings,
+              params: {
+                bookingId: bookingId || '',
+                customerName: jobDetails?.customerName || '',
+                customerPhone: jobDetails?.customerPhone || '',
+                serviceType: safeGetString(params.serviceType, ''),
+                vehicleType: safeGetString(params.vehicleType, ''),
+                estimatedEarnings: safeGetString(params.estimatedEarnings, '0'),
               }
             });
           }
@@ -432,7 +527,7 @@ export default function NavigateToCustomerScreen() {
           style: 'destructive',
           onPress: () => {
             router.replace('/(provider)/HomePage');
-            
+
             // Background cancellation
             const cancelApi = async () => {
               try {
@@ -456,6 +551,61 @@ export default function NavigateToCustomerScreen() {
     );
   };
 
+  // Get pickup coordinates for map
+  const getPickupCoordinates = (): Coordinates | null => {
+    if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
+      const coords = {
+        latitude: jobDetails.pickupLat,
+        longitude: jobDetails.pickupLng,
+      };
+      return isValidCoordinate(coords) ? coords : null;
+    }
+    return null;
+  };
+
+  // Get dropoff coordinates for map
+  const getDropoffCoordinates = (): Coordinates | null => {
+    if (jobDetails?.dropoffLat && jobDetails?.dropoffLng) {
+      const coords = {
+        latitude: jobDetails.dropoffLat,
+        longitude: jobDetails.dropoffLng,
+      };
+      return isValidCoordinate(coords) ? coords : null;
+    }
+    return null;
+  };
+
+  // Replace the getInitialRegion function with this fixed version:
+  const getInitialRegion = () => {
+    // First try current location
+    if (currentLocation && isValidCoordinate(currentLocation)) {
+      return {
+        latitude: currentLocation.latitude,
+        longitude: currentLocation.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+    }
+
+    // Then try pickup coordinates
+    const pickupCoords = getPickupCoordinates();
+    if (pickupCoords) {
+      return {
+        latitude: pickupCoords.latitude,
+        longitude: pickupCoords.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+    }
+
+    // Default fallback
+    return {
+      latitude: 26.2285,
+      longitude: 50.5860,
+      latitudeDelta: 0.02,
+      longitudeDelta: 0.02,
+    };
+  };
   // Show loading only while getting location
   if (isLoading) {
     return (
@@ -477,26 +627,18 @@ export default function NavigateToCustomerScreen() {
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={StyleSheet.absoluteFillObject}
-          initialRegion={{
-            latitude: currentLocation?.latitude || 26.2285,
-            longitude: currentLocation?.longitude || 50.5860,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          }}
+          initialRegion={getInitialRegion()}
           showsUserLocation={true}
           showsMyLocationButton={false}
           showsCompass={false}
           showsTraffic={true}
         >
-          {/* Pickup Marker */}
-          {jobDetails?.pickupLat && jobDetails?.pickupLng && (
+          {/* Pickup Marker - Only render if valid */}
+          {getPickupCoordinates() && (
             <Marker
-              coordinate={{
-                latitude: jobDetails.pickupLat,
-                longitude: jobDetails.pickupLng,
-              }}
+              coordinate={getPickupCoordinates()!}
               title="Pickup Location"
-              description={jobDetails.pickupLocation}
+              description={jobDetails?.pickupLocation || 'Pickup location'}
             >
               <View style={styles.pickupMarker}>
                 <Feather name="map-pin" size={24} color="#00C853" />
@@ -504,15 +646,12 @@ export default function NavigateToCustomerScreen() {
             </Marker>
           )}
 
-          {/* Dropoff Marker (if exists) */}
-          {jobDetails?.dropoffLat && jobDetails?.dropoffLng && (
+          {/* Dropoff Marker (if exists) - Only render if valid */}
+          {getDropoffCoordinates() && (
             <Marker
-              coordinate={{
-                latitude: jobDetails.dropoffLat,
-                longitude: jobDetails.dropoffLng,
-              }}
+              coordinate={getDropoffCoordinates()!}
               title="Dropoff Location"
-              description={jobDetails.dropoffLocation}
+              description={jobDetails?.dropoffLocation || 'Dropoff location'}
             >
               <View style={styles.dropoffMarker}>
                 <Feather name="flag" size={24} color="#F44336" />
@@ -520,8 +659,8 @@ export default function NavigateToCustomerScreen() {
             </Marker>
           )}
 
-          {/* Route Polyline */}
-          {routeCoordinates.length > 0 && (
+          {/* Route Polyline - FIXED: Only render if at least 2 valid coordinates */}
+          {routeCoordinates.length >= 2 && (
             <Polyline
               coordinates={routeCoordinates}
               strokeWidth={4}
@@ -597,7 +736,7 @@ export default function NavigateToCustomerScreen() {
               </View>
               <View style={styles.customerText}>
                 <Text style={styles.customerName}>{jobDetails?.customerName || 'Mohammed A.'}</Text>
-                <Text style={styles.customerRating}>⭐ {jobDetails?.customerRating || 4.5} Customer Rating</Text>
+                <Text style={styles.customerRating}>⭐ {jobDetails?.customerRating?.toFixed(1) || '4.5'} Customer Rating</Text>
               </View>
             </View>
 

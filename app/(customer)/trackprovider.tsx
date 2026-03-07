@@ -16,9 +16,10 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
+import ChatPopup from './components/ChatPopup'; // Adjust the path as needed
 
 const { height, width } = Dimensions.get('window');
-
+const [chatVisible, setChatVisible] = useState(false);
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
 interface Coordinates {

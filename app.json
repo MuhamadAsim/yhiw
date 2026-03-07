@@ -20,7 +20,12 @@
         "backgroundColor": "#E6F4FE"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A"
+        }
+      }
     },
 
     "web": {

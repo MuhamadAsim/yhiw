@@ -176,6 +176,45 @@ const HomePage = () => {
     longitudeDelta: 0.05,
   });
 
+
+  // Add this helper function at the top with your other interfaces
+  const isValidCoordinate = (coord: any): coord is { latitude: number; longitude: number } => {
+    return coord &&
+      typeof coord.latitude === 'number' &&
+      typeof coord.longitude === 'number' &&
+      !isNaN(coord.latitude) &&
+      !isNaN(coord.longitude) &&
+      coord.latitude !== 0 &&
+      coord.longitude !== 0;
+  };
+
+  // Helper to create a safe region
+  const createSafeRegion = (
+    latitude?: number,
+    longitude?: number,
+    latitudeDelta: number = 0.02,
+    longitudeDelta: number = 0.02
+  ): Region => {
+    // If we have valid coordinates, use them
+    if (typeof latitude === 'number' && typeof longitude === 'number' &&
+      !isNaN(latitude) && !isNaN(longitude) && latitude !== 0 && longitude !== 0) {
+      return {
+        latitude,
+        longitude,
+        latitudeDelta,
+        longitudeDelta,
+      };
+    }
+
+    // Default fallback (Faisalabad, Pakistan - your service area)
+    return {
+      latitude: 31.4504,
+      longitude: 73.1350,
+      latitudeDelta: 0.05,
+      longitudeDelta: 0.05,
+    };
+  };
+
   // Load provider data on mount
   useEffect(() => {
     loadProviderData();
@@ -386,9 +425,7 @@ const HomePage = () => {
       console.error('Error fetching recent jobs, showing empty:', error);
       setRecentJobs([]);
     }
-  };
-
-  const getCurrentLocation = async (isManualSelection: boolean = false) => {
+  }; const getCurrentLocation = async (isManualSelection: boolean = false) => {
     if (currentLocation?.isManual && !isManualSelection) {
       return currentLocation;
     }
@@ -437,7 +474,6 @@ const HomePage = () => {
       setIsLoadingLocation(false);
     }
   };
-
   const sendLocationToBackend = async (location: LocationData) => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
@@ -676,19 +712,20 @@ const HomePage = () => {
       openMapPicker();
     }
   };
-
   const openMapPicker = () => {
     setMapPickerVisible(true);
 
     if (locationPermission) {
       Location.getCurrentPositionAsync({})
         .then(async (location) => {
-          const newRegion = {
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude,
-            latitudeDelta: 0.02,
-            longitudeDelta: 0.02,
-          };
+          // Use the helper to create a safe region
+          const newRegion = createSafeRegion(
+            location.coords.latitude,
+            location.coords.longitude,
+            0.02,
+            0.02
+          );
+
           setMapRegion(newRegion);
           mapRef.current?.animateToRegion(newRegion, 1000);
 
@@ -709,16 +746,11 @@ const HomePage = () => {
         })
         .catch((error) => {
           console.log('Could not get current location for map:', error);
-          setMapRegion({
-            latitude: 26.2285,
-            longitude: 50.5860,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          });
+          // Use safe fallback
+          setMapRegion(createSafeRegion(undefined, undefined, 0.05, 0.05));
         });
     }
   };
-
   const searchLocation = async (query: string) => {
     if (query.length < 3) {
       setSearchSuggestions([]);
@@ -789,12 +821,14 @@ const HomePage = () => {
     setSearchQuery(suggestion.address);
     setShowSuggestions(false);
 
-    const newRegion = {
-      latitude: suggestion.latitude,
-      longitude: suggestion.longitude,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02,
-    };
+    // Use helper to create safe region
+    const newRegion = createSafeRegion(
+      suggestion.latitude,
+      suggestion.longitude,
+      0.02,
+      0.02
+    );
+
     setMapRegion(newRegion);
     mapRef.current?.animateToRegion(newRegion, 1000);
   };
@@ -927,80 +961,80 @@ const HomePage = () => {
     setSidebarVisible(false);
   };
 
-const handleNotificationPress = () => {
-  console.log('🔔 Notification pressed, current job:', currentJobRequest);
-  console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
+  const handleNotificationPress = () => {
+    console.log('🔔 Notification pressed, current job:', currentJobRequest);
+    console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
 
-  if (currentJobRequest) {
-    const jobId = currentJobRequest.id || currentJobRequest.bookingId || '';
+    if (currentJobRequest) {
+      const jobId = currentJobRequest.id || currentJobRequest.bookingId || '';
 
-    // Mark this job as seen before navigating
-    if (jobId) {
-      markJobAsSeen(jobId);
-    }
-
-    // Log the data being sent
-    console.log('📤 Navigating with job data:', {
-      jobId: currentJobRequest.id,
-      customerName: currentJobRequest.customerName,
-      serviceType: currentJobRequest.serviceType,
-    });
-
-    // ✅ FIXED: Remove this job from queue BEFORE navigating
-    setJobRequestQueue(prev => {
-      const newQueue = { ...prev };
-      delete newQueue[jobId];
-      return newQueue;
-    });
-
-    // ✅ Also clear currentJobRequest
-    setCurrentJobRequest(null);
-
-    // Navigate with all job data
-    router.push({
-      pathname: '/NewRequestNotificationScreen',
-      params: {
-        jobId: currentJobRequest.id,
-        bookingId: currentJobRequest.bookingId || currentJobRequest.id,
-        customerName: currentJobRequest.customerName,
-        customerPhone: currentJobRequest.customerPhone || '',
-        customerRating: currentJobRequest.customerRating?.toString() || '',
-        serviceType: currentJobRequest.serviceType,
-        serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
-        serviceId: currentJobRequest.serviceId || '',
-        pickupLocation: currentJobRequest.pickupLocation,
-        pickupLat: currentJobRequest.pickupLat?.toString() || '',
-        pickupLng: currentJobRequest.pickupLng?.toString() || '',
-        dropoffLocation: currentJobRequest.dropoffLocation || '',
-        dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
-        dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
-        distance: currentJobRequest.distance,
-        estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
-        price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
-        urgency: currentJobRequest.urgency || 'normal',
-        timestamp: currentJobRequest.timestamp,
-        description: currentJobRequest.description || '',
-        vehicleType: currentJobRequest.vehicleType || currentJobRequest.vehicleDetails?.type || '',
-        vehicleMakeModel: currentJobRequest.vehicleMakeModel || currentJobRequest.vehicleDetails?.makeModel || '',
-        vehicleYear: currentJobRequest.vehicleYear || currentJobRequest.vehicleDetails?.year || '',
-        vehicleColor: currentJobRequest.vehicleColor || currentJobRequest.vehicleDetails?.color || '',
-        vehicleLicensePlate: currentJobRequest.vehicleLicensePlate || currentJobRequest.vehicleDetails?.licensePlate || '',
-        issues: JSON.stringify(currentJobRequest.issues || []),
-        photos: JSON.stringify(currentJobRequest.photos || []),
-        queueSize: Object.keys(jobRequestQueue).length.toString(),
-        isLastInQueue: (Object.keys(jobRequestQueue).length === 0).toString(),
+      // Mark this job as seen before navigating
+      if (jobId) {
+        markJobAsSeen(jobId);
       }
-    });
-  } else {
-    Alert.alert(
-      'No Job Requests',
-      Object.keys(jobRequestQueue).length > 0
-        ? 'Loading next request...'
-        : 'No pending job requests at the moment.',
-      [{ text: 'OK' }]
-    );
-  }
-};
+
+      // Log the data being sent
+      console.log('📤 Navigating with job data:', {
+        jobId: currentJobRequest.id,
+        customerName: currentJobRequest.customerName,
+        serviceType: currentJobRequest.serviceType,
+      });
+
+      // ✅ FIXED: Remove this job from queue BEFORE navigating
+      setJobRequestQueue(prev => {
+        const newQueue = { ...prev };
+        delete newQueue[jobId];
+        return newQueue;
+      });
+
+      // ✅ Also clear currentJobRequest
+      setCurrentJobRequest(null);
+
+      // Navigate with all job data
+      router.push({
+        pathname: '/NewRequestNotificationScreen',
+        params: {
+          jobId: currentJobRequest.id,
+          bookingId: currentJobRequest.bookingId || currentJobRequest.id,
+          customerName: currentJobRequest.customerName,
+          customerPhone: currentJobRequest.customerPhone || '',
+          customerRating: currentJobRequest.customerRating?.toString() || '',
+          serviceType: currentJobRequest.serviceType,
+          serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
+          serviceId: currentJobRequest.serviceId || '',
+          pickupLocation: currentJobRequest.pickupLocation,
+          pickupLat: currentJobRequest.pickupLat?.toString() || '',
+          pickupLng: currentJobRequest.pickupLng?.toString() || '',
+          dropoffLocation: currentJobRequest.dropoffLocation || '',
+          dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
+          dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
+          distance: currentJobRequest.distance,
+          estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
+          price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
+          urgency: currentJobRequest.urgency || 'normal',
+          timestamp: currentJobRequest.timestamp,
+          description: currentJobRequest.description || '',
+          vehicleType: currentJobRequest.vehicleType || currentJobRequest.vehicleDetails?.type || '',
+          vehicleMakeModel: currentJobRequest.vehicleMakeModel || currentJobRequest.vehicleDetails?.makeModel || '',
+          vehicleYear: currentJobRequest.vehicleYear || currentJobRequest.vehicleDetails?.year || '',
+          vehicleColor: currentJobRequest.vehicleColor || currentJobRequest.vehicleDetails?.color || '',
+          vehicleLicensePlate: currentJobRequest.vehicleLicensePlate || currentJobRequest.vehicleDetails?.licensePlate || '',
+          issues: JSON.stringify(currentJobRequest.issues || []),
+          photos: JSON.stringify(currentJobRequest.photos || []),
+          queueSize: Object.keys(jobRequestQueue).length.toString(),
+          isLastInQueue: (Object.keys(jobRequestQueue).length === 0).toString(),
+        }
+      });
+    } else {
+      Alert.alert(
+        'No Job Requests',
+        Object.keys(jobRequestQueue).length > 0
+          ? 'Loading next request...'
+          : 'No pending job requests at the moment.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
 
   const markJobAsActive = (jobId: string) => {
     // Remove from queue

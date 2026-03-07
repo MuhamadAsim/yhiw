@@ -94,12 +94,39 @@ const VehicleContactInfoScreen = () => {
   // Waypoints state
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
 
+  // ========== HELPER FUNCTIONS ==========
+  
   // Helper function to safely get string from params
   const getStringParam = (param: string | string[] | undefined): string => {
     if (!param) return '';
     return Array.isArray(param) ? param[0] : param;
   };
 
+  // Helper function to safely parse boolean
+  const getBooleanParam = (param: string | string[] | undefined): boolean => {
+    const value = getStringParam(param);
+    return value === 'true' || value === 'True' || value === '1';
+  };
+
+  // Helper function to safely parse number
+  const getNumberParam = (param: string | string[] | undefined): number => {
+    const value = getStringParam(param);
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // Helper function to get error message
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object' && 'message' in error) {
+      return String(error.message);
+    }
+    return 'Unknown error occurred';
+  };
+
+  // ========== PARAMS ==========
+  
   // Get data from previous screen
   const pickupAddress = getStringParam(params.pickupAddress);
   const pickupLat = getStringParam(params.pickupLat);
@@ -110,35 +137,46 @@ const VehicleContactInfoScreen = () => {
   
   // Get waypoints from previous screen
   const waypointsParam = getStringParam(params.waypoints);
-  const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
+  const hasWaypoints = getBooleanParam(params.hasWaypoints);
   
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
   const serviceId = getStringParam(params.serviceId);
-  const locationSkippedParam = getStringParam(params.locationSkipped);
+  const locationSkippedParam = getBooleanParam(params.locationSkipped);
   
   // Get service-specific requirements
-  const requiresFuelType = getStringParam(params.requiresFuelType) === 'true';
-  const requiresLicense = getStringParam(params.requiresLicense) === 'true';
-  const requiresTextDescription = getStringParam(params.requiresTextDescription) === 'true';
+  const requiresFuelType = getBooleanParam(params.requiresFuelType);
+  const requiresLicense = getBooleanParam(params.requiresLicense);
+  const requiresTextDescription = getBooleanParam(params.requiresTextDescription);
+  const requiresDestination = getBooleanParam(params.requiresDestination);
+  const hasBooking = getBooleanParam(params.hasBooking);
+
+  // Additional params from previous screens
+  const serviceDescription = getStringParam(params.serviceDescription);
+  const serviceRating = getStringParam(params.serviceRating);
+  const serviceDistance = getStringParam(params.serviceDistance);
+  const serviceTime = getStringParam(params.serviceTime);
+  const comingFrom = getStringParam(params.comingFrom);
 
   // Check service types
   const isCarRental = serviceId === '11';
   const isFuelDelivery = serviceId === '3';
   const isSpareParts = serviceId === '12';
 
+  // ========== EFFECTS ==========
+
   // Parse waypoints from params
   useEffect(() => {
-    if (hasWaypoints && waypointsParam) {
-      try {
+    try {
+      if (hasWaypoints && waypointsParam) {
         const parsedWaypoints = JSON.parse(waypointsParam);
         setWaypoints(parsedWaypoints);
         console.log('Loaded waypoints:', parsedWaypoints);
-      } catch (error) {
-        console.error('Error parsing waypoints:', error);
-        setWaypoints([]);
       }
+    } catch (error) {
+      console.error('Error parsing waypoints:', getErrorMessage(error));
+      setWaypoints([]);
     }
   }, [waypointsParam, hasWaypoints]);
 
@@ -148,53 +186,53 @@ const VehicleContactInfoScreen = () => {
     loadSavedVehicles();
   }, []);
 
- useEffect(() => {
-  // Check if location was skipped
-  if (locationSkippedParam === 'true') {
-    setLocationSkipped(true);
-  }
+  // Debug logging on mount
+  useEffect(() => {
+    console.log('=====================================');
+    console.log('📱 VehicleContactInfo - RECEIVED DATA:');
+    console.log('=====================================');
+    
+    // Service Info
+    console.log('📦 SERVICE INFO:');
+    console.log('  • serviceId:', serviceId);
+    console.log('  • serviceName:', serviceName);
+    console.log('  • servicePrice:', servicePrice);
+    console.log('  • serviceCategory:', serviceCategory);
+    
+    // Location Data
+    console.log('📍 LOCATION DATA:');
+    console.log('  • pickupAddress:', pickupAddress);
+    console.log('  • pickupLat:', pickupLat);
+    console.log('  • pickupLng:', pickupLng);
+    console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+    console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+    console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+    
+    // Waypoints Data
+    console.log('🛑 WAYPOINTS DATA:');
+    console.log('  • hasWaypoints:', hasWaypoints);
+    console.log('  • parsed waypoints:', waypoints);
+    
+    // Service Requirements
+    console.log('⚙️ SERVICE REQUIREMENTS:');
+    console.log('  • requiresFuelType:', requiresFuelType);
+    console.log('  • requiresLicense:', requiresLicense);
+    console.log('  • requiresTextDescription:', requiresTextDescription);
+    console.log('  • isCarRental:', isCarRental);
+    console.log('  • isFuelDelivery:', isFuelDelivery);
+    console.log('  • isSpareParts:', isSpareParts);
+    console.log('  • locationSkipped:', locationSkippedParam);
+    
+    console.log('=====================================');
+    
+    // Set location skipped flag
+    if (locationSkippedParam) {
+      setLocationSkipped(true);
+    }
+  }, []);
 
-  // Log ALL received data for debugging
-  console.log('=====================================');
-  console.log('📱 VehicleContactInfo - RECEIVED DATA:');
-  console.log('=====================================');
-  
-  // Service Info
-  console.log('📦 SERVICE INFO:');
-  console.log('  • serviceId:', serviceId);
-  console.log('  • serviceName:', serviceName);
-  console.log('  • servicePrice:', servicePrice);
-  console.log('  • serviceCategory:', serviceCategory);
-  
-  // Location Data - WITH COORDINATES
-  console.log('📍 LOCATION DATA:');
-  console.log('  • pickupAddress:', pickupAddress);
-  console.log('  • pickupLat:', pickupLat);
-  console.log('  • pickupLng:', pickupLng);
-  console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
-  console.log('  • dropoffLat:', dropoffLat || '(not provided)');
-  console.log('  • dropoffLng:', dropoffLng || '(not provided)');
-  
-  // Waypoints Data
-  console.log('🛑 WAYPOINTS DATA:');
-  console.log('  • hasWaypoints:', hasWaypoints);
-  console.log('  • waypointsParam raw:', waypointsParam);
-  console.log('  • parsed waypoints:', waypoints);
-  
-  // Service Requirements
-  console.log('⚙️ SERVICE REQUIREMENTS:');
-  console.log('  • requiresFuelType:', requiresFuelType);
-  console.log('  • requiresLicense:', requiresLicense);
-  console.log('  • requiresTextDescription:', requiresTextDescription);
-  console.log('  • isCarRental:', isCarRental);
-  console.log('  • isFuelDelivery:', isFuelDelivery);
-  console.log('  • isSpareParts:', isSpareParts);
-  console.log('  • locationSkipped:', locationSkippedParam);
-  
-  console.log('=====================================');
-  
-}, [waypoints]);
-  // Load user data from AsyncStorage
+  // ========== DATA LOADING FUNCTIONS ==========
+
   const loadUserData = async () => {
     try {
       // Try to get userData first
@@ -217,45 +255,27 @@ const VehicleContactInfoScreen = () => {
           name = userData.firstName;
         }
         
-        if (name) {
-          setFullName(name);
-        }
-        
-        // Try to get email
-        if (userData.email) {
-          setEmail(userData.email);
-        }
-        
-        // Try to get phone
-        if (userData.phoneNumber) {
-          setPhoneNumber(userData.phoneNumber);
-        }
+        if (name) setFullName(name);
+        if (userData.email) setEmail(userData.email);
+        if (userData.phoneNumber) setPhoneNumber(userData.phoneNumber);
       }
       
-      // Also try to get user profile data from common keys
+      // Try other storage keys if needed
       const userProfileStr = await AsyncStorage.getItem('userProfile');
       if (userProfileStr && !fullName) {
         const userProfile = JSON.parse(userProfileStr);
         if (userProfile.name || userProfile.displayName) {
           setFullName(userProfile.name || userProfile.displayName);
         }
-        if (userProfile.email && !email) {
-          setEmail(userProfile.email);
-        }
-        if (userProfile.phone && !phoneNumber) {
-          setPhoneNumber(userProfile.phone);
-        }
+        if (userProfile.email && !email) setEmail(userProfile.email);
+        if (userProfile.phone && !phoneNumber) setPhoneNumber(userProfile.phone);
       }
       
-      // Try to get phone from separate key if not found
       if (!phoneNumber) {
         const phoneStr = await AsyncStorage.getItem('userPhone');
-        if (phoneStr) {
-          setPhoneNumber(phoneStr);
-        }
+        if (phoneStr) setPhoneNumber(phoneStr);
       }
       
-      // Try to get user from auth key
       const authUserStr = await AsyncStorage.getItem('authUser');
       if (authUserStr && !fullName) {
         const authUser = JSON.parse(authUserStr);
@@ -265,11 +285,11 @@ const VehicleContactInfoScreen = () => {
       }
       
     } catch (error) {
-      console.error('Error loading user data:', error);
+      console.error('Error loading user data:', getErrorMessage(error));
+      // Don't show alert - just log
     }
   };
 
-  // Load saved vehicles from AsyncStorage
   const loadSavedVehicles = async () => {
     try {
       setIsLoading(true);
@@ -282,14 +302,15 @@ const VehicleContactInfoScreen = () => {
         setSavedVehicles([]);
       }
     } catch (error) {
-      console.error('Error loading saved vehicles:', error);
+      console.error('Error loading saved vehicles:', getErrorMessage(error));
       setSavedVehicles([]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Check for duplicate vehicle before saving
+  // ========== VEHICLE FUNCTIONS ==========
+
   const isVehicleDuplicate = (vehicleData: {
     type: string;
     make: string;
@@ -308,7 +329,6 @@ const VehicleContactInfoScreen = () => {
     );
   };
 
-  // Save vehicle to AsyncStorage
   const saveVehicleToStorage = async (vehicleData: {
     type: string;
     make: string;
@@ -351,7 +371,7 @@ const VehicleContactInfoScreen = () => {
       Alert.alert('Success', 'Vehicle saved successfully!');
       return true;
     } catch (error) {
-      console.error('Error saving vehicle:', error);
+      console.error('Error saving vehicle:', getErrorMessage(error));
       Alert.alert('Error', 'Failed to save vehicle. Please try again.');
       return false;
     }
@@ -372,175 +392,222 @@ const VehicleContactInfoScreen = () => {
     { id: 'premium', label: 'Premium', icon: '⭐' },
   ];
 
+  // ========== HANDLER FUNCTIONS ==========
+
   const handleBack = () => {
-    router.back();
+    try {
+      router.back();
+    } catch (error) {
+      console.error('Back navigation error:', getErrorMessage(error));
+    }
   };
 
   const handleLicenseUpload = async (type: 'front' | 'back') => {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    
-    if (!permissionResult.granted) {
-      Alert.alert('Permission Required', 'Please grant access to your photo library to upload images.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.8,
-    });
-
-    if (!result.canceled) {
-      if (type === 'front') {
-        setLicenseFront(result.assets[0].uri);
-      } else {
-        setLicenseBack(result.assets[0].uri);
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Required', 'Please grant access to your photo library to upload images.');
+        return;
       }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        if (type === 'front') {
+          setLicenseFront(result.assets[0].uri);
+        } else {
+          setLicenseBack(result.assets[0].uri);
+        }
+      }
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      console.error('Error uploading license:', errorMessage);
+      Alert.alert('Error', 'Failed to upload image. Please try again.');
     }
   };
 
   const handleContinue = async () => {
-    // Validate required fields
-    if (!fullName.trim()) {
-      Alert.alert('Required Field', 'Please enter your full name');
-      return;
-    }
-    
-    if (!phoneNumber.trim()) {
-      Alert.alert('Required Field', 'Please enter your phone number');
-      return;
-    }
-
-    // If no saved vehicle selected, validate manual vehicle fields
-    if (!selectedVehicle) {
-      if (!selectedVehicleType) {
-        Alert.alert('Required Field', 'Please select a vehicle type');
-        return;
-      }
-    }
-
-    // For Car Rental, validate license upload
-    if (isCarRental || requiresLicense) {
-      if (!licenseFront || !licenseBack) {
-        Alert.alert('Required', 'Please upload both front and back of your driver\'s license');
-        return;
-      }
-    }
-
-    // For Fuel Delivery, validate fuel type
-    if (isFuelDelivery || requiresFuelType) {
-      if (!fuelType) {
-        Alert.alert('Required Field', 'Please select fuel type');
-        return;
-      }
-    }
-
-    // For Spare Parts, validate part description
-    if (isSpareParts || requiresTextDescription) {
-      if (!partDescription.trim()) {
-        Alert.alert('Required Field', 'Please describe the spare part you need');
-        return;
-      }
-    }
-
-    // Save vehicle if checkbox is checked and no existing vehicle selected
-    if (saveVehicle && !selectedVehicle) {
-      // Parse make and model from makeModel string
-      const makeModelParts = makeModel.trim().split(' ');
-      const make = makeModelParts[0] || '';
-      const model = makeModelParts.slice(1).join(' ') || '';
+    try {
+      console.log('📱 ===== CONTINUE CLICKED =====');
       
-      await saveVehicleToStorage({
-        type: selectedVehicleType,
-        make: make,
-        model: model,
-        year: year,
-        color: color,
-        plate: licensePlate,
+      // Validate required fields
+      if (!fullName.trim()) {
+        Alert.alert('Required Field', 'Please enter your full name');
+        return;
+      }
+      
+      if (!phoneNumber.trim()) {
+        Alert.alert('Required Field', 'Please enter your phone number');
+        return;
+      }
+
+      // If no saved vehicle selected, validate manual vehicle fields
+      if (!selectedVehicle) {
+        if (!selectedVehicleType) {
+          Alert.alert('Required Field', 'Please select a vehicle type');
+          return;
+        }
+      }
+
+      // For Car Rental, validate license upload
+      if (isCarRental || requiresLicense) {
+        if (!licenseFront || !licenseBack) {
+          Alert.alert('Required', 'Please upload both front and back of your driver\'s license');
+          return;
+        }
+      }
+
+      // For Fuel Delivery, validate fuel type
+      if (isFuelDelivery || requiresFuelType) {
+        if (!fuelType) {
+          Alert.alert('Required Field', 'Please select fuel type');
+          return;
+        }
+      }
+
+      // For Spare Parts, validate part description
+      if (isSpareParts || requiresTextDescription) {
+        if (!partDescription.trim()) {
+          Alert.alert('Required Field', 'Please describe the spare part you need');
+          return;
+        }
+      }
+
+      // Save vehicle if checkbox is checked and no existing vehicle selected
+      if (saveVehicle && !selectedVehicle) {
+        const makeModelParts = makeModel.trim().split(' ');
+        const make = makeModelParts[0] || '';
+        const model = makeModelParts.slice(1).join(' ') || '';
+        
+        await saveVehicleToStorage({
+          type: selectedVehicleType,
+          make: make,
+          model: model,
+          year: year,
+          color: color,
+          plate: licensePlate,
+        });
+      }
+
+      // Prepare navigation params with safe values
+      const navigationParams: Record<string, string> = {
+        // Location data from previous screen
+        pickupAddress: String(pickupAddress || ''),
+        pickupLat: String(pickupLat || '0'),
+        pickupLng: String(pickupLng || '0'),
+        dropoffAddress: String(dropoffAddress || ''),
+        dropoffLat: String(dropoffLat || '0'),
+        dropoffLng: String(dropoffLng || '0'),
+        
+        // Waypoints data
+        waypoints: waypointsParam || '[]',
+        hasWaypoints: String(hasWaypoints),
+        
+        // Service data from previous screen
+        serviceName: String(serviceName || ''),
+        servicePrice: String(servicePrice || '0'),
+        serviceCategory: String(serviceCategory || ''),
+        serviceId: String(serviceId || ''),
+        
+        // Additional service data to pass through
+        serviceDescription: String(serviceDescription || ''),
+        serviceRating: String(serviceRating || '4.8'),
+        serviceDistance: String(serviceDistance || ''),
+        serviceTime: String(serviceTime || ''),
+        comingFrom: String(comingFrom || ''),
+        
+        // Vehicle data
+        vehicleType: String(selectedVehicleType || ''),
+        makeModel: String(makeModel || ''),
+        year: String(year || ''),
+        color: String(color || ''),
+        licensePlate: String(licensePlate || ''),
+        selectedVehicle: selectedVehicle ? String(selectedVehicle) : '',
+        
+        // Contact data
+        fullName: String(fullName || ''),
+        phoneNumber: String(phoneNumber || ''),
+        email: String(email || ''),
+        emergencyContact: String(emergencyContact || ''),
+        saveVehicle: String(saveVehicle),
+        
+        // License data for Car Rental
+        licenseFront: String(licenseFront || ''),
+        licenseBack: String(licenseBack || ''),
+        
+        // Fuel type for Fuel Delivery
+        fuelType: String(fuelType || ''),
+        
+        // Part description for Spare Parts
+        partDescription: String(partDescription || ''),
+        
+        // Service requirements (pass through for next screens)
+        requiresDestination: String(requiresDestination),
+        requiresFuelType: String(requiresFuelType),
+        requiresLicense: String(requiresLicense),
+        hasBooking: String(hasBooking),
+        requiresTextDescription: String(requiresTextDescription),
+        
+        // Flag for location skipped
+        locationSkipped: String(locationSkippedParam),
+      };
+
+      console.log('✅ Navigation params prepared:', Object.keys(navigationParams).length, 'params');
+
+      // Navigate to additional details screen with all collected data
+      router.push({
+        pathname: '/(customer)/AdditionalDetails',
+        params: navigationParams
       });
+      
+      console.log('✅ Navigation successful');
+      console.log('===== CONTINUE COMPLETED =====\n');
+      
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      console.error('❌===== NAVIGATION ERROR =====');
+      console.error('Error:', errorMessage);
+      console.error('Stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.log('===== ERROR END =====\n');
+      
+      Alert.alert(
+        'Navigation Error',
+        `Unable to proceed to next step.\n\nDebug: ${errorMessage}\n\nPlease try again.`,
+        [{ text: 'OK' }]
+      );
     }
-
-    // Prepare navigation params
-    const navigationParams: Record<string, string> = {
-      // Location data from previous screen
-      pickupAddress,
-      pickupLat,
-      pickupLng,
-      dropoffAddress,
-      dropoffLat,
-      dropoffLng,
-      
-      // Waypoints data
-      waypoints: waypointsParam,
-      hasWaypoints: hasWaypoints ? 'true' : 'false',
-      
-      // Service data from previous screen
-      serviceName,
-      servicePrice,
-      serviceCategory,
-      serviceId,
-      
-      // Vehicle data
-      vehicleType: selectedVehicleType,
-      makeModel,
-      year,
-      color,
-      licensePlate,
-      selectedVehicle: selectedVehicle ? String(selectedVehicle) : '',
-      
-      // Contact data
-      fullName,
-      phoneNumber,
-      email,
-      emergencyContact,
-      saveVehicle: String(saveVehicle),
-      
-      // License data for Car Rental
-      licenseFront,
-      licenseBack,
-      
-      // Fuel type for Fuel Delivery
-      fuelType,
-      
-      // Part description for Spare Parts
-      partDescription,
-      
-      // Flag for location skipped
-      locationSkipped: locationSkipped ? 'true' : 'false',
-    };
-
-    // Navigate to additional details screen with all collected data
-    router.push({
-      pathname: '/(customer)/AdditionalDetails',
-      params: navigationParams
-    });
   };
 
   const handleSelectVehicle = (vehicleId: number) => {
-    setSelectedVehicle(vehicleId);
-    // Populate fields with selected vehicle data
-    const vehicle = savedVehicles.find(v => v.id === vehicleId);
-    if (vehicle) {
-      setSelectedVehicleType(vehicle.type.toLowerCase());
-      setMakeModel(vehicle.name || `${vehicle.make || ''} ${vehicle.model || ''}`.trim());
-      setColor(vehicle.color || '');
-      setLicensePlate(vehicle.plate || '');
-      setYear(vehicle.year || '');
+    try {
+      setSelectedVehicle(vehicleId);
+      const vehicle = savedVehicles.find(v => v.id === vehicleId);
+      if (vehicle) {
+        setSelectedVehicleType(vehicle.type.toLowerCase());
+        setMakeModel(vehicle.name || `${vehicle.make || ''} ${vehicle.model || ''}`.trim());
+        setColor(vehicle.color || '');
+        setLicensePlate(vehicle.plate || '');
+        setYear(vehicle.year || '');
+      }
+    } catch (error) {
+      console.error('Error selecting vehicle:', getErrorMessage(error));
     }
   };
 
   const handleSelectVehicleType = (typeId: string) => {
-    // Clear saved vehicle selection when manually entering
     setSelectedVehicle(null);
     setSelectedVehicleType(typeId);
   };
 
   const handleManualInput = () => {
-    // Clear saved vehicle selection when user starts typing in manual fields
     setSelectedVehicle(null);
   };
 
-  // Get service-specific helper text
   const getServiceHelperText = () => {
     if (serviceId === '11') {
       return "Driver's license upload required";
@@ -554,12 +621,11 @@ const VehicleContactInfoScreen = () => {
     return "This helps the provider identify your vehicle";
   };
 
-  // Get button text based on service
   const getButtonText = () => {
     return 'Continue to Additional Details';
   };
 
-
+  // ========== RENDER ==========
 
   return (
     <View style={styles.container}>
@@ -578,6 +644,15 @@ const VehicleContactInfoScreen = () => {
         </View>
       </View>
 
+      {/* Location Skipped Banner - Show if location was skipped */}
+      {locationSkippedParam && (
+        <View style={styles.locationSkippedBanner}>
+          <Ionicons name="information-circle" size={20} color="#3c3c3c" />
+          <Text style={styles.locationSkippedText}>
+            Location was not required for this service. You can proceed without entering a location.
+          </Text>
+        </View>
+      )}
 
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
@@ -1022,23 +1097,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-  },
- 
-  locationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  locationDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 10,
-  },
-  locationText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#3c3c3c',
   },
   locationSkippedBanner: {
     flexDirection: 'row',

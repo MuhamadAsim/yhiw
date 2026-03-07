@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   Image,
@@ -11,7 +12,6 @@ import {
   Text,
   TouchableOpacity,
   View,
-  ActivityIndicator,
 } from 'react-native';
 
 const { height } = Dimensions.get('window');
@@ -104,72 +104,96 @@ const ServiceCompletedScreen = () => {
     setRating(starIndex);
   };
 
-  const handleSubmitRating = async () => {
-    if (rating === 0) {
-      Alert.alert('Rating Required', 'Please rate your experience before continuing.');
+  // Add this cleanup function that can be called from multiple places
+const cleanupBookingData = async () => {
+  try {
+    await AsyncStorage.removeItem('currentBookingId');
+    console.log('✅ Current bookingId removed from storage');
+  } catch (error) {
+    console.error('Error removing bookingId:', error);
+  }
+};
+
+
+// Modified handleSubmitRating to clean up after successful submission
+const handleSubmitRating = async () => {
+  if (rating === 0) {
+    Alert.alert('Rating Required', 'Please rate your experience before continuing.');
+    return;
+  }
+
+  setIsSubmitting(true);
+
+  try {
+    const token = await AsyncStorage.getItem('userToken');
+    
+    if (!token) {
+      Alert.alert('Error', 'Authentication token not found');
+      setIsSubmitting(false);
       return;
     }
 
-    setIsSubmitting(true);
+    console.log('📡 Submitting rating for booking:', bookingId);
 
-    try {
-      const token = await AsyncStorage.getItem('userToken');
+    const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        rating,
+        providerId,
+        bookingId,
+      }),
+    });
+
+    const result = await response.json();
+    console.log('📡 Rating response:', response.status, result);
+
+    if (response.ok && result.success) {
+      // Clean up the booking data after successful rating
+      await cleanupBookingData();
       
-      if (!token) {
-        Alert.alert('Error', 'Authentication token not found');
-        setIsSubmitting(false);
-        return;
-      }
-
-      console.log('📡 Submitting rating for booking:', bookingId);
-
-      // Submit rating to backend
-      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          rating,
-          providerId,
-          bookingId,
-        }),
-      });
-
-      const result = await response.json();
-      console.log('📡 Rating response:', response.status, result);
-
-      if (response.ok && result.success) {
-        Alert.alert(
-          'Thank You!',
-          'Your feedback has been submitted successfully.',
-          [{ text: 'OK' }]
-        );
-        // Update rating to disable further submissions
-        setRating(rating);
+      Alert.alert(
+        'Thank You!',
+        'Your feedback has been submitted successfully.',
+        [{ text: 'OK' }]
+      );
+      setRating(rating);
+    } else {
+      if (response.status === 400 && result.message?.includes('already rated')) {
+        Alert.alert('Already Rated', 'You have already rated this service.');
       } else {
-        if (response.status === 400 && result.message?.includes('already rated')) {
-          Alert.alert('Already Rated', 'You have already rated this service.');
-        } else {
-          throw new Error(result.message || 'Failed to submit rating');
-        }
+        throw new Error(result.message || 'Failed to submit rating');
       }
-    } catch (error) {
-      console.error('Error submitting rating:', error);
-      Alert.alert('Error', 'Failed to submit rating. Please try again.');
-    } finally {
-      setIsSubmitting(false);
     }
-  };
+  } catch (error) {
+    console.error('Error submitting rating:', error);
+    Alert.alert('Error', 'Failed to submit rating. Please try again.');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   const handleDownloadReceipt = () => {
     Alert.alert('Download Receipt', 'Receipt will be downloaded to your device.');
   };
 
-  const handleBackToHome = () => {
+const handleBackToHome = async () => {
+  try {
+    // Remove the current bookingId from AsyncStorage
+    await AsyncStorage.removeItem('currentBookingId');
+    console.log('✅ Current bookingId removed from storage');
+    
+    // Navigate to home screen
     router.push('/(customer)/Home');
-  };
+  } catch (error) {
+    console.error('Error removing bookingId:', error);
+    // Still navigate even if removal fails
+    router.push('/(customer)/Home');
+  }
+};
 
   // Calculate completion time - FIXED: Use correct path
   const completionTime = jobDetails?.timeline?.completedAt || completedAtParam

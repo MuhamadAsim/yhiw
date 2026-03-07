@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ScrollView,
   Image,
+  Alert,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -315,49 +316,115 @@ const ServiceDetailsScreen = () => {
     }
   };
 
-  const handleBookNow = () => {
-  // Services that should skip location and go directly to vehicle contact info
-  const skipLocationServiceIds = ['11']; // Car Rental only skips location
+  // Debug function to check params on mount
+useEffect(() => {
+  console.log('📱 ServiceDetailsScreen mounted');
+  console.log('📦 All params received:', JSON.stringify(params, null, 2));
   
-  const shouldSkipLocation = skipLocationServiceIds.includes(serviceId as string);
-  
-  // Prepare params with ALL service requirements
-  const serviceParams = {
-    // Pass all service data
-    serviceId: serviceId as string,
-    serviceName: serviceName as string,
-    servicePrice: parsedPrice.toString(),
-    serviceCategory: serviceName as string,
-    
-    // Pass service-specific requirements as booleans
-    requiresDestination: serviceId === '1' ? 'true' : 'false', // Towing
-    requiresFuelType: serviceId === '3' ? 'true' : 'false',    // Fuel Delivery
-    requiresLicense: serviceId === '11' ? 'true' : 'false',    // Car Rental
-    hasBooking: (serviceId === '9' || serviceId === '10') ? 'true' : 'false', // Car Wash/Detailing
-    requiresTextDescription: serviceId === '12' ? 'true' : 'false', // Spare Parts
-    
-    // Flag to indicate location was skipped
-    locationSkipped: shouldSkipLocation ? 'true' : 'false'
-  };
-  
-  if (shouldSkipLocation) {
-    // For Car Rental - skip location
-    router.push({
-      pathname: '/(customer)/VehicleContactInfo',
-      params: {
-        // Pass placeholder location data
-        pickupAddress: 'Location not required for this service',
-        pickupLat: '0',
-        pickupLng: '0',
-        ...serviceParams
-      }
+  // Validate required params
+  if (!serviceId) {
+    console.warn('⚠️ Warning: No serviceId provided!');
+  }
+  if (!serviceName) {
+    console.warn('⚠️ Warning: No serviceName provided!');
+  }
+}, []);
+const handleBookNow = () => {
+  try {
+    console.log('📱 ===== BOOK NOW CLICKED =====');
+    console.log('📦 Raw params received:', {
+      serviceId,
+      serviceName,
+      servicePrice,
+      serviceRating,
+      comingFrom
     });
-  } else {
-    // Normal flow - go to location details first
-    router.push({
-      pathname: '/(customer)/LocationDetails',
-      params: serviceParams
-    });
+
+    // Services that should skip location
+    const skipLocationServiceIds = ['11'];
+    const shouldSkipLocation = skipLocationServiceIds.includes(serviceId as string);
+    
+    // CLEAN PARAMS - Only pass what's needed and ensure all values are strings
+    const serviceParams = {
+      // Essential service data - with fallbacks
+      serviceId: String(serviceId || ''),
+      serviceName: String(serviceName || 'Service'),
+      servicePrice: String(parsedPrice || '0'),
+      serviceCategory: String(serviceName || 'Service'),
+      serviceDescription: String(serviceDescription || ''),
+      serviceRating: String(serviceRating || '4.8'),
+      serviceDistance: String(serviceDistance || '1.5 km'),
+      serviceTime: String(serviceTime || '15-20 min'),
+      comingFrom: String(comingFrom || 'home'),
+      
+      // Service-specific flags - only pass if needed
+      ...(serviceId === '1' && { requiresDestination: 'true' }),
+      ...(serviceId === '3' && { requiresFuelType: 'true' }),
+      ...(serviceId === '11' && { requiresLicense: 'true' }),
+      ...((serviceId === '9' || serviceId === '10') && { hasBooking: 'true' }),
+      ...(serviceId === '12' && { requiresTextDescription: 'true' }),
+    };
+
+    // Log the cleaned params
+    console.log('✅ Cleaned params:', JSON.stringify(serviceParams, null, 2));
+    console.log('📍 Target screen:', shouldSkipLocation ? 'VehicleContactInfo' : 'LocationDetails');
+
+    // Validate critical params
+    if (!serviceParams.serviceId) {
+      throw new Error('Service ID is missing');
+    }
+
+    // Navigate with clean params
+    if (shouldSkipLocation) {
+      router.push({
+        pathname: '/(customer)/VehicleContactInfo',
+        params: {
+          pickupAddress: 'Location not required for this service',
+          pickupLat: '0',
+          pickupLng: '0',
+          ...serviceParams
+        }
+      });
+    } else {
+      router.push({
+        pathname: '/(customer)/LocationDetails',
+        params: serviceParams
+      });
+    }
+    
+    console.log('✅ Navigation successful');
+    console.log('===== BOOK NOW COMPLETED =====\n');
+    
+  } catch (error) {
+    // Error boundary - properly type the error
+    let errorMessage = 'Unknown error occurred';
+    
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      console.error('❌===== NAVIGATION ERROR =====');
+      console.error('Error name:', error.name);
+      console.error('Error message:', error.message);
+      console.error('Stack:', error.stack);
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+      console.error('❌ String error:', error);
+    } else {
+      console.error('❌ Unknown error type:', error);
+    }
+    
+    console.log('===== ERROR END =====\n');
+    
+    // Show user-friendly alert with debug info
+    Alert.alert(
+      'Navigation Error',
+      `Unable to proceed to booking.\n\nDebug Info:\n${errorMessage}\n\nPlease try again or contact support.`,
+      [
+        { 
+          text: 'OK', 
+          onPress: () => console.log('Error alert dismissed') 
+        }
+      ]
+    );
   }
 };
 
@@ -943,3 +1010,15 @@ const styles = StyleSheet.create({
 });
 
 export default ServiceDetailsScreen;
+
+
+
+
+
+
+
+
+
+
+
+

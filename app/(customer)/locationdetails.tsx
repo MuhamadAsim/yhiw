@@ -61,24 +61,24 @@ const LocationDetailsScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
-  
+
   const [pickupLocation, setPickupLocation] = useState<string>('');
   const [dropoffLocation, setDropoffLocation] = useState<string>('');
   const [pickupCoordinates, setPickupCoordinates] = useState<Coordinates | null>(null);
   const [dropoffCoordinates, setDropoffCoordinates] = useState<Coordinates | null>(null);
-  
+
   // New state for waypoints (intermediate stops)
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [activeWaypointIndex, setActiveWaypointIndex] = useState<number | null>(null);
-  
+
   const [pickupSuggestions, setPickupSuggestions] = useState<LocationSuggestion[]>([]);
   const [dropoffSuggestions, setDropoffSuggestions] = useState<LocationSuggestion[]>([]);
   const [waypointSuggestions, setWaypointSuggestions] = useState<LocationSuggestion[]>([]);
-  
+
   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
   const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
   const [showWaypointSuggestions, setShowWaypointSuggestions] = useState(false);
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
@@ -87,10 +87,10 @@ const LocationDetailsScreen = () => {
   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [firebaseUserId, setFirebaseUserId] = useState<string | null>(null);
-  
+
   // State for showing all saved locations
   const [showAllSavedLocations, setShowAllSavedLocations] = useState(false);
-  
+
   // Save location modal states
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [selectedLocationForSave, setSelectedLocationForSave] = useState<{
@@ -102,10 +102,11 @@ const LocationDetailsScreen = () => {
   const [saveLocationTitle, setSaveLocationTitle] = useState('');
   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
   const [isSavingLocation, setIsSavingLocation] = useState(false);
-  
+
+  // Update initial region to Faisalabad, Pakistan (your actual location area)
   const [region, setRegion] = useState<Region>({
-    latitude: 26.2285,
-    longitude: 50.5860,
+    latitude: 31.4504,  // Faisalabad latitude
+    longitude: 73.1350, // Faisalabad longitude
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
   });
@@ -121,7 +122,7 @@ const LocationDetailsScreen = () => {
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
-  
+
   // Get service-specific requirements
   const requiresDestination = getStringParam(params.requiresDestination);
   const requiresFuelType = getStringParam(params.requiresFuelType);
@@ -129,8 +130,57 @@ const LocationDetailsScreen = () => {
   const hasBooking = getStringParam(params.hasBooking);
   const requiresTextDescription = getStringParam(params.requiresTextDescription);
 
+
+
+
+  // Helper function to safely parse boolean
+  const getBooleanParam = (param: string | string[] | undefined): boolean => {
+    const value = getStringParam(param);
+    return value === 'true' || value === 'True' || value === '1';
+  };
+
+  // Helper function to safely parse number
+  const getNumberParam = (param: string | string[] | undefined): number => {
+    const value = getStringParam(param);
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  // Helper function to get error message
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object' && 'message' in error) {
+      return String(error.message);
+    }
+    return 'Unknown error occurred';
+  };
+
+  // Debug function to log params on mount
+  const logParams = (params: any) => {
+    console.log('📱 LocationDetailsScreen mounted');
+    console.log('📦 All params received:', JSON.stringify(params, null, 2));
+
+    // Check for critical params
+    const requiredParams = ['serviceId', 'serviceName', 'servicePrice'];
+    requiredParams.forEach(param => {
+      if (!params[param]) {
+        console.warn(`⚠️ Warning: Missing ${param} param!`);
+      }
+    });
+  };
+
+
+
+
+
+
+
+
+
   // Load user token and saved locations on mount
   useEffect(() => {
+    logParams(params); // Add this line
     loadUserData();
     getCurrentLocationAndSetDefault();
   }, []);
@@ -146,24 +196,24 @@ const LocationDetailsScreen = () => {
     } else if (dropoffCoordinates) {
       fitMapToSinglePoint(dropoffCoordinates);
     }
-  }, [waypoints.length]);
+  }, [waypoints.length, pickupCoordinates, dropoffCoordinates]);
 
   const loadUserData = async () => {
     try {
       // Get user token from AsyncStorage
       const token = await AsyncStorage.getItem('userToken');
       const userDataStr = await AsyncStorage.getItem('userData');
-      
+
       if (token && userDataStr) {
         setUserToken(token);
-        
+
         const userData = JSON.parse(userDataStr);
         console.log('User data loaded:', {
           firebaseUserId: userData.firebaseUserId,
           email: userData.email,
           role: userData.role
         });
-        
+
         // Store the firebaseUserId for API calls
         if (userData.firebaseUserId) {
           setFirebaseUserId(userData.firebaseUserId);
@@ -211,7 +261,7 @@ const LocationDetailsScreen = () => {
 
       const data = await response.json();
       console.log('Response data:', data);
-      
+
       if (data.success && data.data) {
         // Transform the data to match our SavedLocation interface
         const transformedLocations = data.data.map((loc: any) => ({
@@ -238,7 +288,7 @@ const LocationDetailsScreen = () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert(
-          'Permission denied', 
+          'Permission denied',
           'Please enable location services to automatically set your current location. You can manually enter a location instead.'
         );
         setIsGettingLocation(false);
@@ -248,7 +298,7 @@ const LocationDetailsScreen = () => {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      
+
       // Get address from coordinates (reverse geocoding)
       const [address] = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
@@ -256,8 +306,8 @@ const LocationDetailsScreen = () => {
       });
 
       // Format the address
-      const formattedAddress = address ? 
-        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '') 
+      const formattedAddress = address ?
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
         : 'Current Location';
 
       // Set pickup location to current location
@@ -280,7 +330,7 @@ const LocationDetailsScreen = () => {
     } catch (error) {
       console.error('Error getting location:', error);
       Alert.alert(
-        'Error', 
+        'Error',
         'Failed to get your current location. Please enter your pickup location manually.'
       );
     } finally {
@@ -299,15 +349,15 @@ const LocationDetailsScreen = () => {
       }
 
       const location = await Location.getCurrentPositionAsync({});
-      
+
       // Get address from coordinates
       const [address] = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
 
-      const formattedAddress = address ? 
-        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '') 
+      const formattedAddress = address ?
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
         : 'Current Location';
 
       // Update pickup location if it's empty, otherwise just update the map
@@ -327,7 +377,7 @@ const LocationDetailsScreen = () => {
       };
       setRegion(newRegion);
       mapRef.current?.animateToRegion(newRegion, 1000);
-      
+
     } catch (error) {
       console.error('Error getting location:', error);
       Alert.alert('Error', 'Failed to get your current location. Please try again.');
@@ -352,14 +402,14 @@ const LocationDetailsScreen = () => {
     }
 
     setIsSearching(true);
-    
+
     try {
       // Use device geocoding for search
       const geocodeResults = await Location.geocodeAsync(query);
-      
+
       if (geocodeResults.length > 0) {
         const suggestions: LocationSuggestion[] = [];
-        
+
         // Get addresses for first 5 results
         for (let i = 0; i < Math.min(geocodeResults.length, 5); i++) {
           const result = geocodeResults[i];
@@ -368,9 +418,9 @@ const LocationDetailsScreen = () => {
               latitude: result.latitude,
               longitude: result.longitude,
             });
-            
-            const formattedAddress = address ? 
-              `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '') 
+
+            const formattedAddress = address ?
+              `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
               : `${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}`;
 
             suggestions.push({
@@ -461,7 +511,7 @@ const LocationDetailsScreen = () => {
       setPickupSuggestions([]);
       setShowPickupSuggestions(false);
       setFocusedInput(null);
-      
+
       fitMapToSinglePoint({
         latitude: location.latitude,
         longitude: location.longitude,
@@ -489,7 +539,7 @@ const LocationDetailsScreen = () => {
       setDropoffSuggestions([]);
       setShowDropoffSuggestions(false);
       setFocusedInput(null);
-      
+
       if (pickupCoordinates) {
         fitMapToAllPoints();
       } else {
@@ -528,13 +578,13 @@ const LocationDetailsScreen = () => {
       setShowWaypointSuggestions(false);
       setActiveWaypointIndex(null);
       setFocusedInput(null);
-      
+
       fitMapToAllPoints();
     }
 
     // Try to save to recent locations (silently fail if it doesn't work)
     if (userToken && firebaseUserId) {
-      saveRecentLocation(location).catch(() => {});
+      saveRecentLocation(location).catch(() => { });
     }
   };
 
@@ -567,7 +617,7 @@ const LocationDetailsScreen = () => {
     try {
       const url = `${API_BASE_URL}/customer/${firebaseUserId}/saved-locations`;
       console.log('Saving to URL:', url);
-      
+
       const requestBody = {
         title: saveLocationTitle,
         address: selectedLocationForSave.address,
@@ -604,7 +654,7 @@ const LocationDetailsScreen = () => {
 
       const data = await response.json();
       console.log('Save response data:', data);
-      
+
       if (data.success && data.data) {
         // Add the new location to saved locations list
         const newLocation = {
@@ -615,9 +665,9 @@ const LocationDetailsScreen = () => {
           longitude: data.data.longitude,
           type: data.data.type || saveLocationType,
         };
-        
+
         setSavedLocations(prev => [newLocation, ...prev]);
-        
+
         Alert.alert('Success', 'Location saved successfully!');
         setShowSaveModal(false);
       } else {
@@ -643,7 +693,7 @@ const LocationDetailsScreen = () => {
 
     try {
       const url = `${API_BASE_URL}/customer/${firebaseUserId}/recent-locations`;
-      
+
       await fetch(url, {
         method: 'POST',
         headers: {
@@ -667,22 +717,22 @@ const LocationDetailsScreen = () => {
   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
     const latitudes = [coord1.latitude, coord2.latitude];
     const longitudes = [coord1.longitude, coord2.longitude];
-    
+
     const minLat = Math.min(...latitudes);
     const maxLat = Math.max(...latitudes);
     const minLng = Math.min(...longitudes);
     const maxLng = Math.max(...longitudes);
-    
+
     const latDelta = (maxLat - minLat) * 1.5;
     const lngDelta = (maxLng - minLng) * 1.5;
-    
+
     const newRegion = {
       latitude: (minLat + maxLat) / 2,
       longitude: (minLng + maxLng) / 2,
       latitudeDelta: Math.max(latDelta, 0.02),
       longitudeDelta: Math.max(lngDelta, 0.02),
     };
-    
+
     setRegion(newRegion);
     mapRef.current?.animateToRegion(newRegion, 1000);
   };
@@ -700,36 +750,36 @@ const LocationDetailsScreen = () => {
 
   const fitMapToAllPoints = () => {
     const allPoints: Coordinates[] = [];
-    
+
     if (pickupCoordinates) allPoints.push(pickupCoordinates);
     waypoints.forEach(wp => allPoints.push(wp.coordinates));
     if (dropoffCoordinates) allPoints.push(dropoffCoordinates);
-    
+
     if (allPoints.length === 0) return;
-    
+
     if (allPoints.length === 1) {
       fitMapToSinglePoint(allPoints[0]);
       return;
     }
-    
+
     const latitudes = allPoints.map(p => p.latitude);
     const longitudes = allPoints.map(p => p.longitude);
-    
+
     const minLat = Math.min(...latitudes);
     const maxLat = Math.max(...latitudes);
     const minLng = Math.min(...longitudes);
     const maxLng = Math.max(...longitudes);
-    
+
     const latDelta = (maxLat - minLat) * 1.5;
     const lngDelta = (maxLng - minLng) * 1.5;
-    
+
     const newRegion = {
       latitude: (minLat + maxLat) / 2,
       longitude: (minLng + maxLng) / 2,
       latitudeDelta: Math.max(latDelta, 0.02),
       longitudeDelta: Math.max(lngDelta, 0.02),
     };
-    
+
     setRegion(newRegion);
     mapRef.current?.animateToRegion(newRegion, 1000);
   };
@@ -741,7 +791,7 @@ const LocationDetailsScreen = () => {
         latitude: location.latitude,
         longitude: location.longitude,
       });
-      
+
       fitMapToSinglePoint({
         latitude: location.latitude,
         longitude: location.longitude,
@@ -786,11 +836,11 @@ const LocationDetailsScreen = () => {
   const removeWaypoint = (index: number) => {
     const updatedWaypoints = waypoints.filter((_, i) => i !== index);
     setWaypoints(updatedWaypoints);
-    
+
     if (updatedWaypoints.length === 0) {
       setActiveWaypointIndex(null);
     }
-    
+
     // Update map after removal
     if (pickupCoordinates && dropoffCoordinates) {
       fitMapToAllPoints();
@@ -814,56 +864,94 @@ const LocationDetailsScreen = () => {
   };
 
   const handleContinue = async () => {
-    if (!pickupCoordinates) {
-      Alert.alert('Required field', 'Please select a pickup location');
-      return;
-    }
+    try {
+      console.log('📱 ===== CONTINUE CLICKED =====');
 
-    // Format waypoints for passing to next screen
-    const waypointsData = waypoints
-      .filter(wp => wp.coordinates && wp.coordinates.latitude !== 0 && wp.coordinates.longitude !== 0)
-      .map((wp, index) => ({
-        address: wp.address,
-        lat: wp.coordinates.latitude.toString(),
-        lng: wp.coordinates.longitude.toString(),
-        order: index + 1, // Order between pickup (0) and dropoff (last)
-      }));
+      if (!pickupCoordinates) {
+        Alert.alert('Required field', 'Please select a pickup location');
+        return;
+      }
 
-    // Navigate to next step with ALL params from previous screen
-    router.push({
-      pathname: '/(customer)/VehicleContactInfo',
-      params: {
+      // Format waypoints for passing to next screen
+      const waypointsData = waypoints
+        .filter(wp => 
+          wp.coordinates && 
+          wp.coordinates.latitude !== 0 && 
+          wp.coordinates.longitude !== 0
+        )
+        .map((wp, index) => ({
+          address: String(wp.address || ''),
+          lat: String(wp.coordinates.latitude || '0'),
+          lng: String(wp.coordinates.longitude || '0'),
+          order: index + 1,
+        }));
+
+      // Build navigation params with safe values using getStringParam
+      const navigationParams = {
         // Location data
-        pickupAddress: pickupLocation,
-        pickupLat: pickupCoordinates?.latitude?.toString() || '',
-        pickupLng: pickupCoordinates?.longitude?.toString() || '',
-        dropoffAddress: dropoffLocation || '',
-        dropoffLat: dropoffCoordinates?.latitude?.toString() || '',
-        dropoffLng: dropoffCoordinates?.longitude?.toString() || '',
-        
+        pickupAddress: String(pickupLocation || ''),
+        pickupLat: String(pickupCoordinates?.latitude || '0'),
+        pickupLng: String(pickupCoordinates?.longitude || '0'),
+        dropoffAddress: String(dropoffLocation || ''),
+        dropoffLat: String(dropoffCoordinates?.latitude || '0'),
+        dropoffLng: String(dropoffCoordinates?.longitude || '0'),
+
         // Waypoints data (stringified JSON)
         waypoints: JSON.stringify(waypointsData),
-        hasWaypoints: (waypointsData.length > 0).toString(),
-        
-        // Service data (passed from ServiceDetails)
-        serviceId: serviceId,
-        serviceName: serviceName,
-        servicePrice: servicePrice,
-        serviceCategory: serviceCategory,
-        
-        // IMPORTANT: Pass all service-specific requirements
-        requiresDestination: requiresDestination || 'false',
-        requiresFuelType: requiresFuelType || 'false',
-        requiresLicense: requiresLicense || 'false',
-        hasBooking: hasBooking || 'false',
-        requiresTextDescription: requiresTextDescription || 'false',
-        
-        // Flag for location (not skipped in this case)
-        locationSkipped: 'false'
-      }
-    });
+        hasWaypoints: String(waypointsData.length > 0),
+
+        // Service data (passed from ServiceDetails) - use getStringParam for safety
+        serviceId: getStringParam(params.serviceId),
+        serviceName: getStringParam(params.serviceName),
+        servicePrice: getStringParam(params.servicePrice),
+        serviceCategory: getStringParam(params.serviceCategory),
+
+        // Service-specific requirements - use getBooleanParam and convert to string
+        requiresDestination: String(getBooleanParam(params.requiresDestination)),
+        requiresFuelType: String(getBooleanParam(params.requiresFuelType)),
+        requiresLicense: String(getBooleanParam(params.requiresLicense)),
+        hasBooking: String(getBooleanParam(params.hasBooking)),
+        requiresTextDescription: String(getBooleanParam(params.requiresTextDescription)),
+
+        // Flag for location
+        locationSkipped: 'false',
+
+        // Pass through any additional params from previous screens
+        ...(params.serviceDescription && { serviceDescription: String(params.serviceDescription) }),
+        ...(params.serviceRating && { serviceRating: String(params.serviceRating) }),
+        ...(params.serviceDistance && { serviceDistance: String(params.serviceDistance) }),
+        ...(params.serviceTime && { serviceTime: String(params.serviceTime) }),
+        ...(params.comingFrom && { comingFrom: String(params.comingFrom) }),
+      };
+
+      // Log the params for debugging
+      console.log('✅ Navigation params prepared:', JSON.stringify(navigationParams, null, 2));
+
+      // Navigate to next step
+      router.push({
+        pathname: '/(customer)/VehicleContactInfo',
+        params: navigationParams
+      });
+
+      console.log('✅ Navigation successful');
+      console.log('===== CONTINUE COMPLETED =====\n');
+
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      console.error('❌===== NAVIGATION ERROR =====');
+      console.error('Error:', errorMessage);
+      console.error('Stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.log('===== ERROR END =====\n');
+
+      Alert.alert(
+        'Navigation Error',
+        `Unable to proceed to next step.\n\nDebug: ${errorMessage}\n\nPlease try again.`,
+        [{ text: 'OK' }]
+      );
+    }
   };
 
+  
   const clearLocation = (type: 'pickup' | 'dropoff') => {
     if (type === 'pickup') {
       setPickupLocation('');
@@ -906,8 +994,41 @@ const LocationDetailsScreen = () => {
     return colors[index % colors.length];
   };
 
+ // Helper function to check if coordinates are valid
+const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
+  return !!coord && 
+         coord.latitude !== 0 && 
+         coord.longitude !== 0 && 
+         !isNaN(coord.latitude) && 
+         !isNaN(coord.longitude);
+};
+
+// Prepare route coordinates for Polyline
+const getRouteCoordinates = (): Coordinates[] => {
+  const routeCoords: Coordinates[] = [];
+  
+  // Add pickup if valid
+  if (isValidCoordinate(pickupCoordinates)) {
+    routeCoords.push(pickupCoordinates);
+  }
+  
+  // Add valid waypoints
+  waypoints.forEach(wp => {
+    if (isValidCoordinate(wp.coordinates)) {
+      routeCoords.push(wp.coordinates);
+    }
+  });
+  
+  // Add dropoff if valid
+  if (isValidCoordinate(dropoffCoordinates)) {
+    routeCoords.push(dropoffCoordinates);
+  }
+  
+  return routeCoords;
+};
+
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
@@ -959,7 +1080,7 @@ const LocationDetailsScreen = () => {
             showsUserLocation={true}
             showsMyLocationButton={false}
           >
-            {pickupCoordinates && (
+            {isValidCoordinate(pickupCoordinates) && (
               <Marker
                 coordinate={pickupCoordinates}
                 title="Pickup Location"
@@ -967,10 +1088,10 @@ const LocationDetailsScreen = () => {
                 pinColor="#68bdee"
               />
             )}
-            
+
             {/* Waypoint Markers */}
             {waypoints.map((waypoint, index) => (
-              waypoint.coordinates && waypoint.coordinates.latitude !== 0 && (
+              isValidCoordinate(waypoint.coordinates) && (
                 <Marker
                   key={waypoint.id}
                   coordinate={waypoint.coordinates}
@@ -980,8 +1101,8 @@ const LocationDetailsScreen = () => {
                 />
               )
             ))}
-            
-            {dropoffCoordinates && (
+
+            {isValidCoordinate(dropoffCoordinates) && (
               <Marker
                 coordinate={dropoffCoordinates}
                 title="Dropoff Location"
@@ -989,21 +1110,17 @@ const LocationDetailsScreen = () => {
                 pinColor="#ff4444"
               />
             )}
-            
-            {/* Draw route through all points */}
-            {pickupCoordinates && (
+
+            {/* Draw route through all points - FIXED: Only render if at least 2 valid coordinates */}
+            {getRouteCoordinates().length >= 2 && (
               <Polyline
-                coordinates={[
-                  pickupCoordinates,
-                  ...waypoints.filter(wp => wp.coordinates.latitude !== 0).map(wp => wp.coordinates),
-                  ...(dropoffCoordinates ? [dropoffCoordinates] : [])
-                ]}
+                coordinates={getRouteCoordinates()}
                 strokeColor="#68bdee"
                 strokeWidth={3}
               />
             )}
           </MapView>
-          
+
           {/* Map View Label */}
           <View style={styles.mapLabel}>
             <Text style={styles.mapLabelText}>MAP VIEW</Text>
@@ -1015,10 +1132,10 @@ const LocationDetailsScreen = () => {
             onPress={handleLocationPress}
             disabled={isGettingLocation}
           >
-            <Ionicons 
-              name="navigate" 
-              size={Math.min(24, width * 0.06)} 
-              color={isGettingLocation ? "#b0b0b0" : "#3c3c3c"} 
+            <Ionicons
+              name="navigate"
+              size={Math.min(24, width * 0.06)}
+              color={isGettingLocation ? "#b0b0b0" : "#3c3c3c"}
             />
           </TouchableOpacity>
         </View>
@@ -1037,7 +1154,7 @@ const LocationDetailsScreen = () => {
         <View style={styles.formSection}>
           {/* Pickup Location - with higher z-index when focused */}
           <View style={[
-            styles.inputSection, 
+            styles.inputSection,
             focusedInput === 'pickup' && styles.inputSectionFocused
           ]}>
             <Text style={styles.inputLabel}>
@@ -1066,27 +1183,27 @@ const LocationDetailsScreen = () => {
                 editable={!isGettingLocation}
               />
               {pickupLocation ? (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.inputIcon}
                   onPress={() => clearLocation('pickup')}
                 >
                   <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.inputIcon}
                   onPress={() => getCurrentLocation()}
                   disabled={isGettingLocation}
                 >
-                  <Ionicons 
-                    name="navigate-outline" 
-                    size={Math.min(20, width * 0.05)} 
-                    color={isGettingLocation ? "#b0b0b0" : "#68bdee"} 
+                  <Ionicons
+                    name="navigate-outline"
+                    size={Math.min(20, width * 0.05)}
+                    color={isGettingLocation ? "#b0b0b0" : "#68bdee"}
                   />
                 </TouchableOpacity>
               )}
             </View>
-            
+
             {/* Pickup Suggestions */}
             {showPickupSuggestions && pickupSuggestions.length > 0 && (
               <View style={styles.suggestionsContainer}>
@@ -1142,7 +1259,7 @@ const LocationDetailsScreen = () => {
                 }}
               />
               {dropoffLocation ? (
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.inputIcon}
                   onPress={() => clearLocation('dropoff')}
                 >
@@ -1154,7 +1271,7 @@ const LocationDetailsScreen = () => {
                 </TouchableOpacity>
               )}
             </View>
-            
+
             {/* Dropoff Suggestions */}
             {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
               <View style={styles.suggestionsContainer}>
@@ -1183,8 +1300,8 @@ const LocationDetailsScreen = () => {
 
           {/* Waypoints (Intermediate Stops) - These appear AFTER dropoff */}
           {waypoints.map((waypoint, index) => (
-            <View 
-              key={waypoint.id} 
+            <View
+              key={waypoint.id}
               style={[
                 styles.inputSection,
                 styles.waypointSection,
@@ -1197,29 +1314,29 @@ const LocationDetailsScreen = () => {
                   Stop {index + 1}
                 </Text>
                 <View style={styles.waypointControls}>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     onPress={() => moveWaypointUp(index)}
                     disabled={index === 0}
                     style={styles.waypointControlButton}
                   >
-                    <Ionicons 
-                      name="arrow-up" 
-                      size={Math.min(18, width * 0.045)} 
-                      color={index === 0 ? "#b0b0b0" : "#68bdee"} 
+                    <Ionicons
+                      name="arrow-up"
+                      size={Math.min(18, width * 0.045)}
+                      color={index === 0 ? "#b0b0b0" : "#68bdee"}
                     />
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     onPress={() => moveWaypointDown(index)}
                     disabled={index === waypoints.length - 1}
                     style={styles.waypointControlButton}
                   >
-                    <Ionicons 
-                      name="arrow-down" 
-                      size={Math.min(18, width * 0.045)} 
-                      color={index === waypoints.length - 1 ? "#b0b0b0" : "#68bdee"} 
+                    <Ionicons
+                      name="arrow-down"
+                      size={Math.min(18, width * 0.045)}
+                      color={index === waypoints.length - 1 ? "#b0b0b0" : "#68bdee"}
                     />
                   </TouchableOpacity>
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     onPress={() => removeWaypoint(index)}
                     style={styles.waypointControlButton}
                   >
@@ -1229,9 +1346,9 @@ const LocationDetailsScreen = () => {
               </View>
               <View style={styles.inputContainer}>
                 <View style={[
-                  styles.locationDot, 
+                  styles.locationDot,
                   { backgroundColor: getWaypointColor(index) },
-                  waypoint.coordinates.latitude !== 0 && styles.locationDotActive
+                  isValidCoordinate(waypoint.coordinates) && styles.locationDotActive
                 ]} />
                 <TextInput
                   style={styles.input}
@@ -1255,7 +1372,7 @@ const LocationDetailsScreen = () => {
                   }}
                 />
                 {waypoint.address ? (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={styles.inputIcon}
                     onPress={() => clearWaypoint(index)}
                   >
@@ -1263,7 +1380,7 @@ const LocationDetailsScreen = () => {
                   </TouchableOpacity>
                 ) : null}
               </View>
-              
+
               {/* Waypoint Suggestions */}
               {showWaypointSuggestions && activeWaypointIndex === index && waypointSuggestions.length > 0 && (
                 <View style={styles.suggestionsContainer}>
@@ -1292,7 +1409,7 @@ const LocationDetailsScreen = () => {
           ))}
 
           {/* Add Another Stop Button - Now appears AFTER dropoff and waypoints */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.addStopButton}
             onPress={() => addWaypoint()}
           >
@@ -1462,7 +1579,7 @@ const LocationDetailsScreen = () => {
               >
                 <Text style={styles.modalCancelButtonText}>Cancel</Text>
               </TouchableOpacity>
-              
+
               <TouchableOpacity
                 style={[styles.modalSaveButton, isSavingLocation && styles.modalSaveButtonDisabled]}
                 onPress={saveLocationToBackend}
