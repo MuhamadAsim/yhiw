@@ -17,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import ChatPopup from './components/ChatPopup'; // Import the ChatPopup component
 
 const { height, width } = Dimensions.get('window');
 
@@ -87,6 +88,9 @@ const ProviderAssignedScreen = () => {
   const navigationInProgress = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Add chat visible state
+  const [chatVisible, setChatVisible] = useState(false);
+
   // State
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -110,6 +114,12 @@ const ProviderAssignedScreen = () => {
     } else {
       console.log(logMessage);
     }
+  };
+
+  // Handle message button press - open chat popup instead of navigating
+  const handleMessage = () => {
+    addDebug(`💬 Opening chat popup with provider`);
+    setChatVisible(true);
   };
 
   // Fetch complete job details
@@ -526,17 +536,7 @@ const fetchJobStatus = async () => {
     }
   };
 
-  const handleMessage = () => {
-    addDebug(`💬 Opening chat with provider`);
-    router.push({
-      pathname: '/(customer)/Chat',
-      params: {
-        bookingId,
-        providerId: jobDetails?.provider?.id,
-        providerName: jobDetails?.provider?.name,
-      }
-    });
-  };
+  // Removed handleMessage function - now using the one above
 
   const handleOpenInMaps = () => {
     if (providerLocation && jobDetails?.pickup?.coordinates) {
@@ -987,6 +987,14 @@ const fetchJobStatus = async () => {
           <Text style={styles.cancelButtonText}>Cancel Request</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Chat Popup */}
+      <ChatPopup
+        visible={chatVisible}
+        onClose={() => setChatVisible(false)}
+        bookingId={bookingId}
+        providerName={jobDetails?.provider?.name || 'Provider'}
+      />
     </View>
   );
 };

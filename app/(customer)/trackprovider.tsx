@@ -918,7 +918,6 @@ const TrackProviderScreen = () => {
         onClose={() => setChatVisible(false)}
         bookingId={bookingId}
         providerName={providerName}
-        providerId={providerId}
       />
     </View>
   );

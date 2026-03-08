@@ -1,4 +1,4 @@
-// components/ChatPopup.tsx
+// components/ChatPopup.tsx (Customer Side)
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -31,7 +31,7 @@ interface ChatPopupProps {
   onClose: () => void;
   bookingId: string;
   providerName: string;
-  providerId: string;
+  // No need to pass providerId - backend will get from token and booking
 }
 
 const ChatPopup: React.FC<ChatPopupProps> = ({
@@ -39,7 +39,6 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
   onClose,
   bookingId,
   providerName,
-  providerId,
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -81,6 +80,7 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
         return;
       }
 
+      console.log('📡 Loading chat history for booking:', bookingId);
       const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/messages`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -96,14 +96,15 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
       if (data.success && data.messages) {
         // Transform backend messages to our format
         const formattedMessages: Message[] = data.messages.map((msg: any) => ({
-          id: msg.id || Date.now().toString(),
+          id: msg._id || msg.id || Date.now().toString(),
           text: msg.text,
-          sender: msg.sender === 'provider' ? 'provider' : 'user',
+          sender: msg.senderType === 'provider' ? 'provider' : 'user',
           timestamp: new Date(msg.timestamp),
           status: msg.status || 'delivered',
         }));
         
         setMessages(formattedMessages);
+        console.log(`✅ Loaded ${formattedMessages.length} messages`);
         
         // Scroll to bottom after loading
         setTimeout(() => {
@@ -112,8 +113,10 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
       }
     } catch (error) {
       console.error('❌ Error loading chat history:', error);
-      // Show some sample messages for demo if API fails
-      setMessages(getSampleMessages());
+      // Only show sample messages in development
+      if (__DEV__) {
+        setMessages(getSampleMessages());
+      }
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +128,16 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/poll`, {
+      const lastMessage = messages[messages.length - 1];
+      const lastMessageId = lastMessage?.id;
+      
+      // Build URL with last message ID for efficient polling
+      let url = `${API_BASE_URL}/api/chat/${bookingId}/poll`;
+      if (lastMessageId && !lastMessageId.startsWith('temp-')) {
+        url += `?lastMessageId=${lastMessageId}`;
+      }
+
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -138,14 +150,15 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
       if (data.success && data.newMessages && data.newMessages.length > 0) {
         // Add new messages to the list
         const newMessages: Message[] = data.newMessages.map((msg: any) => ({
-          id: msg.id || Date.now().toString(),
+          id: msg._id || msg.id || Date.now().toString(),
           text: msg.text,
-          sender: msg.sender === 'provider' ? 'provider' : 'user',
+          sender: msg.senderType === 'provider' ? 'provider' : 'user',
           timestamp: new Date(msg.timestamp),
-          status: 'delivered',
+          status: msg.status || 'delivered',
         }));
         
         setMessages(prev => [...prev, ...newMessages]);
+        console.log(`📨 Received ${newMessages.length} new messages`);
         
         // Scroll to bottom when new messages arrive
         flatListRef.current?.scrollToEnd({ animated: true });
@@ -199,20 +212,26 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
         return;
       }
 
+      // Simple request body - only text and a flag indicating sender is customer
+      const requestBody = {
+        text: messageText,
+        senderType: 'customer', // Flag to indicate this is from customer side
+      };
+
+      console.log('📤 Sending message from customer...');
       const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/send`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          text: messageText,
-          receiverId: providerId,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('❌ Send message error:', response.status, errorData);
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
@@ -222,20 +241,23 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
         setMessages(prev =>
           prev.map(m =>
             m.id === tempMessage.id
-              ? { ...m, id: data.messageId || m.id, status: 'sent' }
+              ? { 
+                  ...m, 
+                  id: data.messageId || data.message?._id || m.id, 
+                  status: 'sent' 
+                }
               : m
           )
         );
+        console.log('✅ Message sent successfully');
       } else {
-        // Remove temp message on failure
         setMessages(prev => prev.filter(m => m.id !== tempMessage.id));
-        Alert.alert('Error', 'Failed to send message. Please try again.');
+        Alert.alert('Error', data.message || 'Failed to send message. Please try again.');
       }
     } catch (error) {
       console.error('❌ Error sending message:', error);
-      // Remove temp message on error
       setMessages(prev => prev.filter(m => m.id !== tempMessage.id));
-      Alert.alert('Error', 'Failed to send message. Please check your connection.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'Failed to send message. Please check your connection.');
     } finally {
       setSendingMessage(false);
     }

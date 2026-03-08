@@ -796,12 +796,11 @@ export default function NavigateToCustomerScreen() {
         </ScrollView>
 
       </View>
-      <ChatPopup
+     <ChatPopup
         visible={chatVisible}
         onClose={() => setChatVisible(false)}
         bookingId={bookingId}
         customerName={jobDetails?.customerName || 'Customer'}
-        customerId={jobDetails?.customerPhone} // You can use phone as ID or add a proper customerId to your jobDetails
       />
     </SafeAreaView>
   );
