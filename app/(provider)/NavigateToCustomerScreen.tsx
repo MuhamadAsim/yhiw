@@ -17,6 +17,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
+import ChatPopup from './components/ChatPopup';
 
 const { height, width } = Dimensions.get('window');
 
@@ -60,6 +61,7 @@ export default function NavigateToCustomerScreen() {
   const mapRef = useRef<MapView>(null);
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
   const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+  const [chatVisible, setChatVisible] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -456,28 +458,8 @@ export default function NavigateToCustomerScreen() {
   };
 
   const handleMessage = () => {
-    if (jobDetails?.customerPhone) {
-      const smsUrl = Platform.select({
-        ios: `sms:${jobDetails.customerPhone}`,
-        android: `sms:${jobDetails.customerPhone}?body=Hello`,
-      });
-
-      if (smsUrl) {
-        Linking.canOpenURL(smsUrl)
-          .then(supported => {
-            if (supported) {
-              return Linking.openURL(smsUrl);
-            } else {
-              Alert.alert('Error', 'Cannot send messages from this device');
-            }
-          })
-          .catch(err => {
-            Alert.alert('Error', 'Failed to open messaging app');
-          });
-      }
-    } else {
-      Alert.alert('Message', 'No phone number available');
-    }
+    addDebug('💬 Opening chat popup with customer');
+    setChatVisible(true);
   };
 
   const handleArrived = () => {
@@ -812,7 +794,15 @@ export default function NavigateToCustomerScreen() {
             </TouchableOpacity>
           </View>
         </ScrollView>
+
       </View>
+      <ChatPopup
+        visible={chatVisible}
+        onClose={() => setChatVisible(false)}
+        bookingId={bookingId}
+        customerName={jobDetails?.customerName || 'Customer'}
+        customerId={jobDetails?.customerPhone} // You can use phone as ID or add a proper customerId to your jobDetails
+      />
     </SafeAreaView>
   );
 }

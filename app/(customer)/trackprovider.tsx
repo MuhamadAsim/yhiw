@@ -16,10 +16,9 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
-import ChatPopup from './components/ChatPopup'; // Adjust the path as needed
+import ChatPopup from './components/ChatPopup'; 
 
 const { height, width } = Dimensions.get('window');
-const [chatVisible, setChatVisible] = useState(false);
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
 interface Coordinates {
@@ -114,6 +113,9 @@ const TrackProviderScreen = () => {
   const navigationInProgress = useRef(false);
   const initialRouteFetched = useRef(false);
 
+  // Add chat visible state HERE inside the component
+  const [chatVisible, setChatVisible] = useState(false);
+
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
   const [pickupLocation, setPickupLocation] = useState<Coordinates | null>(null);
   const [pickupAddress, setPickupAddress] = useState<string>('Loading address...');
@@ -165,9 +167,15 @@ const TrackProviderScreen = () => {
     }
   };
 
+  // Add handleMessage function HERE inside the component
+  const handleMessage = () => {
+    addDebug(`💬 Opening chat popup with provider`);
+    setChatVisible(true);
+  };
+
   useEffect(() => {
     addDebug(`🚀 Component mounted with bookingId: ${bookingId}`);
-    
+
     // Set provider info from params
     if (providerNameParam) setProviderName(providerNameParam);
     if (providerIdParam) setProviderId(providerIdParam);
@@ -231,11 +239,11 @@ const TrackProviderScreen = () => {
   // Fetch route data from backend (includes polyline and addresses)
   const fetchRouteData = async () => {
     if (!bookingId || initialRouteFetched.current) return;
-    
+
     try {
       addDebug(`🗺️ Fetching route data from backend`);
       const token = await AsyncStorage.getItem('userToken');
-      
+
       if (!token) {
         addDebug('❌ No token found');
         return;
@@ -254,10 +262,10 @@ const TrackProviderScreen = () => {
 
       const data: RouteResponse = await response.json();
       addDebug(`✅ Route data received`, data);
-      
+
       if (data.success && data.route) {
         initialRouteFetched.current = true;
-        
+
         // Update locations with real data from backend
         if (data.route.providerLocation) {
           setProviderLocation({
@@ -268,7 +276,7 @@ const TrackProviderScreen = () => {
             lastUpdate: data.route.providerLocation.lastUpdate,
           });
         }
-        
+
         if (data.route.pickupLocation) {
           setPickupLocation({
             latitude: data.route.pickupLocation.latitude,
@@ -276,11 +284,11 @@ const TrackProviderScreen = () => {
           });
           setPickupAddress(data.route.pickupLocation.address);
         }
-        
+
         // Handle dropoff location - only if it exists with valid coordinates
-        if (data.route.dropoffLocation && 
-            data.route.dropoffLocation.latitude && 
-            data.route.dropoffLocation.longitude) {
+        if (data.route.dropoffLocation &&
+          data.route.dropoffLocation.latitude &&
+          data.route.dropoffLocation.longitude) {
           setDropoffLocation({
             latitude: data.route.dropoffLocation.latitude,
             longitude: data.route.dropoffLocation.longitude,
@@ -289,22 +297,22 @@ const TrackProviderScreen = () => {
         } else {
           setDropoffLocation(null);
         }
-        
+
         // Update ETA and distance
         if (data.route.eta) setEta(data.route.eta);
         if (data.route.distance) setDistance(data.route.distance);
-        
+
         // Decode and set route polyline
         if (data.route.polyline) {
           const points = decodePolyline(data.route.polyline);
           setRouteCoordinates(points);
           addDebug(`🗺️ Decoded ${points.length} polyline points`);
         }
-        
+
         // Update provider info
         if (data.route.providerName) setProviderName(data.route.providerName);
         if (data.route.providerPhone) setProviderPhone(data.route.providerPhone);
-        
+
         // Fit map to show both locations
         if (data.route.providerLocation && data.route.pickupLocation) {
           fitMapToCoordinates(
@@ -318,7 +326,7 @@ const TrackProviderScreen = () => {
             }
           );
         }
-        
+
         setIsLoading(false);
         setApiError(null);
       }
@@ -348,10 +356,10 @@ const TrackProviderScreen = () => {
       }
 
       const data: LiveTrackingResponse = await response.json();
-      
+
       if (data.success) {
         setPollingAttempts(prev => prev + 1);
-        
+
         // Update provider location
         if (data.location) {
           setProviderLocation({
@@ -362,12 +370,12 @@ const TrackProviderScreen = () => {
             lastUpdate: data.location.lastUpdate,
           });
         }
-        
+
         // Update status
         if (data.status) {
           setCurrentStatus(data.status);
         }
-        
+
         // Update ETA if provided
         if (data.eta) setEta(data.eta);
         if (data.distance) setDistance(data.distance);
@@ -412,7 +420,7 @@ const TrackProviderScreen = () => {
       // which is mapped to 'started' for frontend
       if (data.status === 'started') {
         addDebug('✅✅✅ SERVICE HAS STARTED - Auto-navigating to ServiceInProgress');
-        
+
         if (!updates.some(u => u.type === 'started')) {
           const newUpdate: UpdateEvent = {
             id: Date.now().toString(),
@@ -425,7 +433,7 @@ const TrackProviderScreen = () => {
 
         if (!navigationInProgress.current) {
           navigationInProgress.current = true;
-          
+
           // Stop polling
           if (pollingTimer.current) {
             clearTimeout(pollingTimer.current);
@@ -462,23 +470,23 @@ const TrackProviderScreen = () => {
 
   const startPolling = () => {
     addDebug('🔄 Starting polling (every 10 seconds)');
-    
+
     // Fetch route data first (only once)
     fetchRouteData();
-    
+
     const poll = async () => {
       if (!isMounted.current || navigationInProgress.current) return;
-      
+
       await Promise.all([
         fetchLiveTracking(),
         fetchJobStatus() // ← This runs every 10 seconds and checks for 'started' status
       ]);
-      
+
       if (isMounted.current && !navigationInProgress.current) {
         pollingTimer.current = setTimeout(poll, 10000);
       }
     };
-    
+
     // Start first poll after 2 seconds
     setTimeout(poll, 2000);
   };
@@ -499,7 +507,7 @@ const TrackProviderScreen = () => {
 
   const decodePolyline = (t: string) => {
     if (!t) return [];
-    
+
     let points = [];
     let lat = 0;
     let lng = 0;
@@ -574,18 +582,6 @@ const TrackProviderScreen = () => {
     } else {
       Alert.alert('Call', `Calling ${providerName}...`);
     }
-  };
-
-  const handleMessage = () => {
-    addDebug(`💬 Opening chat with provider`);
-    router.push({
-      pathname: '/(customer)/Chat',
-      params: {
-        providerName,
-        providerId,
-        bookingId,
-      }
-    });
   };
 
   const handleContactSupport = () => {
@@ -668,7 +664,7 @@ const TrackProviderScreen = () => {
         )}
 
         {/* Debug Button */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.debugButton}
           onPress={forceRefresh}
         >
@@ -760,8 +756,8 @@ const TrackProviderScreen = () => {
         ]}>
           <Text style={styles.statusText}>
             {currentStatus === 'started' ? 'SERVICE STARTED' :
-             currentStatus === 'accepted' ? 'ON THE WAY' :
-             currentStatus?.toUpperCase() || 'EN ROUTE'}
+              currentStatus === 'accepted' ? 'ON THE WAY' :
+                currentStatus?.toUpperCase() || 'EN ROUTE'}
           </Text>
         </View>
 
@@ -799,10 +795,10 @@ const TrackProviderScreen = () => {
             <View style={styles.providerTextContainer}>
               <Text style={styles.providerName}>{providerName}</Text>
               <Text style={styles.providerStatus}>
-                {currentStatus === 'started' 
-                  ? 'Service has started' 
-                  : providerLocation 
-                    ? 'Moving towards your location' 
+                {currentStatus === 'started'
+                  ? 'Service has started'
+                  : providerLocation
+                    ? 'Moving towards your location'
                     : 'Waiting for location...'}
               </Text>
               {providerLocation?.lastUpdate && (
@@ -915,6 +911,15 @@ const TrackProviderScreen = () => {
           <View style={{ height: 20 }} />
         </ScrollView>
       </View>
+
+      {/* Chat Popup - Added at the end */}
+      <ChatPopup
+        visible={chatVisible}
+        onClose={() => setChatVisible(false)}
+        bookingId={bookingId}
+        providerName={providerName}
+        providerId={providerId}
+      />
     </View>
   );
 };
