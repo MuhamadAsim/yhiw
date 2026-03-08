@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   StatusBar,
   ActivityIndicator,
   Linking,
+  AppState,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -57,6 +58,7 @@ interface JobData {
   customerPhone: string;
   estimatedEarnings: number;
   startedAt: string | null;
+  status?: string;
 }
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
@@ -65,7 +67,11 @@ export default function ServiceInProgressScreen() {
   const params = useLocalSearchParams<{ bookingId: string }>();
   const bookingId = params.bookingId;
   
+  const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
+  const appState = useRef(AppState.currentState);
+  
   const [loading, setLoading] = useState<boolean>(false);
+  const [cancellationAcknowledged, setCancellationAcknowledged] = useState(false);
   const [jobData, setJobData] = useState<JobData>({
     serviceType: 'Towing Service',
     vehicleType: 'Sedan',
@@ -75,24 +81,56 @@ export default function ServiceInProgressScreen() {
     customerPhone: '+973 3XXX XXXX',
     estimatedEarnings: 81,
     startedAt: null,
+    status: 'in_progress',
   });
 
   const { display, seconds, paused, setPaused } = useTimer(0);
 
-  // Mark service as started when screen loads
-  useEffect(() => {
-    if (bookingId) {
-      markServiceStarted();
-      fetchJobDetails();
-    }
-  }, []);
+  // Debug logger
+  const addDebug = (message: string, data?: any) => {
+    console.log(`🔍 [ServiceInProgress] ${message}`, data || '');
+  };
 
+  // Update local storage with current status
+  const updateStorageStatus = async (status: string) => {
+    try {
+      // Update in activeBookings array
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        let activeBookings = JSON.parse(activeBookingsJson);
+        const bookingIndex = activeBookings.findIndex((b: any) => b.bookingId === bookingId);
+        
+        if (bookingIndex >= 0) {
+          activeBookings[bookingIndex] = {
+            ...activeBookings[bookingIndex],
+            status,
+            screen: 'ServiceInProgress',
+            timestamp: new Date().toISOString(),
+          };
+          await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+        }
+      }
+
+      // Update current booking status
+      await AsyncStorage.setItem('currentBookingStatus', status);
+      
+      addDebug(`✅ Storage updated with status: ${status}`);
+    } catch (error) {
+      addDebug('❌ Error updating storage:', error);
+    }
+  };
+
+  // Mark service as started when screen loads
   const markServiceStarted = async (): Promise<void> => {
     try {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+      // Update local storage first
+      await updateStorageStatus('in_progress');
+
+      // Then update backend
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -103,8 +141,115 @@ export default function ServiceInProgressScreen() {
           action: 'start'
         }),
       });
+
+      if (response.ok) {
+        addDebug('✅ Service marked as started');
+      } else {
+        addDebug('⚠️ Failed to mark service started:', response.status);
+      }
     } catch (error) {
-      console.error('Error marking service started:', error);
+      addDebug('Error marking service started:', error);
+    }
+  };
+
+  // Check job status from backend
+  const checkJobStatus = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return;
+
+      addDebug('📡 Checking job status...');
+
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.success) {
+          addDebug(`📊 Job status: ${data.status}`);
+          
+          // Check if job is cancelled
+          if (data.status === 'cancelled' && !cancellationAcknowledged) {
+            handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
+          }
+          
+          // Update job details if we have them
+          if (data.job) {
+            setJobData(prev => ({
+              ...prev,
+              ...data.job,
+              status: data.status,
+            }));
+          }
+        }
+      } else {
+        addDebug(`⚠️ Status check failed: ${response.status}`);
+      }
+    } catch (error) {
+      addDebug('❌ Error checking job status:', error);
+    }
+  };
+
+  // Handle job cancellation
+  const handleJobCancelled = (reason: string) => {
+    // Prevent multiple alerts
+    if (cancellationAcknowledged) return;
+    
+    setCancellationAcknowledged(true);
+    
+    // Stop timer if running
+    setPaused(true);
+    
+    // Stop status checking
+    if (statusCheckInterval.current) {
+      clearInterval(statusCheckInterval.current);
+      statusCheckInterval.current = null;
+    }
+
+    // Show alert to provider
+    Alert.alert(
+      'Service Cancelled',
+      `The customer has cancelled this service.\n\nReason: ${reason}`,
+      [
+        {
+          text: 'OK',
+          onPress: async () => {
+            // Clean up storage
+            await cleanupBooking();
+            // Navigate to home
+            router.replace('/(provider)/HomePage');
+          }
+        }
+      ],
+      { cancelable: false }
+    );
+  };
+
+  // Clean up booking from storage
+  const cleanupBooking = async () => {
+    try {
+      // Remove from active bookings
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        let activeBookings = JSON.parse(activeBookingsJson);
+        activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
+        await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+      }
+
+      // Clear current booking if it matches
+      const currentId = await AsyncStorage.getItem('currentBookingId');
+      if (currentId === bookingId) {
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+      }
+
+      addDebug('✅ Booking cleaned up from storage');
+    } catch (error) {
+      addDebug('❌ Error cleaning up booking:', error);
     }
   };
 
@@ -122,21 +267,64 @@ export default function ServiceInProgressScreen() {
       const data = await response.json();
       
       if (data.success && data.job) {
-        setJobData({
-          serviceType: data.job.serviceType || 'Towing Service',
-          vehicleType: data.job.vehicleType || 'Sedan',
-          licensePlate: data.job.licensePlate || 'ABC 1234',
-          vehicleModel: data.job.vehicleModel || 'Toyota Camry 2020',
-          customerName: data.job.customer?.name || 'Mohammed A.',
-          customerPhone: data.job.customer?.phone || '+973 3XXX XXXX',
-          estimatedEarnings: data.job.estimatedEarnings || 81,
-          startedAt: data.job.startedAt,
-        });
+        setJobData(prev => ({
+          ...prev,
+          serviceType: data.job.serviceType || prev.serviceType,
+          vehicleType: data.job.vehicleType || prev.vehicleType,
+          licensePlate: data.job.licensePlate || prev.licensePlate,
+          vehicleModel: data.job.vehicleModel || prev.vehicleModel,
+          customerName: data.job.customer?.name || prev.customerName,
+          customerPhone: data.job.customer?.phone || prev.customerPhone,
+          estimatedEarnings: data.job.estimatedEarnings || prev.estimatedEarnings,
+          startedAt: data.job.startedAt || prev.startedAt,
+          status: data.job.status || prev.status,
+        }));
       }
     } catch (error) {
-      console.error('Error fetching job details:', error);
+      addDebug('Error fetching job details:', error);
     }
   };
+
+  // Initialize screen
+  useEffect(() => {
+    if (!bookingId) {
+      Alert.alert('Error', 'No booking ID provided');
+      router.back();
+      return;
+    }
+
+    addDebug('📦 ServiceInProgressScreen mounted with bookingId:', bookingId);
+
+    // Mark service as started
+    markServiceStarted();
+
+    // Fetch job details
+    fetchJobDetails();
+
+    // Start status checking (every 10 seconds)
+    statusCheckInterval.current = setInterval(checkJobStatus, 10000);
+
+    // Check status immediately
+    checkJobStatus();
+
+    // Listen for app state changes
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        // App has come to the foreground - check status immediately
+        checkJobStatus();
+      }
+      appState.current = nextAppState;
+    });
+
+    return () => {
+      if (statusCheckInterval.current) {
+        clearInterval(statusCheckInterval.current);
+        statusCheckInterval.current = null;
+      }
+      subscription.remove();
+      addDebug('🧹 Cleanup complete');
+    };
+  }, []);
 
   const handleCall = (): void => {
     if (jobData.customerPhone && jobData.customerPhone !== '+973 3XXX XXXX') {
@@ -166,7 +354,7 @@ export default function ServiceInProgressScreen() {
         onPress: async () => {
           try {
             const token = await AsyncStorage.getItem('userToken');
-            await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+            await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
               method: 'PATCH',
               headers: {
                 'Authorization': `Bearer ${token}`,
@@ -191,7 +379,7 @@ export default function ServiceInProgressScreen() {
     
     try {
       const token = await AsyncStorage.getItem('userToken');
-      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+      await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -202,7 +390,7 @@ export default function ServiceInProgressScreen() {
         }),
       });
     } catch (error) {
-      console.error('Error updating timer:', error);
+      addDebug('Error updating timer:', error);
     }
   };
 
@@ -227,7 +415,7 @@ export default function ServiceInProgressScreen() {
   const reportIssue = async (type: string, description: string): Promise<void> => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      await fetch(`${API_BASE_URL}/provider/job/${bookingId}/issues`, {
+      await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/issues`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -253,8 +441,11 @@ export default function ServiceInProgressScreen() {
         { text: 'No', style: 'cancel' },
         {
           text: 'Yes, Complete',
-          onPress: () => {
-            // Just navigate to next page with all the data - NO API CALL
+          onPress: async () => {
+            // Update status in storage before navigating
+            await updateStorageStatus('completed');
+            
+            // Navigate to next page
             router.push({
               pathname: '/(provider)/ServiceCompletedScreen',
               params: {
@@ -270,6 +461,43 @@ export default function ServiceInProgressScreen() {
                 durationSeconds: seconds.toString(),
               }
             });
+          }
+        }
+      ]
+    );
+  };
+
+  const handleCancelService = () => {
+    Alert.alert(
+      'Cancel Service',
+      'Are you sure you want to cancel this service?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ reason: 'provider_cancelled' }),
+              });
+              
+              // Clean up storage
+              await cleanupBooking();
+              
+              // Navigate to home
+              router.replace('/(provider)/HomePage');
+            } catch (error) {
+              console.log('Cancel API call failed:', error);
+              // Still navigate home
+              router.replace('/(provider)/HomePage');
+            }
           }
         }
       ]
@@ -463,6 +691,15 @@ export default function ServiceInProgressScreen() {
               <Text style={styles.completeBtnText}>Complete Service</Text>
             </>
           )}
+        </TouchableOpacity>
+
+        {/* ── CANCEL SERVICE LINK ── */}
+        <TouchableOpacity 
+          style={styles.cancelLink} 
+          onPress={handleCancelService}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.cancelLinkText}>Cancel Service</Text>
         </TouchableOpacity>
 
         <Text style={styles.completeHint}>Make sure all checklist items are completed</Text>
@@ -887,5 +1124,18 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.7,
+  },
+  
+  // ── Cancel Link ──
+  cancelLink: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  cancelLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+    textDecorationLine: 'underline',
   },
 });

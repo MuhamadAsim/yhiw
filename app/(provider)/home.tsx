@@ -215,16 +215,16 @@ const HomePage = () => {
     };
   };
 
-  // Load provider data on mount
   useEffect(() => {
-    loadProviderData();
-    checkLocationPermission();
-    loadSeenJobsFromStorage(); // Load seen jobs from storage
-    return () => {
-      stopPolling();
-      stopLocationTracking();
-    };
-  }, []);
+  loadProviderData();
+  checkLocationPermission();
+  loadSeenJobsFromStorage();
+  checkActiveJob(); // Add this line to check for active job on mount
+  return () => {
+    stopPolling();
+    stopLocationTracking();
+  };
+}, []);
 
   // Start/stop polling based on online status
   useEffect(() => {
@@ -234,6 +234,126 @@ const HomePage = () => {
       stopPolling();
     }
   }, [isOnline, providerData]);
+
+
+
+
+
+
+
+
+  // Add this function to check for active job
+const checkActiveJob = async () => {
+  try {
+    // Get bookingId from local storage
+    const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+    
+    if (!currentBookingId) {
+      console.log('📭 No active booking found in storage');
+      return;
+    }
+
+    console.log('🔍 Checking active job for bookingId:', currentBookingId);
+
+    const token = await AsyncStorage.getItem('userToken');
+    if (!token) return;
+
+    // Make API call to check job status
+    const response = await fetch(`${API_BASE_URL}/api/provider/job/${currentBookingId}/status`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      // If 404 or error, clean up storage
+      if (response.status === 404) {
+        console.log('❌ Job not found, cleaning up storage');
+        await cleanupStoredBooking(currentBookingId);
+      }
+      return;
+    }
+
+    const data = await response.json();
+    
+    if (data.success) {
+      console.log('📊 Active job status:', data.status);
+
+      // Handle based on status
+      switch (data.status) {
+        case 'accepted':
+          // Navigate to NavigateToCustomerScreen
+          console.log('🚗 Job accepted - navigating to customer');
+          router.replace({
+            pathname: '/NavigateToCustomerScreen',
+            params: { bookingId: currentBookingId }
+          });
+          break;
+
+        case 'in_progress':
+          // Navigate to ServiceInProgressScreen
+          console.log('🔧 Job in progress - navigating to service');
+          router.replace({
+            pathname: '/ServiceInProgressScreen',
+            params: { bookingId: currentBookingId }
+          });
+          break;
+
+        case 'completed':
+        case 'cancelled':
+          // Clean up storage
+          console.log(`✅ Job ${data.status} - cleaning up storage`);
+          await cleanupStoredBooking(currentBookingId);
+          break;
+
+        default:
+          console.log('ℹ️ Unknown job status:', data.status);
+          break;
+      }
+    }
+  } catch (error) {
+    console.error('Error checking active job:', error);
+  }
+};
+
+// Add cleanup function
+const cleanupStoredBooking = async (bookingId: string) => {
+  try {
+    console.log('🧹 Cleaning up booking:', bookingId);
+    
+    // Remove from activeBookings array
+    const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+    if (activeBookingsJson) {
+      let activeBookings = JSON.parse(activeBookingsJson);
+      activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
+      await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+    }
+
+    // Clear current booking if it matches
+    const currentId = await AsyncStorage.getItem('currentBookingId');
+    if (currentId === bookingId) {
+      await AsyncStorage.removeItem('currentBookingId');
+      await AsyncStorage.removeItem('currentBookingStatus');
+    }
+
+    console.log('✅ Booking cleaned up successfully');
+  } catch (error) {
+    console.error('Error cleaning up booking:', error);
+  }
+};
+
+// Optional: Add periodic check for active job (every 30 seconds)
+useEffect(() => {
+  if (isOnline) {
+    const interval = setInterval(() => {
+      checkActiveJob();
+    }, 30000); // Check every 30 seconds
+
+    return () => clearInterval(interval);
+  }
+}, [isOnline]);
+
 
   // Start/stop location tracking based on online status
   useEffect(() => {

@@ -46,6 +46,11 @@ export default function ServiceCompleteScreen() {
   const [jobData, setJobData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Debug logger
+  const addDebug = (message: string, data?: any) => {
+    console.log(`🔍 [ServiceComplete] ${message}`, data || '');
+  };
+
   // Format completion time
   const completionTime = new Date().toLocaleTimeString([], { 
     hour: '2-digit', 
@@ -56,6 +61,36 @@ export default function ServiceCompleteScreen() {
   const totalAmount = parseFloat(earnings); // This is the total paid by customer
   const platformFee = totalAmount * 0.15; // 15% platform fee
   const providerEarnings = totalAmount - platformFee; // Provider gets 85%
+
+  // Clean up booking from AsyncStorage
+  const cleanupBooking = async () => {
+    try {
+      addDebug('🧹 Cleaning up booking from storage:', bookingId);
+      
+      // Remove from activeBookings array
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        let activeBookings = JSON.parse(activeBookingsJson);
+        activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
+        await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+        addDebug('✅ Removed from activeBookings');
+      }
+
+      // Clear current booking if it matches
+      const currentId = await AsyncStorage.getItem('currentBookingId');
+      if (currentId === bookingId) {
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+        addDebug('✅ Cleared current booking');
+      }
+
+      // Also clear any other booking-related data
+      await AsyncStorage.removeItem(`job_${bookingId}`);
+      
+    } catch (error) {
+      addDebug('❌ Error cleaning up booking:', error);
+    }
+  };
 
   // Fetch provider's today's stats and job details on mount
   useEffect(() => {
@@ -69,7 +104,7 @@ export default function ServiceCompleteScreen() {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
+      const response = await fetch(`${API_BASE_URL}/api/provider/job/${bookingId}/active`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -79,11 +114,11 @@ export default function ServiceCompleteScreen() {
         const data = await response.json();
         if (data.success && data.job) {
           setJobData(data.job);
-          console.log('📦 Job details loaded:', data.job);
+          addDebug('📦 Job details loaded:', data.job);
         }
       }
     } catch (error) {
-      console.error('Error fetching job details:', error);
+      addDebug('Error fetching job details:', error);
     } finally {
       setIsLoading(false);
     }
@@ -97,7 +132,7 @@ export default function ServiceCompleteScreen() {
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
       if (!firebaseUserId) return;
 
-      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/performance`, {
+      const response = await fetch(`${API_BASE_URL}/api/provider/${firebaseUserId}/performance`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -110,7 +145,7 @@ export default function ServiceCompleteScreen() {
         setJobsCompleted(data.data.jobs || 0);
       }
     } catch (error) {
-      console.error('Error fetching stats:', error);
+      addDebug('Error fetching stats:', error);
     }
   };
 
@@ -134,10 +169,10 @@ export default function ServiceCompleteScreen() {
         return;
       }
 
-      console.log('📡 Completing service for booking:', bookingId);
+      addDebug('📡 Completing service for booking:', bookingId);
 
       // Call API to mark job as completed
-      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+      const response = await fetch(`${API_BASE_URL}/api/provider/job/${bookingId}/status`, {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -156,11 +191,14 @@ export default function ServiceCompleteScreen() {
       });
 
       const data = await response.json();
-      console.log('📡 Complete response:', response.status, data);
+      addDebug('📡 Complete response:', { status: response.status, data });
 
       if (!response.ok) {
         throw new Error(data.message || 'Failed to complete service');
       }
+
+      // ✅ IMPORTANT: Clean up booking from storage BEFORE showing success
+      await cleanupBooking();
 
       // Show success message
       Alert.alert(
@@ -169,13 +207,13 @@ export default function ServiceCompleteScreen() {
         [
           {
             text: 'OK',
-            onPress: () => router.replace('/(provider)/Home')
+            onPress: () => router.replace('/(provider)/HomePage')
           }
         ]
       );
 
     } catch (error) {
-      console.error('❌ Complete service error:', error);
+      addDebug('❌ Complete service error:', error);
       Alert.alert(
         'Error',
         error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
@@ -183,6 +221,24 @@ export default function ServiceCompleteScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Handle manual back to home with cleanup
+  const handleBackToHome = async () => {
+    Alert.alert(
+      'Exit Completion',
+      'Are you sure you want to go back to home? The service will be marked as completed.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes, Go Home',
+          onPress: async () => {
+            await cleanupBooking();
+            router.replace('/(provider)/HomePage');
+          }
+        }
+      ]
+    );
   };
 
   if (isLoading) {
@@ -390,7 +446,7 @@ export default function ServiceCompleteScreen() {
         {/* ── BACK TO HOME ── */}
         <TouchableOpacity 
           style={styles.backHomeBtn} 
-          onPress={() => router.replace('/(provider)/HomePage')} 
+          onPress={handleBackToHome} 
           activeOpacity={0.8}
           disabled={isSubmitting}
         >
@@ -772,4 +828,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 });
-

@@ -11,15 +11,16 @@ import {
   Platform,
   Linking,
   Dimensions,
+  AppState,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import ChatPopup from './components/ChatPopup';
 
-const { height, width } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
@@ -49,6 +50,7 @@ interface JobDetails {
   distance: string;
   eta: string;
   navigationTips?: string;
+  status?: string;
 }
 
 export default function NavigateToCustomerScreen() {
@@ -60,7 +62,9 @@ export default function NavigateToCustomerScreen() {
 
   const mapRef = useRef<MapView>(null);
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
+  const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+  const appState = useRef(AppState.currentState);
   const [chatVisible, setChatVisible] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -68,6 +72,7 @@ export default function NavigateToCustomerScreen() {
   const [currentLocation, setCurrentLocation] = useState<Coordinates | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
+  const [cancellationAcknowledged, setCancellationAcknowledged] = useState(false);
 
   const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
     return !!coord &&
@@ -97,6 +102,152 @@ export default function NavigateToCustomerScreen() {
     console.log(`🔍 [NavigateToCustomer] ${message}`, data || '');
   };
 
+  // Save booking to AsyncStorage when component mounts
+  const saveBookingToStorage = async () => {
+    try {
+      // Get existing active bookings
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      let activeBookings = activeBookingsJson ? JSON.parse(activeBookingsJson) : [];
+      
+      // Check if this booking already exists
+      const existingIndex = activeBookings.findIndex((b: any) => b.bookingId === bookingId);
+      
+      const bookingData = {
+        bookingId,
+        status: 'accepted',
+        customerName: jobDetails?.customerName || safeGetString(params.customerName, 'Customer'),
+        customerPhone: jobDetails?.customerPhone || safeGetString(params.customerPhone, ''),
+        pickupLocation: jobDetails?.pickupLocation || safeGetString(params.pickupLocation, ''),
+        timestamp: new Date().toISOString(),
+        screen: 'NavigateToCustomer',
+      };
+
+      if (existingIndex >= 0) {
+        // Update existing
+        activeBookings[existingIndex] = { ...activeBookings[existingIndex], ...bookingData };
+      } else {
+        // Add new
+        activeBookings.push(bookingData);
+      }
+
+      await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+      
+      // Also save current booking ID for quick access
+      await AsyncStorage.setItem('currentBookingId', bookingId);
+      await AsyncStorage.setItem('currentBookingStatus', 'accepted');
+      
+      addDebug('✅ Booking saved to AsyncStorage:', bookingData);
+    } catch (error) {
+      addDebug('❌ Error saving booking to storage:', error);
+    }
+  };
+
+  // Check job status from backend
+  const checkJobStatus = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return;
+
+      addDebug('📡 Checking job status...');
+
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.success) {
+          addDebug(`📊 Job status: ${data.status}`);
+          
+          // Check if job is cancelled
+          if (data.status === 'cancelled' && !cancellationAcknowledged) {
+            handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
+          }
+          
+          // Update job details if we have them
+          if (data.job) {
+            setJobDetails(prev => ({
+              ...(prev || {}),
+              ...data.job,
+              status: data.status,
+            }));
+          }
+        }
+      } else {
+        addDebug(`⚠️ Status check failed: ${response.status}`);
+      }
+    } catch (error) {
+      addDebug('❌ Error checking job status:', error);
+    }
+  };
+
+  // Handle job cancellation
+  const handleJobCancelled = (reason: string) => {
+    // Prevent multiple alerts
+    if (cancellationAcknowledged) return;
+    
+    setCancellationAcknowledged(true);
+    
+    // Stop all intervals
+    if (locationInterval.current) {
+      clearInterval(locationInterval.current);
+      locationInterval.current = null;
+    }
+    if (statusCheckInterval.current) {
+      clearInterval(statusCheckInterval.current);
+      statusCheckInterval.current = null;
+    }
+    if (jobRefreshInterval.current) {
+      clearInterval(jobRefreshInterval.current);
+      jobRefreshInterval.current = null;
+    }
+
+    // Show alert to provider
+    Alert.alert(
+      'Service Cancelled',
+      `The customer has cancelled this service.\n\nReason: ${reason}`,
+      [
+        {
+          text: 'OK',
+          onPress: async () => {
+            // Clean up storage
+            await cleanupBooking();
+            // Navigate to home
+            router.replace('/(provider)/HomePage');
+          }
+        }
+      ],
+      { cancelable: false }
+    );
+  };
+
+  // Clean up booking from storage
+  const cleanupBooking = async () => {
+    try {
+      // Remove from active bookings
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        let activeBookings = JSON.parse(activeBookingsJson);
+        activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
+        await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+      }
+
+      // Clear current booking if it matches
+      const currentId = await AsyncStorage.getItem('currentBookingId');
+      if (currentId === bookingId) {
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+      }
+
+      addDebug('✅ Booking cleaned up from storage');
+    } catch (error) {
+      addDebug('❌ Error cleaning up booking:', error);
+    }
+  };
+
   // Fetch fresh job details from backend
   const fetchActiveJobDetails = async () => {
     try {
@@ -105,7 +256,7 @@ export default function NavigateToCustomerScreen() {
 
       addDebug(`📡 Fetching active job details for: ${bookingId}`);
 
-      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/active`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -118,6 +269,7 @@ export default function NavigateToCustomerScreen() {
           setJobDetails(prev => ({
             ...(prev || {}),
             ...data.job,
+            status: data.status || prev?.status,
             // Ensure numbers are valid
             pickupLat: safeParseFloat(data.job.pickupLat, prev?.pickupLat),
             pickupLng: safeParseFloat(data.job.pickupLng, prev?.pickupLng),
@@ -159,9 +311,13 @@ export default function NavigateToCustomerScreen() {
       distance: safeGetString(params.distance, '2.5 km'),
       eta: safeGetString(params.eta, '8-10 minutes'),
       navigationTips: safeGetString(params.description, 'Located in underground parking. Call customer upon arrival.'),
+      status: 'accepted',
     };
 
     setJobDetails(jobFromParams);
+
+    // Save booking to storage
+    saveBookingToStorage();
 
     // Then fetch fresh data from backend
     fetchActiveJobDetails();
@@ -169,8 +325,23 @@ export default function NavigateToCustomerScreen() {
     // Check location permission and start tracking
     checkLocationPermission();
 
+    // Start status checking (every 10 seconds)
+    statusCheckInterval.current = setInterval(checkJobStatus, 10000);
+
+    // Check status immediately
+    checkJobStatus();
+
     // Refresh job details every 30 seconds
     jobRefreshInterval.current = setInterval(fetchActiveJobDetails, 30000);
+
+    // Listen for app state changes (to check status when app comes to foreground)
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        // App has come to the foreground - check status immediately
+        checkJobStatus();
+      }
+      appState.current = nextAppState;
+    });
 
     return () => {
       // Clean up location tracking on unmount
@@ -182,6 +353,11 @@ export default function NavigateToCustomerScreen() {
         clearInterval(jobRefreshInterval.current);
         jobRefreshInterval.current = null;
       }
+      if (statusCheckInterval.current) {
+        clearInterval(statusCheckInterval.current);
+        statusCheckInterval.current = null;
+      }
+      subscription.remove();
       addDebug('🧹 Cleanup complete');
     };
   }, []);
@@ -468,6 +644,11 @@ export default function NavigateToCustomerScreen() {
       return;
     }
 
+    // Update status in storage
+    AsyncStorage.setItem('currentBookingStatus', 'arrived').catch(err => 
+      addDebug('Error updating status:', err)
+    );
+
     Alert.alert(
       'Arrived at Location',
       'Have you arrived at the pickup location?',
@@ -476,7 +657,7 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'Yes, Arrived',
           onPress: () => {
-            // Just navigate - no API calls needed here
+            // Navigate to service in progress
             router.push({
               pathname: '/ServiceInProgressScreen',
               params: {
@@ -507,26 +688,28 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'Yes, Cancel',
           style: 'destructive',
-          onPress: () => {
-            router.replace('/(provider)/HomePage');
-
-            // Background cancellation
-            const cancelApi = async () => {
-              try {
-                const token = await AsyncStorage.getItem('userToken');
-                await fetch(`${API_BASE_URL}/jobs/${bookingId}/cancel`, {
-                  method: 'DELETE',
-                  headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({ reason: 'provider_cancelled' }),
-                });
-              } catch (error) {
-                console.log('Background API call failed:', error);
-              }
-            };
-            cancelApi();
+          onPress: async () => {
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ reason: 'provider_cancelled' }),
+              });
+              
+              // Clean up storage
+              await cleanupBooking();
+              
+              // Navigate to home
+              router.replace('/(provider)/Home');
+            } catch (error) {
+              console.log('Cancel API call failed:', error);
+              // Still navigate home
+              router.replace('/(provider)/Home');
+            }
           }
         }
       ]
@@ -557,7 +740,6 @@ export default function NavigateToCustomerScreen() {
     return null;
   };
 
-  // Replace the getInitialRegion function with this fixed version:
   const getInitialRegion = () => {
     // First try current location
     if (currentLocation && isValidCoordinate(currentLocation)) {
@@ -588,6 +770,7 @@ export default function NavigateToCustomerScreen() {
       longitudeDelta: 0.02,
     };
   };
+
   // Show loading only while getting location
   if (isLoading) {
     return (
