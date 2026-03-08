@@ -1,4 +1,4 @@
-// HomePage.tsx - Polling-based approach (UPDATED)
+// HomePage.tsx - Complete with provider status check on mount
 import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -156,6 +156,7 @@ const HomePage = () => {
   // Polling control
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
+  const activeJobCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const isPolling = useRef(false);
 
   // Map picker states
@@ -175,7 +176,6 @@ const HomePage = () => {
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
   });
-
 
   // Add this helper function at the top with your other interfaces
   const isValidCoordinate = (coord: any): coord is { latitude: number; longitude: number } => {
@@ -215,16 +215,104 @@ const HomePage = () => {
     };
   };
 
-  useEffect(() => {
-  loadProviderData();
-  checkLocationPermission();
-  loadSeenJobsFromStorage();
-  checkActiveJob(); // Add this line to check for active job on mount
-  return () => {
-    stopPolling();
-    stopLocationTracking();
+  // Check provider status from backend
+  const checkProviderStatus = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
+      
+      if (!token || !firebaseUserId) {
+        console.log('⚠️ No token or firebaseUserId found for status check');
+        return;
+      }
+
+      console.log('📡 Checking provider status for:', firebaseUserId);
+
+      const response = await fetch(`${API_BASE_URL}/api/provider/${firebaseUserId}/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.success) {
+          console.log('📊 Provider status from backend:', data.data);
+          
+          // Set online status based on backend
+          setIsOnline(data.data.isOnline || false);
+          
+          // Store the status in AsyncStorage
+          await AsyncStorage.setItem('providerOnlineStatus', JSON.stringify({
+            isOnline: data.data.isOnline || false,
+            timestamp: new Date().toISOString()
+          }));
+          
+          // If there's a current booking ID, store it
+          if (data.data.currentBookingId) {
+            await AsyncStorage.setItem('currentBookingId', data.data.currentBookingId);
+            console.log('✅ Restored current booking:', data.data.currentBookingId);
+          }
+          
+          // If there's a location, update it
+          if (data.data.currentLocation?.coordinates) {
+            const [lng, lat] = data.data.currentLocation.coordinates;
+            const locationData: LocationData = {
+              latitude: lat,
+              longitude: lng,
+              address: 'Restored location',
+              isManual: false,
+              timestamp: data.data.lastSeen || new Date().toISOString(),
+            };
+            setCurrentLocation(locationData);
+          }
+        }
+      } else {
+        console.log('⚠️ Failed to fetch provider status:', response.status);
+      }
+    } catch (error) {
+      console.error('Error checking provider status:', error);
+    }
   };
-}, []);
+
+  // Initialize component
+  useEffect(() => {
+    const initializeHomePage = async () => {
+      await loadProviderData();
+      await checkLocationPermission();
+      await loadSeenJobsFromStorage();
+      await checkProviderStatus(); // ✅ Check provider status from backend
+      await checkActiveJob(); // Check for active job
+    };
+
+    initializeHomePage();
+
+    return () => {
+      stopPolling();
+      stopLocationTracking();
+      if (activeJobCheckInterval.current) {
+        clearInterval(activeJobCheckInterval.current);
+      }
+    };
+  }, []);
+
+  // Start periodic active job check when online
+  useEffect(() => {
+    if (isOnline) {
+      // Check every 30 seconds
+      activeJobCheckInterval.current = setInterval(() => {
+        checkActiveJob();
+      }, 30000);
+
+      return () => {
+        if (activeJobCheckInterval.current) {
+          clearInterval(activeJobCheckInterval.current);
+        }
+      };
+    }
+  }, [isOnline]);
 
   // Start/stop polling based on online status
   useEffect(() => {
@@ -234,126 +322,6 @@ const HomePage = () => {
       stopPolling();
     }
   }, [isOnline, providerData]);
-
-
-
-
-
-
-
-
-  // Add this function to check for active job
-const checkActiveJob = async () => {
-  try {
-    // Get bookingId from local storage
-    const currentBookingId = await AsyncStorage.getItem('currentBookingId');
-    
-    if (!currentBookingId) {
-      console.log('📭 No active booking found in storage');
-      return;
-    }
-
-    console.log('🔍 Checking active job for bookingId:', currentBookingId);
-
-    const token = await AsyncStorage.getItem('userToken');
-    if (!token) return;
-
-    // Make API call to check job status
-    const response = await fetch(`${API_BASE_URL}/api/provider/job/${currentBookingId}/status`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      // If 404 or error, clean up storage
-      if (response.status === 404) {
-        console.log('❌ Job not found, cleaning up storage');
-        await cleanupStoredBooking(currentBookingId);
-      }
-      return;
-    }
-
-    const data = await response.json();
-    
-    if (data.success) {
-      console.log('📊 Active job status:', data.status);
-
-      // Handle based on status
-      switch (data.status) {
-        case 'accepted':
-          // Navigate to NavigateToCustomerScreen
-          console.log('🚗 Job accepted - navigating to customer');
-          router.replace({
-            pathname: '/NavigateToCustomerScreen',
-            params: { bookingId: currentBookingId }
-          });
-          break;
-
-        case 'in_progress':
-          // Navigate to ServiceInProgressScreen
-          console.log('🔧 Job in progress - navigating to service');
-          router.replace({
-            pathname: '/ServiceInProgressScreen',
-            params: { bookingId: currentBookingId }
-          });
-          break;
-
-        case 'completed':
-        case 'cancelled':
-          // Clean up storage
-          console.log(`✅ Job ${data.status} - cleaning up storage`);
-          await cleanupStoredBooking(currentBookingId);
-          break;
-
-        default:
-          console.log('ℹ️ Unknown job status:', data.status);
-          break;
-      }
-    }
-  } catch (error) {
-    console.error('Error checking active job:', error);
-  }
-};
-
-// Add cleanup function
-const cleanupStoredBooking = async (bookingId: string) => {
-  try {
-    console.log('🧹 Cleaning up booking:', bookingId);
-    
-    // Remove from activeBookings array
-    const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
-    if (activeBookingsJson) {
-      let activeBookings = JSON.parse(activeBookingsJson);
-      activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
-      await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
-    }
-
-    // Clear current booking if it matches
-    const currentId = await AsyncStorage.getItem('currentBookingId');
-    if (currentId === bookingId) {
-      await AsyncStorage.removeItem('currentBookingId');
-      await AsyncStorage.removeItem('currentBookingStatus');
-    }
-
-    console.log('✅ Booking cleaned up successfully');
-  } catch (error) {
-    console.error('Error cleaning up booking:', error);
-  }
-};
-
-// Optional: Add periodic check for active job (every 30 seconds)
-useEffect(() => {
-  if (isOnline) {
-    const interval = setInterval(() => {
-      checkActiveJob();
-    }, 30000); // Check every 30 seconds
-
-    return () => clearInterval(interval);
-  }
-}, [isOnline]);
-
 
   // Start/stop location tracking based on online status
   useEffect(() => {
@@ -375,6 +343,107 @@ useEffect(() => {
       setCurrentJobRequest(jobRequestQueue[nextJobId]);
     }
   }, [jobRequestQueue, hasActiveJob]);
+
+  // Add this function to check for active job
+  const checkActiveJob = async () => {
+    try {
+      // Get bookingId from local storage
+      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+      
+      if (!currentBookingId) {
+        console.log('📭 No active booking found in storage');
+        return;
+      }
+
+      console.log('🔍 Checking active job for bookingId:', currentBookingId);
+
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      // Make API call to check job status
+      const response = await fetch(`${API_BASE_URL}/api/provider/job/${currentBookingId}/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        // If 404 or error, clean up storage
+        if (response.status === 404) {
+          console.log('❌ Job not found, cleaning up storage');
+          await cleanupStoredBooking(currentBookingId);
+        }
+        return;
+      }
+
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('📊 Active job status:', data.status);
+
+        // Handle based on status
+        switch (data.status) {
+          case 'accepted':
+            // Navigate to NavigateToCustomerScreen
+            console.log('🚗 Job accepted - navigating to customer');
+            router.replace({
+              pathname: '/NavigateToCustomerScreen',
+              params: { bookingId: currentBookingId }
+            });
+            break;
+
+          case 'in_progress':
+            // Navigate to ServiceInProgressScreen
+            console.log('🔧 Job in progress - navigating to service');
+            router.replace({
+              pathname: '/ServiceInProgressScreen',
+              params: { bookingId: currentBookingId }
+            });
+            break;
+
+          case 'completed':
+          case 'cancelled':
+            // Clean up storage
+            console.log(`✅ Job ${data.status} - cleaning up storage`);
+            await cleanupStoredBooking(currentBookingId);
+            break;
+
+          default:
+            console.log('ℹ️ Unknown job status:', data.status);
+            break;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking active job:', error);
+    }
+  };
+
+  // Add cleanup function
+  const cleanupStoredBooking = async (bookingId: string) => {
+    try {
+      console.log('🧹 Cleaning up booking:', bookingId);
+      
+      // Remove from activeBookings array
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        let activeBookings = JSON.parse(activeBookingsJson);
+        activeBookings = activeBookings.filter((b: any) => b.bookingId !== bookingId);
+        await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
+      }
+
+      // Clear current booking if it matches
+      const currentId = await AsyncStorage.getItem('currentBookingId');
+      if (currentId === bookingId) {
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+      }
+
+      console.log('✅ Booking cleaned up successfully');
+    } catch (error) {
+      console.error('Error cleaning up booking:', error);
+    }
+  };
 
   // Load seen jobs from AsyncStorage
   const loadSeenJobsFromStorage = async () => {
@@ -497,7 +566,7 @@ useEffect(() => {
   // Try to fetch performance data, but use defaults if fails
   const fetchPerformanceData = async (firebaseUserId: string, token: string) => {
     try {
-      const performanceUrl = `${API_BASE_URL}/provider/${firebaseUserId}/performance`;
+      const performanceUrl = `${API_BASE_URL}/api/provider/${firebaseUserId}/performance`;
       const response = await fetch(performanceUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -526,7 +595,7 @@ useEffect(() => {
   // Try to fetch recent jobs, but use defaults if fails
   const fetchRecentJobs = async (firebaseUserId: string, token: string) => {
     try {
-      const jobsUrl = `${API_BASE_URL}/jobs/provider/${firebaseUserId}/recent`;
+      const jobsUrl = `${API_BASE_URL}/api/jobs/provider/${firebaseUserId}/recent`;
       const response = await fetch(jobsUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -545,7 +614,9 @@ useEffect(() => {
       console.error('Error fetching recent jobs, showing empty:', error);
       setRecentJobs([]);
     }
-  }; const getCurrentLocation = async (isManualSelection: boolean = false) => {
+  };
+
+  const getCurrentLocation = async (isManualSelection: boolean = false) => {
     if (currentLocation?.isManual && !isManualSelection) {
       return currentLocation;
     }
@@ -594,11 +665,12 @@ useEffect(() => {
       setIsLoadingLocation(false);
     }
   };
+
   const sendLocationToBackend = async (location: LocationData) => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
-      const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/location`;
+      const url = `${API_BASE_URL}/api/provider/${providerData.firebaseUserId}/location`;
 
       const response = await fetch(url, {
         method: 'POST',
@@ -652,6 +724,7 @@ useEffect(() => {
 
     console.log('📍 Location tracking started (every 10 seconds)');
   };
+
   const stopLocationTracking = () => {
     if (locationInterval.current) {
       clearInterval(locationInterval.current);
@@ -683,13 +756,14 @@ useEffect(() => {
       console.log('🔄 Job polling stopped');
     }
   };
+
   const pollAvailableJobs = async () => {
     if (!isOnline || !providerData?.token || isPolling.current) return;
 
     isPolling.current = true;
 
     try {
-      // Get provider's location for radius search - FIXED
+      // Get provider's location for radius search
       let lat, lng;
       if (currentLocation) {
         lat = currentLocation.latitude;
@@ -697,9 +771,9 @@ useEffect(() => {
       }
 
       // Build URL with query params
-      let url = `${API_BASE_URL}/provider/available-jobs`; // Use test endpoint for now
+      let url = `${API_BASE_URL}/api/provider/available-jobs`;
 
-      // Add location if available (for production version later)
+      // Add location if available
       if (lat && lng) {
         url += `?lat=${lat}&lng=${lng}`;
       }
@@ -767,7 +841,6 @@ useEffect(() => {
     }
   };
 
-
   const enhanceJobData = (job: any, jobId: string): JobRequest => {
     return {
       id: jobId,
@@ -832,6 +905,7 @@ useEffect(() => {
       openMapPicker();
     }
   };
+
   const openMapPicker = () => {
     setMapPickerVisible(true);
 
@@ -871,6 +945,7 @@ useEffect(() => {
         });
     }
   };
+
   const searchLocation = async (query: string) => {
     if (query.length < 3) {
       setSearchSuggestions([]);
@@ -1011,7 +1086,7 @@ useEffect(() => {
     }
   };
 
-  const toggleOnlineStatus = () => {
+  const toggleOnlineStatus = async () => {
     const newStatus = !isOnline;
     console.log('Toggling online status to:', newStatus);
 
@@ -1022,26 +1097,25 @@ useEffect(() => {
       }
 
       if (!currentLocation) {
-        getCurrentLocation(false).then((location) => {
-          if (location) {
-            setIsOnline(true);
-            startLocationTracking();
-            updateProviderStatus(true);
-          } else {
-            setLocationModalVisible(true);
-          }
-        });
+        const location = await getCurrentLocation(false);
+        if (location) {
+          setIsOnline(true);
+          startLocationTracking();
+          await updateProviderStatus(true);
+        } else {
+          setLocationModalVisible(true);
+        }
         return;
       }
 
       setIsOnline(true);
       startLocationTracking();
-      updateProviderStatus(true);
+      await updateProviderStatus(true);
     } else {
       setIsOnline(false);
       stopLocationTracking();
       stopPolling();
-      updateProviderStatus(false);
+      await updateProviderStatus(false);
     }
   };
 
@@ -1049,7 +1123,9 @@ useEffect(() => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
-      const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/status`;
+      const url = `${API_BASE_URL}/api/provider/${providerData.firebaseUserId}/status`;
+
+      console.log(`📤 Updating provider status to: ${status ? 'ONLINE' : 'OFFLINE'}`);
 
       const response = await fetch(url, {
         method: 'PUT',
@@ -1063,9 +1139,22 @@ useEffect(() => {
       });
 
       const responseData = await response.json();
-      console.log('Status update response:', responseData);
+      console.log('✅ Status update response:', responseData);
+      
+      // Store the status in AsyncStorage
+      await AsyncStorage.setItem('providerOnlineStatus', JSON.stringify({
+        isOnline: status,
+        timestamp: new Date().toISOString()
+      }));
+      
     } catch (error) {
-      console.error('Error updating provider status:', error);
+      console.error('❌ Error updating provider status:', error);
+      // Revert UI if backend update fails
+      setIsOnline(!status);
+      Alert.alert(
+        'Status Update Failed',
+        'Could not update your status. Please check your connection and try again.'
+      );
     }
   };
 
@@ -1422,24 +1511,6 @@ useEffect(() => {
           </TouchableOpacity>
         </View>
 
-        {/* Polling Status */}
-        {/* {isOnline && (
-          <View style={styles.pollingStatusContainer}>
-            <ActivityIndicator size="small" color="#68bdee" />
-            <Text style={styles.pollingStatusText}>Checking for new jobs every 5s</Text>
-          </View>
-        )} */}
-
-        {/* Active Job Queue Status */}
-        {/* {Object.keys(jobRequestQueue).length > 0 && (
-          <View style={styles.queueStatusContainer}>
-            <Ionicons name="notifications" size={16} color="#68bdee" />
-            <Text style={styles.queueStatusText}>
-              {Object.keys(jobRequestQueue).length} pending job request(s)
-            </Text>
-          </View>
-        )} */}
-
         {/* Performance Container */}
         <View style={styles.performanceContainer}>
           <View style={styles.performanceHeader}>
@@ -1726,39 +1797,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#9CA3AF",
     marginTop: 2,
-  },
-  pollingStatusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 8,
-    backgroundColor: '#F0F9FF',
-    marginHorizontal: 24,
-    marginTop: 16,
-    marginBottom: 8,
-    borderRadius: 8,
-  },
-  pollingStatusText: {
-    fontSize: 12,
-    color: '#68bdee',
-    fontWeight: '500',
-    marginLeft: 8,
-  },
-  queueStatusContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 8,
-    backgroundColor: '#E8F0FE',
-    marginHorizontal: 24,
-    marginBottom: 8,
-    borderRadius: 8,
-  },
-  queueStatusText: {
-    fontSize: 12,
-    color: '#68bdee',
-    fontWeight: '600',
-    marginLeft: 8,
   },
   toggleSwitch: {
     width: 51,
