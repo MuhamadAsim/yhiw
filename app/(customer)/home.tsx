@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useState, useEffect } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Image,
   ScrollView,
@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -41,27 +42,97 @@ const HomeScreen = () => {
   const [filteredServices, setFilteredServices] = useState<Service[]>([]);
   const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [navigationInProgress, setNavigationInProgress] = useState<boolean>(false);
 
-  // Check for existing booking ID when component mounts
-  useEffect(() => {
-    checkExistingBooking();
-  }, []);
+  // Check for existing booking whenever screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      checkExistingBooking();
+    }, [])
+  );
+// In HomeScreen.tsx - Update the navigation part
 
-  const checkExistingBooking = async () => {
-    try {
-      setIsLoading(true);
-      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+const checkExistingBooking = async () => {
+  if (navigationInProgress) {
+    console.log('🏠 Navigation already in progress, skipping...');
+    return;
+  }
+
+  try {
+    setIsLoading(true);
+    
+    const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+    const currentBookingStatus = await AsyncStorage.getItem('currentBookingStatus');
+    const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+    
+    console.log('🏠 HomeScreen - Checking existing booking:', { 
+      currentBookingId, 
+      currentBookingStatus,
+      hasActiveBookings: !!activeBookingsJson
+    });
+    
+    if (currentBookingId) {
+      setNavigationInProgress(true);
       
-      if (currentBookingId) {
-        // If booking ID exists, navigate to FindProvider page
-        router.push('/(customer)/FindingProvider');
+      // Get additional booking details from activeBookings
+      let customerName = 'Customer';
+      let pickupLocation = '';
+      
+      if (activeBookingsJson) {
+        try {
+          const activeBookings = JSON.parse(activeBookingsJson);
+          const currentBooking = activeBookings.find((b: any) => b.bookingId === currentBookingId);
+          if (currentBooking) {
+            customerName = currentBooking.customerName || 'Customer';
+            pickupLocation = currentBooking.pickupLocation || '';
+          }
+        } catch (e) {
+          console.error('Error parsing activeBookings:', e);
+        }
       }
-    } catch (error) {
-      console.error('Error checking booking ID:', error);
-    } finally {
+      
+      // Small delay to ensure navigation doesn't conflict with mounting
+      setTimeout(() => {
+        console.log(`➡️ Navigating to TrackProvider with bookingId: ${currentBookingId}`);
+        
+        if (currentBookingStatus === 'accepted' || currentBookingStatus === 'started') {
+          // Navigate to TrackProvider with the booking ID
+          router.replace({
+            pathname: '/(customer)/TrackProvider',
+            params: {
+              bookingId: currentBookingId,
+              customerName: customerName,
+              pickupLocation: pickupLocation
+            }
+          });
+        } else {
+          // Navigate to FindingProvider with the booking ID
+          router.replace({
+            pathname: '/(customer)/FindingProvider',
+            params: {
+              bookingId: currentBookingId
+            }
+          });
+        }
+      }, 100);
+    } else {
       setIsLoading(false);
     }
-  };
+  } catch (error) {
+    console.error('Error checking booking ID:', error);
+    setIsLoading(false);
+  }
+};
+
+  // Also check when component mounts (initial load)
+  useEffect(() => {
+    checkExistingBooking();
+    
+    // Cleanup function
+    return () => {
+      setNavigationInProgress(false);
+    };
+  }, []);
 
   // EXACTLY 12 SERVICES as per SRS v1.1 Detailed Supplement
   const services: Service[] = [
@@ -289,6 +360,7 @@ const HomeScreen = () => {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#68bdee" />
+        <Text style={styles.loadingText}>Checking active booking...</Text>
       </View>
     );
   }
@@ -492,6 +564,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#666',
   },
   header: {
     paddingHorizontal: 20,

@@ -1,20 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
-  TextInput,
-  StatusBar,
-  ActivityIndicator,
-  Image,
-} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
@@ -104,7 +103,7 @@ export default function ServiceCompleteScreen() {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const response = await fetch(`${API_BASE_URL}/api/provider/job/${bookingId}/active`, {
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/active`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -132,7 +131,7 @@ export default function ServiceCompleteScreen() {
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
       if (!firebaseUserId) return;
 
-      const response = await fetch(`${API_BASE_URL}/api/provider/${firebaseUserId}/performance`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/performance`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -172,8 +171,8 @@ export default function ServiceCompleteScreen() {
       addDebug('📡 Completing service for booking:', bookingId);
 
       // Call API to mark job as completed
-      const response = await fetch(`${API_BASE_URL}/api/provider/job/${bookingId}/status`, {
-        method: 'PATCH',
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -207,7 +206,7 @@ export default function ServiceCompleteScreen() {
         [
           {
             text: 'OK',
-            onPress: () => router.replace('/(provider)/HomePage')
+            onPress: () => router.replace('/(provider)/Home')
           }
         ]
       );

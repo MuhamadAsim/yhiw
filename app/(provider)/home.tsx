@@ -220,7 +220,7 @@ const HomePage = () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
-      
+
       if (!token || !firebaseUserId) {
         console.log('⚠️ No token or firebaseUserId found for status check');
         return;
@@ -228,7 +228,7 @@ const HomePage = () => {
 
       console.log('📡 Checking provider status for:', firebaseUserId);
 
-      const response = await fetch(`${API_BASE_URL}/api/provider/${firebaseUserId}/status`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/status`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -237,25 +237,25 @@ const HomePage = () => {
 
       if (response.ok) {
         const data = await response.json();
-        
+
         if (data.success) {
           console.log('📊 Provider status from backend:', data.data);
-          
+
           // Set online status based on backend
           setIsOnline(data.data.isOnline || false);
-          
+
           // Store the status in AsyncStorage
           await AsyncStorage.setItem('providerOnlineStatus', JSON.stringify({
             isOnline: data.data.isOnline || false,
             timestamp: new Date().toISOString()
           }));
-          
+
           // If there's a current booking ID, store it
           if (data.data.currentBookingId) {
             await AsyncStorage.setItem('currentBookingId', data.data.currentBookingId);
             console.log('✅ Restored current booking:', data.data.currentBookingId);
           }
-          
+
           // If there's a location, update it
           if (data.data.currentLocation?.coordinates) {
             const [lng, lat] = data.data.currentLocation.coordinates;
@@ -280,11 +280,11 @@ const HomePage = () => {
   // Initialize component
   useEffect(() => {
     const initializeHomePage = async () => {
-      await loadProviderData();
+      await loadProviderData();        // ✅ This sets providerData with token and firebaseUserId
       await checkLocationPermission();
+      await checkProviderStatus();      // ✅ This runs AFTER loadProviderData() - SHOULD work
       await loadSeenJobsFromStorage();
-      await checkProviderStatus(); // ✅ Check provider status from backend
-      await checkActiveJob(); // Check for active job
+      await checkActiveJob();
     };
 
     initializeHomePage();
@@ -349,7 +349,7 @@ const HomePage = () => {
     try {
       // Get bookingId from local storage
       const currentBookingId = await AsyncStorage.getItem('currentBookingId');
-      
+
       if (!currentBookingId) {
         console.log('📭 No active booking found in storage');
         return;
@@ -361,7 +361,7 @@ const HomePage = () => {
       if (!token) return;
 
       // Make API call to check job status
-      const response = await fetch(`${API_BASE_URL}/api/provider/job/${currentBookingId}/status`, {
+      const response = await fetch(`${API_BASE_URL}/provider/job/${currentBookingId}/status`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -378,7 +378,7 @@ const HomePage = () => {
       }
 
       const data = await response.json();
-      
+
       if (data.success) {
         console.log('📊 Active job status:', data.status);
 
@@ -423,7 +423,7 @@ const HomePage = () => {
   const cleanupStoredBooking = async (bookingId: string) => {
     try {
       console.log('🧹 Cleaning up booking:', bookingId);
-      
+
       // Remove from activeBookings array
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
@@ -517,6 +517,7 @@ const HomePage = () => {
     }
   };
 
+  // HomePage.tsx - Updated loadProviderData
   const loadProviderData = async () => {
     try {
       setIsLoading(true);
@@ -529,18 +530,25 @@ const HomePage = () => {
 
         const firebaseUserId = userData.firebaseUserId || userData.uid;
 
+        // ✅ SAVE TO ASYNCSTORAGE
+        if (firebaseUserId) {
+          await AsyncStorage.setItem('firebaseUserId', firebaseUserId);
+          console.log('✅ Saved firebaseUserId to AsyncStorage:', firebaseUserId);
+        }
+
+        // Set basic provider data from AsyncStorage
         setProviderData({
-          id: firebaseUserId || 'PRV-001234',
-          name: userData.name || 'AHMED AL-KHALIFA',
-          providerId: userData.providerId || 'PRV-001234',
+          id: firebaseUserId || userData.id || 'PRV-001234',
+          name: userData.fullName || userData.name || 'AHMED AL-KHALIFA',
+          providerId: userData.providerId || userData.id || 'PRV-001234',
           rating: userData.rating || 4.8,
           jobsCompleted: userData.jobsCompleted || 234,
-          isVerified: userData.isVerified || true,
+          isVerified: userData.isVerified || userData.status === 'active' || true,
           firebaseUserId: firebaseUserId,
           token: token,
         });
 
-        // Try to fetch performance data, but use defaults if fails
+        // Fetch complete profile and performance data from backend
         if (firebaseUserId && token) {
           await fetchPerformanceData(firebaseUserId, token);
           await fetchRecentJobs(firebaseUserId, token);
@@ -563,10 +571,12 @@ const HomePage = () => {
     }
   };
 
-  // Try to fetch performance data, but use defaults if fails
+  // HomePage.tsx - Updated fetchPerformanceData function with proper type handling
   const fetchPerformanceData = async (firebaseUserId: string, token: string) => {
     try {
-      const performanceUrl = `${API_BASE_URL}/api/provider/${firebaseUserId}/performance`;
+      const performanceUrl = `${API_BASE_URL}/provider/${firebaseUserId}/info`;
+      console.log('📡 Fetching provider data from:', performanceUrl);
+      
       const response = await fetch(performanceUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -577,15 +587,42 @@ const HomePage = () => {
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
+          console.log('✅ Received provider data:', data.data);
+          
+          // Update provider data with profile information
+          if (data.data.profile) {
+            setProviderData(prev => {
+              // Create a new object with all required fields
+              const updatedProvider: ProviderData = {
+                id: prev?.id || data.data.profile.id || 'PRV-001234',
+                name: data.data.profile.name || prev?.name || 'AHMED AL-KHALIFA',
+                providerId: data.data.profile.providerId || prev?.providerId || 'PRV-001234',
+                rating: data.data.profile.rating || prev?.rating || 4.8,
+                jobsCompleted: data.data.profile.totalJobs || prev?.jobsCompleted || 234,
+                isVerified: data.data.profile.isVerified || prev?.isVerified || true,
+                firebaseUserId: prev?.firebaseUserId || firebaseUserId,
+                token: prev?.token || token,
+              };
+              return updatedProvider;
+            });
+          }
+          
+          // Update performance data
           setPerformanceData({
-            earnings: data.data.earnings || 0,
-            jobs: data.data.jobs || 0,
-            hours: data.data.hours || 0,
-            rating: data.data.rating || 0,
+            earnings: data.data.performance?.earnings || 0,
+            jobs: data.data.performance?.jobs || 0,
+            hours: data.data.performance?.hours || 0,
+            rating: data.data.performance?.rating || 4.8,
           });
+          
+          // Update recent jobs if available
+          if (data.data.recentJobs && data.data.recentJobs.length > 0) {
+            setRecentJobs(data.data.recentJobs);
+          }
         }
+      } else {
+        console.log('⚠️ Failed to fetch performance data:', response.status);
       }
-      // If fails, keep default values
     } catch (error) {
       console.error('Error fetching performance data, using defaults:', error);
       // Keep default values
@@ -595,7 +632,7 @@ const HomePage = () => {
   // Try to fetch recent jobs, but use defaults if fails
   const fetchRecentJobs = async (firebaseUserId: string, token: string) => {
     try {
-      const jobsUrl = `${API_BASE_URL}/api/jobs/provider/${firebaseUserId}/recent`;
+      const jobsUrl = `${API_BASE_URL}/jobs/provider/${firebaseUserId}/recent`;
       const response = await fetch(jobsUrl, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -670,7 +707,7 @@ const HomePage = () => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
-      const url = `${API_BASE_URL}/api/provider/${providerData.firebaseUserId}/location`;
+      const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/location`;
 
       const response = await fetch(url, {
         method: 'POST',
@@ -771,7 +808,7 @@ const HomePage = () => {
       }
 
       // Build URL with query params
-      let url = `${API_BASE_URL}/api/provider/available-jobs`;
+      let url = `${API_BASE_URL}/provider/available-jobs`;
 
       // Add location if available
       if (lat && lng) {
@@ -1123,7 +1160,7 @@ const HomePage = () => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
-      const url = `${API_BASE_URL}/api/provider/${providerData.firebaseUserId}/status`;
+      const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/status`;
 
       console.log(`📤 Updating provider status to: ${status ? 'ONLINE' : 'OFFLINE'}`);
 
@@ -1140,13 +1177,13 @@ const HomePage = () => {
 
       const responseData = await response.json();
       console.log('✅ Status update response:', responseData);
-      
+
       // Store the status in AsyncStorage
       await AsyncStorage.setItem('providerOnlineStatus', JSON.stringify({
         isOnline: status,
         timestamp: new Date().toISOString()
       }));
-      
+
     } catch (error) {
       console.error('❌ Error updating provider status:', error);
       // Revert UI if backend update fails

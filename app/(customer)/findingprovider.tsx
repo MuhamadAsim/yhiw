@@ -1,4 +1,4 @@
-// findingprovider.tsx - Fixed cleanup logic
+// findingprovider.tsx - Fixed navigation after provider accepts
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -14,6 +14,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
@@ -43,6 +44,7 @@ const FindingProviderScreen = () => {
   const appState = useRef(AppState.currentState);
   const pollingTimer = useRef<NodeJS.Timeout | null>(null);
   const timeoutTimer = useRef<NodeJS.Timeout | null>(null);
+  const navigationTimeout = useRef<NodeJS.Timeout | null>(null); // NEW: For navigation delay
   const navigationInProgress = useRef(false);
   const isMounted = useRef(true);
   const hasCancelledOnUnmount = useRef(false);
@@ -250,6 +252,13 @@ const FindingProviderScreen = () => {
       
       isMounted.current = false;
 
+      // Clear navigation timeout if it exists
+      if (navigationTimeout.current) {
+        console.log('🧹 Clearing navigation timeout');
+        clearTimeout(navigationTimeout.current);
+        navigationTimeout.current = null;
+      }
+
       // Cancel the booking ONLY if:
       // 1. We have a bookingId
       // 2. We're still in 'searching' state (not in a terminal state)
@@ -451,6 +460,37 @@ const FindingProviderScreen = () => {
     }
 
     return false; // Allow default back behavior
+  };
+
+  // Handler for the Cancel Request button (same logic as back press)
+  const handleCancelPress = () => {
+    console.log('🔙 Cancel Request button pressed');
+
+    if (navigationInProgress.current) return;
+
+    if (bookingId && connectionStatus === 'searching') {
+      Alert.alert(
+        'Cancel Search',
+        'Are you sure you want to cancel finding a provider?',
+        [
+          { text: 'No', style: 'cancel' },
+          {
+            text: 'Yes',
+            style: 'destructive',
+            onPress: () => {
+              if (bookingId) {
+                isTerminalState.current = true;
+                cancelBooking(bookingId, true);
+              } else {
+                router.back();
+              }
+            }
+          }
+        ]
+      );
+    } else {
+      router.back();
+    }
   };
 
   const createJobNotification = async () => {
@@ -672,53 +712,43 @@ const FindingProviderScreen = () => {
       console.error('❌ Error checking status:', error);
     }
   };
+// FIXED: handleProviderAccepted with router.replace that survives unmount
+const handleProviderAccepted = (id: string) => {
+  if (!isMounted.current || navigationInProgress.current) return;
 
-  const handleProviderAccepted = (id: string) => {
-    if (!isMounted.current || navigationInProgress.current) return;
+  console.log('✅✅✅ ===== PROVIDER ACCEPTED! =====');
+  console.log('✅ Booking ID:', id);
+  console.log('⏳ Will navigate in 5 seconds...');
 
-    console.log('✅✅✅ ===== PROVIDER ACCEPTED! =====');
-    console.log('✅ Booking ID:', id);
+  isTerminalState.current = true;
+  navigationInProgress.current = true;
+  setConnectionStatus('found');
 
-    isTerminalState.current = true; // Mark as terminal state
-    navigationInProgress.current = true;
-    setConnectionStatus('found');
+  // Stop polling and timeout
+  if (pollingTimer.current) {
+    clearTimeout(pollingTimer.current);
+    pollingTimer.current = null;
+  }
+  if (timeoutTimer.current) {
+    clearTimeout(timeoutTimer.current);
+    timeoutTimer.current = null;
+  }
 
-    // Stop polling and timeout
-    if (pollingTimer.current) {
-      clearTimeout(pollingTimer.current);
-      pollingTimer.current = null;
-    }
-    if (timeoutTimer.current) {
-      clearTimeout(timeoutTimer.current);
-      timeoutTimer.current = null;
-    }
-
-    console.log('🚀 ===== NAVIGATING TO PROVIDER ASSIGNED =====');
-
-    // Navigate to ProviderAssigned with ONLY bookingId
-    setTimeout(() => {
-      try {
-        router.push({
-          pathname: '/(customer)/ProviderAssigned',
-          params: {
-            bookingId: id,
-            // No provider data here - will be fetched on next screen
-          },
-        });
-        console.log('✅ Navigation executed successfully');
-      } catch (navError) {
-        console.error('❌ Navigation error:', navError);
-        navigationInProgress.current = false;
-
-        Alert.alert(
-          'Navigation Error',
-          'Failed to navigate. Please check your booking in the home screen.',
-          [{ text: 'OK', onPress: () => router.push('/customer/home') }]
-        );
-      }
-    }, 1000);
-  };
-
+  // IMPORTANT: Don't store the timeout in a ref that gets cleared
+  // Use a direct setTimeout that will execute even if component unmounts
+  setTimeout(() => {
+    console.log('🚀 ===== 5 SECOND DELAY COMPLETE =====');
+    console.log('📍 Navigating to ProviderAssigned with bookingId:', id);
+    
+    // Use replace instead of push to prevent back button issues
+    router.replace({
+      pathname: '/(customer)/ProviderAssigned',
+      params: { bookingId: id }
+    });
+    
+    console.log('✅ Navigation call executed');
+  }, 5000);
+};
   const handleTimeout = () => {
     if (!isMounted.current || navigationInProgress.current) return;
 
@@ -787,7 +817,7 @@ const FindingProviderScreen = () => {
         return;
       }
 
-      const url = `${API_BASE_URL}/api/jobs/cancel/${id}`;
+      const url = `${API_BASE_URL}/api/jobs/${id}/cancel`;
 
       const response = await fetch(url, {
         method: 'DELETE',
@@ -834,7 +864,7 @@ const FindingProviderScreen = () => {
       case 'searching':
         return `Searching for providers...`;
       case 'found':
-        return 'Provider found! Redirecting...';
+        return 'Provider found! Assigning now...';
       case 'no_providers':
         return 'No providers available at this time';
       case 'timeout':
@@ -874,38 +904,57 @@ const FindingProviderScreen = () => {
             <Text style={styles.stepTextCompleted}>Request received</Text>
           </View>
 
-          <View style={[styles.stepCard, styles.stepCardActive]}>
-            <Animated.View
-              style={[
-                styles.stepIconContainerActive,
-                { transform: [{ rotate: spin }] },
-              ]}
-            >
-              <Ionicons name="sync-outline" size={24} color="#3c3c3c" />
-            </Animated.View>
-            <Text style={styles.stepTextActive}>
-              {connectionStatus === 'found' ? 'Provider found!' :
-                connectionStatus === 'no_providers' ? 'No providers available' :
-                  connectionStatus === 'timeout' ? 'Search timed out' :
-                    'Searching for providers...'}
+          {/* Step 2 - active while searching, completed when found */}
+          <View style={[
+            styles.stepCard,
+            connectionStatus !== 'found' && styles.stepCardActive,
+            connectionStatus === 'found' && styles.stepCardCompleted,
+          ]}>
+            {connectionStatus === 'found' ? (
+              <View style={styles.stepIconContainerCompleted}>
+                <Ionicons name="checkmark-circle" size={24} color="#68bdee" />
+              </View>
+            ) : (
+              <Animated.View
+                style={[
+                  styles.stepIconContainerActive,
+                  { transform: [{ rotate: spin }] },
+                ]}
+              >
+                <Ionicons name="sync-outline" size={24} color="#3c3c3c" />
+              </Animated.View>
+            )}
+            <Text style={connectionStatus === 'found' ? styles.stepTextCompleted : styles.stepTextActive}>
+              {connectionStatus === 'no_providers' ? 'No providers available' :
+                connectionStatus === 'timeout' ? 'Search timed out' :
+                  'Searching for providers...'}
             </Text>
           </View>
 
-          <View style={styles.stepCard}>
+          {/* Step 3 - inactive while searching, active when found */}
+          <View style={[
+            styles.stepCard,
+            connectionStatus === 'found' && styles.stepCardActive,
+          ]}>
             <View style={styles.stepIconContainerInactive}>
-              <View style={[
-                styles.emptyCircle,
-                connectionStatus === 'found' && styles.completedCircle,
-                connectionStatus === 'no_providers' && styles.inactiveCircle,
-                connectionStatus === 'timeout' && styles.inactiveCircle
-              ]} />
+              {connectionStatus === 'found' ? (
+                <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                  <Ionicons name="sync-outline" size={24} color="#3c3c3c" />
+                </Animated.View>
+              ) : (
+                <View style={[
+                  styles.emptyCircle,
+                  connectionStatus === 'no_providers' && styles.inactiveCircle,
+                  connectionStatus === 'timeout' && styles.inactiveCircle
+                ]} />
+              )}
             </View>
             <Text style={[
               styles.stepTextInactive,
-              connectionStatus === 'found' && styles.stepTextCompleted,
+              connectionStatus === 'found' && styles.stepTextActive,
               (connectionStatus === 'no_providers' || connectionStatus === 'timeout') && styles.stepTextInactive
             ]}>
-              {connectionStatus === 'found' ? 'Provider assigned' :
+              {connectionStatus === 'found' ? 'Assigning provider...' :
                 connectionStatus === 'no_providers' ? 'No provider found' :
                   connectionStatus === 'timeout' ? 'Search failed' :
                     'Assigning provider'}
@@ -936,6 +985,24 @@ const FindingProviderScreen = () => {
           <Text style={styles.errorText}>{error}</Text>
         )}
       </ScrollView>
+
+      {/* Bottom section: cancellation notice + cancel button */}
+      <View style={styles.bottomSection}>
+        <View style={styles.cancellationNotice}>
+          <Text style={styles.cancellationText}>
+            Cancellation is free until a provider accepts.
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={styles.cancelButton}
+          onPress={handleCancelPress}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="close" size={18} color="#ff4444" />
+          <Text style={styles.cancelButtonText}>CANCEL REQUEST</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -997,6 +1064,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
     borderColor: '#68bdee',
+  },
+  stepCardCompleted: {
+    backgroundColor: '#f0f0f0',
+    borderWidth: 0,
   },
   stepIconContainerCompleted: {
     marginRight: 15,
@@ -1091,6 +1162,39 @@ const styles = StyleSheet.create({
     fontSize: Math.min(12, height * 0.016),
     marginTop: 15,
     textAlign: 'center',
+  },
+  // Bottom section styles
+  bottomSection: {
+    backgroundColor: '#f8f8f8',
+    paddingBottom: 24,
+  },
+  cancellationNotice: {
+    backgroundColor: '#fff8f0',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#ffe0b2',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  cancellationText: {
+    fontSize: Math.min(13, height * 0.017),
+    color: '#e67e00',
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  cancelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 18,
+  },
+  cancelButtonText: {
+    fontSize: Math.min(14, height * 0.018),
+    color: '#ff4444',
+    fontWeight: '700',
+    letterSpacing: 1,
   },
 });
 

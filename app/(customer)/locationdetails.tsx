@@ -57,6 +57,19 @@ interface Waypoint {
   title?: string;
 }
 
+// Services that only need pickup location (no destination needed)
+const LOCATION_ONLY_SERVICES = [
+  '2',  // Roadside Assistance
+  '3',  // Fuel Delivery
+  '4',  // Battery Replacement
+  '5',  // AC Gas Refill
+  '6',  // Tire Replacement
+  '7',  // Oil Change
+  '8',  // Inspection
+  '9',  // Car Wash
+  '10', // Car Detailing
+];
+
 const LocationDetailsScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -103,6 +116,8 @@ const LocationDetailsScreen = () => {
   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
   const [isSavingLocation, setIsSavingLocation] = useState(false);
 
+  // Determine if this service needs destination
+  
   // Update initial region to Faisalabad, Pakistan (your actual location area)
   const [region, setRegion] = useState<Region>({
     latitude: 31.4504,  // Faisalabad latitude
@@ -119,6 +134,7 @@ const LocationDetailsScreen = () => {
 
   // Get all service info from params
   const serviceId = getStringParam(params.serviceId);
+  const needsDestination = !LOCATION_ONLY_SERVICES.includes(serviceId);
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
@@ -129,9 +145,6 @@ const LocationDetailsScreen = () => {
   const requiresLicense = getStringParam(params.requiresLicense);
   const hasBooking = getStringParam(params.hasBooking);
   const requiresTextDescription = getStringParam(params.requiresTextDescription);
-
-
-
 
   // Helper function to safely parse boolean
   const getBooleanParam = (param: string | string[] | undefined): boolean => {
@@ -160,6 +173,8 @@ const LocationDetailsScreen = () => {
   const logParams = (params: any) => {
     console.log('📱 LocationDetailsScreen mounted');
     console.log('📦 All params received:', JSON.stringify(params, null, 2));
+    console.log('📍 Service ID:', serviceId);
+    console.log('🎯 Needs destination:', needsDestination);
 
     // Check for critical params
     const requiredParams = ['serviceId', 'serviceName', 'servicePrice'];
@@ -170,33 +185,32 @@ const LocationDetailsScreen = () => {
     });
   };
 
-
-
-
-
-
-
-
-
   // Load user token and saved locations on mount
   useEffect(() => {
-    logParams(params); // Add this line
+    logParams(params);
     loadUserData();
     getCurrentLocationAndSetDefault();
   }, []);
 
-  // Update map when waypoints change
+  // Update map when waypoints change (only if destination is needed)
   useEffect(() => {
-    if (pickupCoordinates && dropoffCoordinates && waypoints.length > 0) {
-      fitMapToAllPoints();
-    } else if (pickupCoordinates && dropoffCoordinates) {
-      fitMapToCoordinates(pickupCoordinates, dropoffCoordinates);
-    } else if (pickupCoordinates) {
-      fitMapToSinglePoint(pickupCoordinates);
-    } else if (dropoffCoordinates) {
-      fitMapToSinglePoint(dropoffCoordinates);
+    if (needsDestination) {
+      if (pickupCoordinates && dropoffCoordinates && waypoints.length > 0) {
+        fitMapToAllPoints();
+      } else if (pickupCoordinates && dropoffCoordinates) {
+        fitMapToCoordinates(pickupCoordinates, dropoffCoordinates);
+      } else if (pickupCoordinates) {
+        fitMapToSinglePoint(pickupCoordinates);
+      } else if (dropoffCoordinates) {
+        fitMapToSinglePoint(dropoffCoordinates);
+      }
+    } else {
+      // For location-only services, just focus on pickup
+      if (pickupCoordinates) {
+        fitMapToSinglePoint(pickupCoordinates);
+      }
     }
-  }, [waypoints.length, pickupCoordinates, dropoffCoordinates]);
+  }, [waypoints.length, pickupCoordinates, dropoffCoordinates, needsDestination]);
 
   const loadUserData = async () => {
     try {
@@ -530,7 +544,7 @@ const LocationDetailsScreen = () => {
           );
         }, 500);
       }
-    } else if (type === 'dropoff') {
+    } else if (type === 'dropoff' && needsDestination) {
       setDropoffLocation(location.address);
       setDropoffCoordinates({
         latitude: location.latitude,
@@ -562,7 +576,7 @@ const LocationDetailsScreen = () => {
           );
         }, 500);
       }
-    } else if (type === 'waypoint' && waypointIndex !== undefined) {
+    } else if (type === 'waypoint' && waypointIndex !== undefined && needsDestination) {
       const updatedWaypoints = [...waypoints];
       updatedWaypoints[waypointIndex] = {
         id: `waypoint-${Date.now()}-${waypointIndex}`,
@@ -797,16 +811,41 @@ const LocationDetailsScreen = () => {
         longitude: location.longitude,
       });
     } else {
-      // If pickup is set, add as a waypoint instead of overriding dropoff
-      addWaypoint({
-        id: `saved-${Date.now()}`,
-        address: location.address,
-        coordinates: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-        },
-        title: location.title,
-      });
+      // If pickup is set and service needs destination, add as a waypoint
+      if (needsDestination) {
+        addWaypoint({
+          id: `saved-${Date.now()}`,
+          address: location.address,
+          coordinates: {
+            latitude: location.latitude,
+            longitude: location.longitude,
+          },
+          title: location.title,
+        });
+      } else {
+        // For location-only services, just replace pickup (or show message)
+        Alert.alert(
+          'Location Only Service',
+          'This service only requires your current location. Would you like to update your pickup location?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Update', 
+              onPress: () => {
+                setPickupLocation(location.address);
+                setPickupCoordinates({
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                });
+                fitMapToSinglePoint({
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                });
+              }
+            }
+          ]
+        );
+      }
     }
   };
 
@@ -815,9 +854,9 @@ const LocationDetailsScreen = () => {
   };
 
   const addWaypoint = (waypoint?: Waypoint) => {
-    if (waypoint) {
+    if (needsDestination && waypoint) {
       setWaypoints([...waypoints, waypoint]);
-    } else {
+    } else if (needsDestination) {
       // Add empty waypoint
       const newWaypoint: Waypoint = {
         id: `waypoint-${Date.now()}`,
@@ -872,8 +911,8 @@ const LocationDetailsScreen = () => {
         return;
       }
 
-      // Format waypoints for passing to next screen
-      const waypointsData = waypoints
+      // Format waypoints for passing to next screen (only if needed)
+      const waypointsData = needsDestination ? waypoints
         .filter(wp => 
           wp.coordinates && 
           wp.coordinates.latitude !== 0 && 
@@ -884,7 +923,7 @@ const LocationDetailsScreen = () => {
           lat: String(wp.coordinates.latitude || '0'),
           lng: String(wp.coordinates.longitude || '0'),
           order: index + 1,
-        }));
+        })) : [];
 
       // Build navigation params with safe values using getStringParam
       const navigationParams = {
@@ -892,13 +931,19 @@ const LocationDetailsScreen = () => {
         pickupAddress: String(pickupLocation || ''),
         pickupLat: String(pickupCoordinates?.latitude || '0'),
         pickupLng: String(pickupCoordinates?.longitude || '0'),
-        dropoffAddress: String(dropoffLocation || ''),
-        dropoffLat: String(dropoffCoordinates?.latitude || '0'),
-        dropoffLng: String(dropoffCoordinates?.longitude || '0'),
+        
+        // Only include dropoff data if service needs destination
+        ...(needsDestination && {
+          dropoffAddress: String(dropoffLocation || ''),
+          dropoffLat: String(dropoffCoordinates?.latitude || '0'),
+          dropoffLng: String(dropoffCoordinates?.longitude || '0'),
+        }),
 
-        // Waypoints data (stringified JSON)
-        waypoints: JSON.stringify(waypointsData),
-        hasWaypoints: String(waypointsData.length > 0),
+        // Waypoints data (stringified JSON) - only if needed
+        ...(needsDestination && {
+          waypoints: JSON.stringify(waypointsData),
+          hasWaypoints: String(waypointsData.length > 0),
+        }),
 
         // Service data (passed from ServiceDetails) - use getStringParam for safety
         serviceId: getStringParam(params.serviceId),
@@ -951,7 +996,6 @@ const LocationDetailsScreen = () => {
     }
   };
 
-  
   const clearLocation = (type: 'pickup' | 'dropoff') => {
     if (type === 'pickup') {
       setPickupLocation('');
@@ -994,38 +1038,50 @@ const LocationDetailsScreen = () => {
     return colors[index % colors.length];
   };
 
- // Helper function to check if coordinates are valid
-const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
-  return !!coord && 
-         coord.latitude !== 0 && 
-         coord.longitude !== 0 && 
-         !isNaN(coord.latitude) && 
-         !isNaN(coord.longitude);
-};
+  // Helper function to check if coordinates are valid
+  const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
+    return !!coord && 
+           coord.latitude !== 0 && 
+           coord.longitude !== 0 && 
+           !isNaN(coord.latitude) && 
+           !isNaN(coord.longitude);
+  };
 
-// Prepare route coordinates for Polyline
-const getRouteCoordinates = (): Coordinates[] => {
-  const routeCoords: Coordinates[] = [];
-  
-  // Add pickup if valid
-  if (isValidCoordinate(pickupCoordinates)) {
-    routeCoords.push(pickupCoordinates);
-  }
-  
-  // Add valid waypoints
-  waypoints.forEach(wp => {
-    if (isValidCoordinate(wp.coordinates)) {
-      routeCoords.push(wp.coordinates);
+  // Prepare route coordinates for Polyline
+  const getRouteCoordinates = (): Coordinates[] => {
+    const routeCoords: Coordinates[] = [];
+    
+    // Only build route if service needs destination
+    if (!needsDestination) return routeCoords;
+    
+    // Add pickup if valid
+    if (isValidCoordinate(pickupCoordinates)) {
+      routeCoords.push(pickupCoordinates);
     }
-  });
-  
-  // Add dropoff if valid
-  if (isValidCoordinate(dropoffCoordinates)) {
-    routeCoords.push(dropoffCoordinates);
-  }
-  
-  return routeCoords;
-};
+    
+    // Add valid waypoints
+    waypoints.forEach(wp => {
+      if (isValidCoordinate(wp.coordinates)) {
+        routeCoords.push(wp.coordinates);
+      }
+    });
+    
+    // Add dropoff if valid
+    if (isValidCoordinate(dropoffCoordinates)) {
+      routeCoords.push(dropoffCoordinates);
+    }
+    
+    return routeCoords;
+  };
+
+  // Get service type message for UI
+  const getServiceTypeMessage = () => {
+    if (needsDestination) {
+      return "This service requires pickup and destination locations";
+    } else {
+      return "This service only requires your current location";
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -1056,6 +1112,18 @@ const getRouteCoordinates = (): Coordinates[] => {
         <View style={styles.progressBar}>
           <View style={[styles.progressFill, { width: '14.3%' }]} />
         </View>
+      </View>
+
+      {/* Service Type Indicator */}
+      <View style={[styles.serviceTypeIndicator, needsDestination ? styles.destinationService : styles.locationOnlyService]}>
+        <Ionicons 
+          name={needsDestination ? "information-circle" : "location"} 
+          size={20} 
+          color={needsDestination ? "#3c3c3c" : "#68bdee"} 
+        />
+        <Text style={[styles.serviceTypeText, needsDestination ? styles.destinationServiceText : styles.locationOnlyServiceText]}>
+          {getServiceTypeMessage()}
+        </Text>
       </View>
 
       <ScrollView
@@ -1089,8 +1157,8 @@ const getRouteCoordinates = (): Coordinates[] => {
               />
             )}
 
-            {/* Waypoint Markers */}
-            {waypoints.map((waypoint, index) => (
+            {/* Waypoint Markers - only show if service needs destination */}
+            {needsDestination && waypoints.map((waypoint, index) => (
               isValidCoordinate(waypoint.coordinates) && (
                 <Marker
                   key={waypoint.id}
@@ -1102,7 +1170,7 @@ const getRouteCoordinates = (): Coordinates[] => {
               )
             ))}
 
-            {isValidCoordinate(dropoffCoordinates) && (
+            {needsDestination && isValidCoordinate(dropoffCoordinates) && (
               <Marker
                 coordinate={dropoffCoordinates}
                 title="Dropoff Location"
@@ -1111,8 +1179,8 @@ const getRouteCoordinates = (): Coordinates[] => {
               />
             )}
 
-            {/* Draw route through all points - FIXED: Only render if at least 2 valid coordinates */}
-            {getRouteCoordinates().length >= 2 && (
+            {/* Draw route through all points - only if needed and at least 2 valid coordinates */}
+            {needsDestination && getRouteCoordinates().length >= 2 && (
               <Polyline
                 coordinates={getRouteCoordinates()}
                 strokeColor="#68bdee"
@@ -1230,76 +1298,78 @@ const getRouteCoordinates = (): Coordinates[] => {
             )}
           </View>
 
-          {/* Drop-off Location - with higher z-index when focused */}
-          <View style={[
-            styles.inputSection,
-            focusedInput === 'dropoff' && styles.inputSectionFocused,
-            styles.dropoffSection
-          ]}>
-            <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
-            <View style={styles.inputContainer}>
-              <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
-              <TextInput
-                style={styles.input}
-                placeholder="Enter drop-off location (optional)"
-                placeholderTextColor="#b0b0b0"
-                value={dropoffLocation}
-                onChangeText={handleDropoffChange}
-                onFocus={() => {
-                  setFocusedInput('dropoff');
-                  if (dropoffSuggestions.length > 0) {
-                    setShowDropoffSuggestions(true);
-                  }
-                }}
-                onBlur={() => {
-                  setTimeout(() => {
-                    setFocusedInput(null);
-                    setShowDropoffSuggestions(false);
-                  }, 200);
-                }}
-              />
-              {dropoffLocation ? (
-                <TouchableOpacity
-                  style={styles.inputIcon}
-                  onPress={() => clearLocation('dropoff')}
-                >
-                  <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.inputIcon}>
-                  <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Dropoff Suggestions */}
-            {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
-              <View style={styles.suggestionsContainer}>
-                {isSearching ? (
-                  <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+          {/* Drop-off Location - Conditionally rendered based on service type */}
+          {needsDestination && (
+            <View style={[
+              styles.inputSection,
+              focusedInput === 'dropoff' && styles.inputSectionFocused,
+              styles.dropoffSection
+            ]}>
+              <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
+              <View style={styles.inputContainer}>
+                <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter drop-off location (optional)"
+                  placeholderTextColor="#b0b0b0"
+                  value={dropoffLocation}
+                  onChangeText={handleDropoffChange}
+                  onFocus={() => {
+                    setFocusedInput('dropoff');
+                    if (dropoffSuggestions.length > 0) {
+                      setShowDropoffSuggestions(true);
+                    }
+                  }}
+                  onBlur={() => {
+                    setTimeout(() => {
+                      setFocusedInput(null);
+                      setShowDropoffSuggestions(false);
+                    }, 200);
+                  }}
+                />
+                {dropoffLocation ? (
+                  <TouchableOpacity
+                    style={styles.inputIcon}
+                    onPress={() => clearLocation('dropoff')}
+                  >
+                    <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
+                  </TouchableOpacity>
                 ) : (
-                  dropoffSuggestions.map((suggestion) => (
-                    <TouchableOpacity
-                      key={suggestion.id}
-                      style={styles.suggestionItem}
-                      onPress={() => handleSelectLocation(suggestion, 'dropoff')}
-                    >
-                      <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#ff4444" />
-                      <View style={styles.suggestionTextContainer}>
-                        <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
-                        <Text style={styles.suggestionAddress} numberOfLines={1}>
-                          {suggestion.address}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  ))
+                  <TouchableOpacity style={styles.inputIcon}>
+                    <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
+                  </TouchableOpacity>
                 )}
               </View>
-            )}
-          </View>
 
-          {/* Waypoints (Intermediate Stops) - These appear AFTER dropoff */}
-          {waypoints.map((waypoint, index) => (
+              {/* Dropoff Suggestions */}
+              {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
+                <View style={styles.suggestionsContainer}>
+                  {isSearching ? (
+                    <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+                  ) : (
+                    dropoffSuggestions.map((suggestion) => (
+                      <TouchableOpacity
+                        key={suggestion.id}
+                        style={styles.suggestionItem}
+                        onPress={() => handleSelectLocation(suggestion, 'dropoff')}
+                      >
+                        <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#ff4444" />
+                        <View style={styles.suggestionTextContainer}>
+                          <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
+                          <Text style={styles.suggestionAddress} numberOfLines={1}>
+                            {suggestion.address}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Waypoints (Intermediate Stops) - Only if service needs destination */}
+          {needsDestination && waypoints.map((waypoint, index) => (
             <View
               key={waypoint.id}
               style={[
@@ -1408,14 +1478,16 @@ const getRouteCoordinates = (): Coordinates[] => {
             </View>
           ))}
 
-          {/* Add Another Stop Button - Now appears AFTER dropoff and waypoints */}
-          <TouchableOpacity
-            style={styles.addStopButton}
-            onPress={() => addWaypoint()}
-          >
-            <Ionicons name="add" size={Math.min(20, width * 0.05)} color="#68bdee" />
-            <Text style={styles.addStopText}>Add Another Stop</Text>
-          </TouchableOpacity>
+          {/* Add Another Stop Button - Only if service needs destination */}
+          {needsDestination && (
+            <TouchableOpacity
+              style={styles.addStopButton}
+              onPress={() => addWaypoint()}
+            >
+              <Ionicons name="add" size={Math.min(20, width * 0.05)} color="#68bdee" />
+              <Text style={styles.addStopText}>Add Another Stop</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Saved Locations */}
           <View style={styles.savedLocationsSection}>
@@ -1654,6 +1726,34 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
+  },
+  // New styles for service type indicator
+  serviceTypeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: width * 0.05,
+    paddingVertical: height * 0.015,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  destinationService: {
+    backgroundColor: '#f5f5f5',
+  },
+  locationOnlyService: {
+    backgroundColor: '#e3f5ff',
+  },
+  serviceTypeText: {
+    fontSize: Math.min(12, width * 0.03),
+    marginLeft: 8,
+    flex: 1,
+  },
+  destinationServiceText: {
+    color: '#3c3c3c',
+  },
+  locationOnlyServiceText: {
+    color: '#68bdee',
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,

@@ -221,7 +221,7 @@ export default function ServiceInProgressScreen() {
             // Clean up storage
             await cleanupBooking();
             // Navigate to home
-            router.replace('/(provider)/HomePage');
+            router.replace('/(provider)/home');
           }
         }
       ],
@@ -492,11 +492,11 @@ export default function ServiceInProgressScreen() {
               await cleanupBooking();
               
               // Navigate to home
-              router.replace('/(provider)/HomePage');
+              router.replace('/(provider)/Home');
             } catch (error) {
               console.log('Cancel API call failed:', error);
               // Still navigate home
-              router.replace('/(provider)/HomePage');
+              router.replace('/(provider)/Home');
             }
           }
         }

@@ -25,12 +25,6 @@ const { height } = Dimensions.get('window');
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
-// Google Maps API Key
-const GOOGLE_MAPS_API_KEY = Platform.select({
-  ios: 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU',
-  android: 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A',
-});
-
 interface Coordinates {
   latitude: number;
   longitude: number;
@@ -51,6 +45,7 @@ interface JobDetails {
   eta: string;
   navigationTips?: string;
   status?: string;
+  routePolyline?: string; // Add this for route from backend
 }
 
 export default function NavigateToCustomerScreen() {
@@ -64,6 +59,7 @@ export default function NavigateToCustomerScreen() {
   const locationInterval = useRef<NodeJS.Timeout | null>(null);
   const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+  const routeFetchTimeout = useRef<NodeJS.Timeout | null>(null);
   const appState = useRef(AppState.currentState);
   const [chatVisible, setChatVisible] = useState(false);
 
@@ -73,6 +69,7 @@ export default function NavigateToCustomerScreen() {
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
   const [cancellationAcknowledged, setCancellationAcknowledged] = useState(false);
+  const [isFetchingRoute, setIsFetchingRoute] = useState(false);
 
   const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
     return !!coord &&
@@ -105,11 +102,9 @@ export default function NavigateToCustomerScreen() {
   // Save booking to AsyncStorage when component mounts
   const saveBookingToStorage = async () => {
     try {
-      // Get existing active bookings
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       let activeBookings = activeBookingsJson ? JSON.parse(activeBookingsJson) : [];
       
-      // Check if this booking already exists
       const existingIndex = activeBookings.findIndex((b: any) => b.bookingId === bookingId);
       
       const bookingData = {
@@ -123,16 +118,12 @@ export default function NavigateToCustomerScreen() {
       };
 
       if (existingIndex >= 0) {
-        // Update existing
         activeBookings[existingIndex] = { ...activeBookings[existingIndex], ...bookingData };
       } else {
-        // Add new
         activeBookings.push(bookingData);
       }
 
       await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
-      
-      // Also save current booking ID for quick access
       await AsyncStorage.setItem('currentBookingId', bookingId);
       await AsyncStorage.setItem('currentBookingStatus', 'accepted');
       
@@ -162,12 +153,10 @@ export default function NavigateToCustomerScreen() {
         if (data.success) {
           addDebug(`📊 Job status: ${data.status}`);
           
-          // Check if job is cancelled
           if (data.status === 'cancelled' && !cancellationAcknowledged) {
             handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
           }
           
-          // Update job details if we have them
           if (data.job) {
             setJobDetails(prev => ({
               ...(prev || {}),
@@ -186,12 +175,10 @@ export default function NavigateToCustomerScreen() {
 
   // Handle job cancellation
   const handleJobCancelled = (reason: string) => {
-    // Prevent multiple alerts
     if (cancellationAcknowledged) return;
     
     setCancellationAcknowledged(true);
     
-    // Stop all intervals
     if (locationInterval.current) {
       clearInterval(locationInterval.current);
       locationInterval.current = null;
@@ -204,8 +191,11 @@ export default function NavigateToCustomerScreen() {
       clearInterval(jobRefreshInterval.current);
       jobRefreshInterval.current = null;
     }
+    if (routeFetchTimeout.current) {
+      clearTimeout(routeFetchTimeout.current);
+      routeFetchTimeout.current = null;
+    }
 
-    // Show alert to provider
     Alert.alert(
       'Service Cancelled',
       `The customer has cancelled this service.\n\nReason: ${reason}`,
@@ -213,9 +203,7 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'OK',
           onPress: async () => {
-            // Clean up storage
             await cleanupBooking();
-            // Navigate to home
             router.replace('/(provider)/HomePage');
           }
         }
@@ -227,7 +215,6 @@ export default function NavigateToCustomerScreen() {
   // Clean up booking from storage
   const cleanupBooking = async () => {
     try {
-      // Remove from active bookings
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
         let activeBookings = JSON.parse(activeBookingsJson);
@@ -235,7 +222,6 @@ export default function NavigateToCustomerScreen() {
         await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
       }
 
-      // Clear current booking if it matches
       const currentId = await AsyncStorage.getItem('currentBookingId');
       if (currentId === bookingId) {
         await AsyncStorage.removeItem('currentBookingId');
@@ -270,19 +256,90 @@ export default function NavigateToCustomerScreen() {
             ...(prev || {}),
             ...data.job,
             status: data.status || prev?.status,
-            // Ensure numbers are valid
             pickupLat: safeParseFloat(data.job.pickupLat, prev?.pickupLat),
             pickupLng: safeParseFloat(data.job.pickupLng, prev?.pickupLng),
             dropoffLat: safeParseFloat(data.job.dropoffLat, prev?.dropoffLat),
             dropoffLng: safeParseFloat(data.job.dropoffLng, prev?.dropoffLng),
             customerRating: safeParseFloat(data.job.customerRating, 4.5),
           } as JobDetails));
+
+          // If route polyline is provided in job details, decode it
+          if (data.job.routePolyline) {
+            const points = decodePolyline(data.job.routePolyline);
+            const validPoints = points.filter(point => isValidCoordinate(point));
+            if (validPoints.length > 0) {
+              setRouteCoordinates(validPoints);
+              addDebug(`🗺️ Route from job details: ${validPoints.length} points`);
+            }
+          }
         }
       } else {
         addDebug(`⚠️ Failed to fetch active job: ${response.status}`);
       }
     } catch (error) {
       addDebug('❌ Error fetching active job:', error);
+    }
+  };
+
+  // Fetch route from backend (not directly from Google)
+  const fetchRouteFromBackend = async (start: Coordinates, end: Coordinates) => {
+    if (!isValidCoordinate(start) || !isValidCoordinate(end) || isFetchingRoute) {
+      return;
+    }
+
+    setIsFetchingRoute(true);
+    addDebug(`📍 Fetching route from backend for booking: ${bookingId}`);
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/route`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          originLat: start.latitude,
+          originLng: start.longitude,
+          destLat: end.latitude,
+          destLng: end.longitude
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        if (data.success && data.route) {
+          // Decode polyline if provided
+          if (data.route.polyline) {
+            const points = decodePolyline(data.route.polyline);
+            const validPoints = points.filter(point => isValidCoordinate(point));
+            
+            if (validPoints.length > 0) {
+              setRouteCoordinates(validPoints);
+              addDebug(`🗺️ Route updated with ${validPoints.length} points from backend`);
+            }
+          }
+          
+          // Update ETA and distance from backend
+          setJobDetails(prev => ({
+            ...prev!,
+            distance: data.route.distance || prev?.distance || 'Calculating...',
+            eta: data.route.eta || prev?.eta || 'Calculating...',
+          }));
+          
+          addDebug(`📊 New ETA: ${data.route.eta}, Distance: ${data.route.distance}`);
+        } else {
+          addDebug('⚠️ No route data in response');
+        }
+      } else {
+        addDebug(`⚠️ Route fetch failed: ${response.status}`);
+      }
+    } catch (error) {
+      addDebug('Error fetching route from backend:', error);
+    } finally {
+      setIsFetchingRoute(false);
     }
   };
 
@@ -296,7 +353,6 @@ export default function NavigateToCustomerScreen() {
 
     addDebug('📦 Setting initial job data from navigation params');
 
-    // Set initial data from params (fast UI) with safe parsing
     const jobFromParams: JobDetails = {
       bookingId: bookingId,
       customerName: safeGetString(params.customerName, 'Customer'),
@@ -308,43 +364,30 @@ export default function NavigateToCustomerScreen() {
       dropoffLocation: safeGetString(params.dropoffLocation, undefined),
       dropoffLat: safeParseFloat(params.dropoffLat, undefined),
       dropoffLng: safeParseFloat(params.dropoffLng, undefined),
-      distance: safeGetString(params.distance, '2.5 km'),
-      eta: safeGetString(params.eta, '8-10 minutes'),
-      navigationTips: safeGetString(params.description, 'Located in underground parking. Call customer upon arrival.'),
+      distance: safeGetString(params.distance, 'Calculating...'),
+      eta: safeGetString(params.eta, 'Calculating...'),
+      navigationTips: safeGetString(params.description, 'Call customer upon arrival.'),
       status: 'accepted',
     };
 
     setJobDetails(jobFromParams);
 
-    // Save booking to storage
     saveBookingToStorage();
-
-    // Then fetch fresh data from backend
     fetchActiveJobDetails();
-
-    // Check location permission and start tracking
     checkLocationPermission();
 
-    // Start status checking (every 10 seconds)
     statusCheckInterval.current = setInterval(checkJobStatus, 10000);
-
-    // Check status immediately
     checkJobStatus();
-
-    // Refresh job details every 30 seconds
     jobRefreshInterval.current = setInterval(fetchActiveJobDetails, 30000);
 
-    // Listen for app state changes (to check status when app comes to foreground)
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to the foreground - check status immediately
         checkJobStatus();
       }
       appState.current = nextAppState;
     });
 
     return () => {
-      // Clean up location tracking on unmount
       if (locationInterval.current) {
         clearInterval(locationInterval.current);
         locationInterval.current = null;
@@ -357,6 +400,10 @@ export default function NavigateToCustomerScreen() {
         clearInterval(statusCheckInterval.current);
         statusCheckInterval.current = null;
       }
+      if (routeFetchTimeout.current) {
+        clearTimeout(routeFetchTimeout.current);
+        routeFetchTimeout.current = null;
+      }
       subscription.remove();
       addDebug('🧹 Cleanup complete');
     };
@@ -368,6 +415,27 @@ export default function NavigateToCustomerScreen() {
       startLocationTracking();
     }
   }, [locationPermission, jobDetails]);
+
+  // Fetch route when both current location and pickup location are available
+  useEffect(() => {
+    if (currentLocation && jobDetails?.pickupLat && jobDetails?.pickupLng) {
+      const destination = {
+        latitude: jobDetails.pickupLat,
+        longitude: jobDetails.pickupLng,
+      };
+      
+      if (isValidCoordinate(currentLocation) && isValidCoordinate(destination)) {
+        // Debounce route fetching to avoid too many calls
+        if (routeFetchTimeout.current) {
+          clearTimeout(routeFetchTimeout.current);
+        }
+        
+        routeFetchTimeout.current = setTimeout(() => {
+          fetchRouteFromBackend(currentLocation, destination);
+        }, 2000); // Wait 2 seconds after last location update
+      }
+    }
+  }, [currentLocation, jobDetails?.pickupLat, jobDetails?.pickupLng]);
 
   const checkLocationPermission = async () => {
     try {
@@ -397,9 +465,7 @@ export default function NavigateToCustomerScreen() {
         Alert.alert(
           'Location Permission Required',
           'Please enable location services to use navigation.',
-          [
-            { text: 'OK', onPress: () => router.back() }
-          ]
+          [{ text: 'OK', onPress: () => router.back() }]
         );
         setIsLoading(false);
       }
@@ -424,7 +490,6 @@ export default function NavigateToCustomerScreen() {
       setCurrentLocation(currentLoc);
       setIsLoading(false);
 
-      // Center map on current location
       if (mapRef.current && isValidCoordinate(currentLoc)) {
         mapRef.current.animateToRegion({
           ...currentLoc,
@@ -448,18 +513,12 @@ export default function NavigateToCustomerScreen() {
 
     addDebug('📍 Starting location tracking (every 10 seconds)');
 
-    // Send location immediately
     updateProviderLocation();
-
-    // Then send every 10 seconds
-    locationInterval.current = setInterval(() => {
-      updateProviderLocation();
-    }, 10000);
+    locationInterval.current = setInterval(updateProviderLocation, 10000);
   };
 
   const updateProviderLocation = async () => {
     try {
-      // Get fresh location
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
@@ -472,19 +531,6 @@ export default function NavigateToCustomerScreen() {
       addDebug('📍 Sending location update:', newLoc);
       setCurrentLocation(newLoc);
 
-      // Update route if we have valid destination
-      if (jobDetails?.pickupLat && jobDetails?.pickupLng) {
-        const destination = {
-          latitude: jobDetails.pickupLat,
-          longitude: jobDetails.pickupLng,
-        };
-
-        if (isValidCoordinate(newLoc) && isValidCoordinate(destination)) {
-          fetchRoute(newLoc, destination);
-        }
-      }
-
-      // Send to backend
       const token = await AsyncStorage.getItem('userToken');
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
 
@@ -511,53 +557,6 @@ export default function NavigateToCustomerScreen() {
       }
     } catch (error) {
       addDebug('Error updating location:', error);
-    }
-  };
-
-  const fetchRoute = async (
-    start: Coordinates,
-    end: Coordinates
-  ) => {
-    // Validate coordinates before fetching
-    if (!isValidCoordinate(start) || !isValidCoordinate(end)) {
-      addDebug('⚠️ Invalid coordinates for route fetch');
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `https://maps.googleapis.com/maps/api/directions/json?origin=${start.latitude},${start.longitude}&destination=${end.latitude},${end.longitude}&key=${GOOGLE_MAPS_API_KEY}`
-      );
-
-      const data = await response.json();
-
-      if (data.routes && data.routes.length > 0 && data.routes[0].overview_polyline) {
-        const points = decodePolyline(data.routes[0].overview_polyline.points);
-        // Filter out any invalid points
-        const validPoints = points.filter(point => isValidCoordinate(point));
-
-        if (validPoints.length > 0) {
-          setRouteCoordinates(validPoints);
-          addDebug(`🗺️ Route updated with ${validPoints.length} points`);
-
-          // Update ETA and distance from route data
-          if (jobDetails && data.routes[0].legs && data.routes[0].legs.length > 0) {
-            const leg = data.routes[0].legs[0];
-            setJobDetails(prev => ({
-              ...prev!,
-              distance: leg.distance?.text || prev?.distance || 'Unknown',
-              eta: leg.duration?.text || prev?.eta || 'Unknown',
-            }));
-            addDebug(`📊 New ETA: ${leg.duration?.text}, Distance: ${leg.distance?.text}`);
-          }
-        } else {
-          addDebug('⚠️ No valid points in decoded polyline');
-        }
-      } else {
-        addDebug('⚠️ No routes found in directions response');
-      }
-    } catch (error) {
-      addDebug('Error fetching route:', error);
     }
   };
 
@@ -596,7 +595,6 @@ export default function NavigateToCustomerScreen() {
         longitude: lng / 1e5,
       };
 
-      // Only add if valid
       if (!isNaN(point.latitude) && !isNaN(point.longitude)) {
         points.push(point);
       }
@@ -644,7 +642,6 @@ export default function NavigateToCustomerScreen() {
       return;
     }
 
-    // Update status in storage
     AsyncStorage.setItem('currentBookingStatus', 'arrived').catch(err => 
       addDebug('Error updating status:', err)
     );
@@ -657,7 +654,6 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'Yes, Arrived',
           onPress: () => {
-            // Navigate to service in progress
             router.push({
               pathname: '/ServiceInProgressScreen',
               params: {
@@ -700,14 +696,10 @@ export default function NavigateToCustomerScreen() {
                 body: JSON.stringify({ reason: 'provider_cancelled' }),
               });
               
-              // Clean up storage
               await cleanupBooking();
-              
-              // Navigate to home
               router.replace('/(provider)/Home');
             } catch (error) {
               console.log('Cancel API call failed:', error);
-              // Still navigate home
               router.replace('/(provider)/Home');
             }
           }
@@ -741,7 +733,6 @@ export default function NavigateToCustomerScreen() {
   };
 
   const getInitialRegion = () => {
-    // First try current location
     if (currentLocation && isValidCoordinate(currentLocation)) {
       return {
         latitude: currentLocation.latitude,
@@ -751,7 +742,6 @@ export default function NavigateToCustomerScreen() {
       };
     }
 
-    // Then try pickup coordinates
     const pickupCoords = getPickupCoordinates();
     if (pickupCoords) {
       return {
@@ -762,7 +752,6 @@ export default function NavigateToCustomerScreen() {
       };
     }
 
-    // Default fallback
     return {
       latitude: 26.2285,
       longitude: 50.5860,
@@ -771,7 +760,6 @@ export default function NavigateToCustomerScreen() {
     };
   };
 
-  // Show loading only while getting location
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -786,7 +774,6 @@ export default function NavigateToCustomerScreen() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#E8F4FB" />
 
-      {/* MAP AREA - Now takes half the screen */}
       <View style={styles.mapArea}>
         <MapView
           ref={mapRef}
@@ -798,7 +785,6 @@ export default function NavigateToCustomerScreen() {
           showsCompass={false}
           showsTraffic={true}
         >
-          {/* Pickup Marker - Only render if valid */}
           {getPickupCoordinates() && (
             <Marker
               coordinate={getPickupCoordinates()!}
@@ -811,7 +797,6 @@ export default function NavigateToCustomerScreen() {
             </Marker>
           )}
 
-          {/* Dropoff Marker (if exists) - Only render if valid */}
           {getDropoffCoordinates() && (
             <Marker
               coordinate={getDropoffCoordinates()!}
@@ -824,7 +809,6 @@ export default function NavigateToCustomerScreen() {
             </Marker>
           )}
 
-          {/* Route Polyline - FIXED: Only render if at least 2 valid coordinates */}
           {routeCoordinates.length >= 2 && (
             <Polyline
               coordinates={routeCoordinates}
@@ -834,17 +818,12 @@ export default function NavigateToCustomerScreen() {
           )}
         </MapView>
 
-        {/* Back Button */}
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
-          <Feather name="arrow-left" size={25} color="#1e2939" />
-        </TouchableOpacity>
+    
 
-        {/* Compass Button */}
         <TouchableOpacity style={styles.compassBtn} onPress={handleCompass} activeOpacity={0.8}>
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
 
-        {/* Navigation Card - Now positioned better with larger map */}
         <View style={styles.navCard}>
           <View style={styles.navCardTop}>
             <View style={styles.navIconWrap}>
@@ -870,7 +849,6 @@ export default function NavigateToCustomerScreen() {
           </View>
         </View>
 
-        {/* Navigation Active Badge */}
         <View style={styles.navActiveBadge}>
           <View style={styles.navActiveTextBlock}>
             <Text style={styles.navActiveTitle}>Navigation Active</Text>
@@ -882,9 +860,7 @@ export default function NavigateToCustomerScreen() {
         </View>
       </View>
 
-      {/* BOTTOM SHEET - Now takes remaining space */}
       <View style={styles.bottomSheet}>
-        {/* Drag Handle */}
         <View style={styles.dragHandle} />
 
         <ScrollView
@@ -893,21 +869,19 @@ export default function NavigateToCustomerScreen() {
         >
           <Text style={styles.sheetSectionLabel}>CUSTOMER DETAILS</Text>
 
-          {/* Customer Card */}
           <View style={styles.customerCard}>
             <View style={styles.customerInfo}>
               <View style={styles.avatarCircle}>
                 <Feather name="user" size={26} color="#8fd1fb" />
               </View>
               <View style={styles.customerText}>
-                <Text style={styles.customerName}>{jobDetails?.customerName || 'Mohammed A.'}</Text>
+                <Text style={styles.customerName}>{jobDetails?.customerName || 'Customer'}</Text>
                 <Text style={styles.customerRating}>⭐ {jobDetails?.customerRating?.toFixed(1) || '4.5'} Customer Rating</Text>
               </View>
             </View>
 
             <View style={styles.customerDivider} />
 
-            {/* Call / Message Buttons */}
             <View style={styles.actionRow}>
               <TouchableOpacity style={styles.actionBtn} onPress={handleCall} activeOpacity={0.7}>
                 <Feather name="phone" size={16} color="#8fd1fb" />
@@ -921,7 +895,6 @@ export default function NavigateToCustomerScreen() {
             </View>
           </View>
 
-          {/* Pickup Location Card */}
           <View style={styles.locationCard}>
             <View style={styles.locationRow}>
               <Feather name="map-pin" size={16} color="#5B9BD5" style={styles.locationIcon} />
@@ -932,7 +905,6 @@ export default function NavigateToCustomerScreen() {
             </View>
           </View>
 
-          {/* Dropoff Location Card (if exists) */}
           {jobDetails?.dropoffLocation && (
             <View style={styles.locationCard}>
               <View style={styles.locationRow}>
@@ -945,7 +917,6 @@ export default function NavigateToCustomerScreen() {
             </View>
           )}
 
-          {/* Navigation Tips Card */}
           <View style={styles.tipsCard}>
             <View style={styles.tipsRow}>
               <View style={styles.tipsIconWrap}>
@@ -960,13 +931,11 @@ export default function NavigateToCustomerScreen() {
             </View>
           </View>
 
-          {/* Arrived Button */}
           <TouchableOpacity style={styles.arrivedBtn} onPress={handleArrived} activeOpacity={0.85}>
             <Feather name="play" size={16} color="#fff" style={{ marginRight: 8 }} />
             <Text style={styles.arrivedBtnText}>I've Arrived at Location</Text>
           </TouchableOpacity>
 
-          {/* Footer Links */}
           <View style={styles.footerRow}>
             <TouchableOpacity onPress={handleReportIssue} activeOpacity={0.7}>
               <Text style={styles.footerLink}>Report Issue</Text>
@@ -977,9 +946,9 @@ export default function NavigateToCustomerScreen() {
             </TouchableOpacity>
           </View>
         </ScrollView>
-
       </View>
-     <ChatPopup
+      
+      <ChatPopup
         visible={chatVisible}
         onClose={() => setChatVisible(false)}
         bookingId={bookingId}
@@ -999,7 +968,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Map area now takes half the screen (50%)
   mapArea: {
     height: height * 0.5,
     backgroundColor: '#f9fafb',
