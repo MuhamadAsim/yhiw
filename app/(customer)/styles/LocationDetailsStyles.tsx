@@ -25,7 +25,6 @@ const { width, height } = Dimensions.get('window');
 
 
 export const styles = StyleSheet.create({
-  // ... all styles remain exactly the same ...
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -79,6 +78,34 @@ export const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#68bdee',
     borderRadius: 3,
+  },
+  // New styles for service type indicator
+  serviceTypeIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: width * 0.05,
+    paddingVertical: height * 0.015,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  destinationService: {
+    backgroundColor: '#f5f5f5',
+  },
+  locationOnlyService: {
+    backgroundColor: '#e3f5ff',
+  },
+  serviceTypeText: {
+    fontSize: Math.min(12, width * 0.03),
+    marginLeft: 8,
+    flex: 1,
+  },
+  destinationServiceText: {
+    color: '#3c3c3c',
+  },
+  locationOnlyServiceText: {
+    color: '#68bdee',
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,

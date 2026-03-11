@@ -18,7 +18,6 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // Map area now takes half the screen (50%)
   mapArea: {
     height: height * 0.5,
     backgroundColor: '#f9fafb',

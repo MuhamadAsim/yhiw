@@ -79,6 +79,12 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4CAF50',
   },
+  pausedDot: {
+    backgroundColor: '#FFA500',
+  },
+  pausedText: {
+    color: '#FFA500',
+  },
   pollingDot: {
     width: 8,
     height: 8,
@@ -170,6 +176,9 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+  },
+  pausedIndicator: {
+    backgroundColor: '#FFA500',
   },
   liveDot: {
     width: 6,
@@ -360,10 +369,16 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
+  progressIconPaused: {
+    backgroundColor: '#FFA500',
+  },
   progressDotActive: {
     width: 8,
     height: 8,
     borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  progressDotPaused: {
     backgroundColor: '#FFFFFF',
   },
   progressIconInactive: {
@@ -401,6 +416,9 @@ export const styles = StyleSheet.create({
     color: '#3c3c3c',
     fontWeight: 'bold',
     marginBottom: 4,
+  },
+  progressTextPaused: {
+    color: '#FFA500',
   },
   progressTimeActive: {
     fontSize: 11,
@@ -452,6 +470,9 @@ export const styles = StyleSheet.create({
     color: '#2E7D32',
     fontWeight: '600',
     marginLeft: 6,
+  },
+  pausedIndicatorText: {
+    color: '#FFA500',
   },
   costCard: {
     backgroundColor: '#FFFFFF',

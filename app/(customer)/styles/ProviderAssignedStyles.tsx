@@ -22,7 +22,6 @@ const { height, width } = Dimensions.get('window');
 
 
 export const styles = StyleSheet.create({
-  // Loading styles
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -41,8 +40,6 @@ export const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
   },
-  
-  // Main container styles
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -79,59 +76,6 @@ export const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: height * 0.025,
     letterSpacing: 0.3,
-  },
-  statusBadge: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginBottom: 10,
-    alignSelf: 'center',
-  },
-  statusBadgeBlue: {
-    backgroundColor: '#68bdee',
-  },
-  statusBadgeGreen: {
-    backgroundColor: '#4CAF50',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  debugPanel: {
-    width: '100%',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 10,
-  },
-  debugTitle: {
-    color: '#00ff00',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 5,
-  },
-  debugScroll: {
-    maxHeight: 100,
-    marginBottom: 10,
-  },
-  debugText: {
-    color: '#00ff00',
-    fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    marginBottom: 2,
-  },
-  debugButton: {
-    backgroundColor: '#333',
-    padding: 8,
-    borderRadius: 5,
-    alignItems: 'center',
-  },
-  debugButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   mapContainer: {
     width: '100%',
@@ -234,6 +178,46 @@ export const styles = StyleSheet.create({
     fontSize: 10,
     color: '#68bdee',
     fontWeight: '600',
+  },
+  routeInfoCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 15,
+    borderWidth: 2,
+    borderColor: '#68bdee',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  routeInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  routeInfoItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  routeInfoDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: '#e0e0e0',
+  },
+  routeInfoLabel: {
+    fontSize: 11,
+    color: '#8c8c8c',
+    fontWeight: '600',
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  routeInfoValue: {
+    fontSize: 14,
+    color: '#3c3c3c',
+    fontWeight: 'bold',
   },
   pickupMarkerContainer: {
     backgroundColor: 'white',

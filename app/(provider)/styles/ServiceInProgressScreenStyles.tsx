@@ -29,6 +29,9 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#ffffff',
   },
+  headerLeft: {
+    width: 40, // Same width as backBtn was to maintain balance
+  },
   headerCenter: {
     flex: 1,
     alignItems: 'center',
@@ -105,6 +108,18 @@ export const styles = StyleSheet.create({
     color: '#87cefa',
     letterSpacing: 2,
     fontVariant: ['tabular-nums'],
+  },
+  timerSavingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  timerSavingText: {
+    fontSize: 11,
+    color: '#87cefa',
+    fontWeight: '600',
   },
   timerStarted: {
     fontSize: 12,
@@ -416,5 +431,18 @@ export const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.7,
+  },
+
+  // ── Cancel Link ──
+  cancelLink: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    marginTop: 8,
+  },
+  cancelLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+    textDecorationLine: 'underline',
   },
 });

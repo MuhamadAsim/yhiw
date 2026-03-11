@@ -12,6 +12,11 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
   },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 14,
+    color: '#666',
+  },
   header: {
     paddingHorizontal: 20,
     paddingTop: 45,
@@ -71,8 +76,8 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 4,
     marginBottom: 15,
-    borderWidth:1,
-    borderColor:'#e2dfdf',
+    borderWidth: 1,
+    borderColor: '#e2dfdf',
   },
   searchIcon: {
     marginRight: 10,
@@ -97,7 +102,7 @@ export const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#3c3c3c',
     letterSpacing: 0.5,
-    marginBottom:6,
+    marginBottom: 6,
   },
   seeAllText: {
     fontSize: 12,
@@ -219,9 +224,9 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    borderRadius:25,
-    borderWidth:1,
-    borderColor:'#a0d6eb',
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#a0d6eb',
   },
   serviceIcon: {
     width: 28,

@@ -1,7 +1,5 @@
 import { StyleSheet } from 'react-native';
 
-
-
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -36,23 +34,6 @@ export const styles = StyleSheet.create({
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
-  },
- 
-  locationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  locationDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 10,
-  },
-  locationText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#3c3c3c',
   },
   locationSkippedBanner: {
     flexDirection: 'row',

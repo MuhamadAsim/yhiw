@@ -72,6 +72,10 @@ export const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#68bdee',
   },
+  stepCardCompleted: {
+    backgroundColor: '#f0f0f0',
+    borderWidth: 0,
+  },
   stepIconContainerCompleted: {
     marginRight: 15,
   },
@@ -165,5 +169,38 @@ export const styles = StyleSheet.create({
     fontSize: Math.min(12, height * 0.016),
     marginTop: 15,
     textAlign: 'center',
+  },
+  // Bottom section styles
+  bottomSection: {
+    backgroundColor: '#f8f8f8',
+    paddingBottom: 24,
+  },
+  cancellationNotice: {
+    backgroundColor: '#fff8f0',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#ffe0b2',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  cancellationText: {
+    fontSize: Math.min(13, height * 0.017),
+    color: '#e67e00',
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  cancelButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 18,
+  },
+  cancelButtonText: {
+    fontSize: Math.min(14, height * 0.018),
+    color: '#ff4444',
+    fontWeight: '700',
+    letterSpacing: 1,
   },
 });
