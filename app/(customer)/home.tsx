@@ -50,8 +50,6 @@ const HomeScreen = () => {
       checkExistingBooking();
     }, [])
   );
-// In HomeScreen.tsx - Update the navigation part
-
 const checkExistingBooking = async () => {
   if (navigationInProgress) {
     console.log('🏠 Navigation already in progress, skipping...');
@@ -77,6 +75,12 @@ const checkExistingBooking = async () => {
       // Get additional booking details from activeBookings
       let customerName = 'Customer';
       let pickupLocation = '';
+      let serviceType = '';
+      let totalAmount = '0';
+      let duration = '';
+      let providerName = '';
+      let providerId = '';
+      let providerPhone = '';
       
       if (activeBookingsJson) {
         try {
@@ -85,6 +89,12 @@ const checkExistingBooking = async () => {
           if (currentBooking) {
             customerName = currentBooking.customerName || 'Customer';
             pickupLocation = currentBooking.pickupLocation || '';
+            serviceType = currentBooking.serviceType || '';
+            totalAmount = currentBooking.totalAmount || '0';
+            duration = currentBooking.duration || '';
+            providerName = currentBooking.providerName || 'Provider';
+            providerId = currentBooking.providerId || '';
+            providerPhone = currentBooking.providerPhone || '';
           }
         } catch (e) {
           console.error('Error parsing activeBookings:', e);
@@ -92,25 +102,117 @@ const checkExistingBooking = async () => {
       }
       
       // Small delay to ensure navigation doesn't conflict with mounting
-      setTimeout(() => {
-        console.log(`➡️ Navigating to TrackProvider with bookingId: ${currentBookingId}`);
+      setTimeout(async () => {
+        console.log(`➡️ Navigating with bookingId: ${currentBookingId}, status: ${currentBookingStatus}`);
         
-        if (currentBookingStatus === 'accepted' || currentBookingStatus === 'started') {
-          // Navigate to TrackProvider with the booking ID
+        // ===== HANDLE DIFFERENT STATUSES =====
+        if (currentBookingStatus === 'accepted') {
+          // Provider accepted, waiting for them to start
           router.replace({
-            pathname: '/(customer)/TrackProvider',
+            pathname: '/(customer)/FindingProvider',
             params: {
               bookingId: currentBookingId,
               customerName: customerName,
               pickupLocation: pickupLocation
             }
           });
-        } else {
-          // Navigate to FindingProvider with the booking ID
+        } 
+        else if (currentBookingStatus === 'in_progress' || currentBookingStatus === 'started') {
+          // Service is in progress
+          router.replace({
+            pathname: '/(customer)/ServiceInProgress',
+            params: {
+              bookingId: currentBookingId,
+              providerName: providerName,
+              providerId: providerId,
+              providerPhone: providerPhone,
+              serviceType: serviceType,
+              pickupLocation: pickupLocation,
+              totalAmount: totalAmount
+            }
+          });
+        }
+        else if (currentBookingStatus === 'completed_confirmed') {
+          // Service is fully completed and confirmed - CLEAR ALL STORAGE
+          console.log('✅ Service completed_confirmed - Clearing storage data');
+          
+          try {
+            // Get the booking data before clearing
+            const bookingData = {
+              bookingId: currentBookingId,
+              serviceType: serviceType,
+              totalAmount: totalAmount,
+              duration: duration,
+              pickupLocation: pickupLocation,
+              providerName: providerName
+            };
+            
+            // Clear ALL booking-related data from AsyncStorage
+            await AsyncStorage.removeItem('currentBookingId');
+            await AsyncStorage.removeItem('currentBookingStatus');
+            
+            // Update activeBookings by removing this completed booking
+            if (activeBookingsJson) {
+              try {
+                const activeBookings = JSON.parse(activeBookingsJson);
+                const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
+                await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
+                console.log('✅ Removed completed booking from activeBookings');
+              } catch (e) {
+                console.error('Error updating activeBookings:', e);
+              }
+            }
+            
+            // Also clear any other booking-related items
+            await AsyncStorage.removeItem('currentBookingDetails');
+            await AsyncStorage.removeItem('currentServiceType');
+            
+            console.log('➡️ Navigating to ServiceCompleted with cleared storage');
+            
+            // Navigate to ServiceCompleted screen
+            router.replace({
+              pathname: '/(customer)/ServiceCompleted',
+              params: bookingData
+            });
+            
+          } catch (error) {
+            console.error('Error clearing storage for completed_confirmed:', error);
+            // Still navigate even if storage clear fails
+            router.replace({
+              pathname: '/(customer)/ServiceCompleted',
+              params: {
+                bookingId: currentBookingId,
+                serviceType: serviceType,
+                totalAmount: totalAmount,
+                duration: duration,
+                pickupLocation: pickupLocation,
+                providerName: providerName
+              }
+            });
+          }
+        }
+        else if (currentBookingStatus === 'completed') {
+          // Service completed but not yet confirmed by customer
+          router.replace({
+            pathname: '/(customer)/ServiceCompleted',
+            params: {
+              bookingId: currentBookingId,
+              providerName: providerName,
+              serviceType: serviceType,
+              totalAmount: totalAmount,
+              duration: duration,
+              pickupLocation: pickupLocation
+            }
+          });
+        }
+        else {
+          // Default/fallback - FindingProvider
           router.replace({
             pathname: '/(customer)/FindingProvider',
             params: {
-              bookingId: currentBookingId
+              bookingId: currentBookingId,
+              customerName: customerName,
+              pickupLocation: pickupLocation
             }
           });
         }
@@ -124,10 +226,11 @@ const checkExistingBooking = async () => {
   }
 };
 
+
   // Also check when component mounts (initial load)
   useEffect(() => {
     checkExistingBooking();
-    
+
     // Cleanup function
     return () => {
       setNavigationInProgress(false);
@@ -137,93 +240,93 @@ const checkExistingBooking = async () => {
   // EXACTLY 12 SERVICES as per SRS v1.1 Detailed Supplement
   const services: Service[] = [
     // Location & Vehicle-Type Based Services
-    { 
-      id: 1, 
-      name: 'Towing', 
-      icon: require('../../assets/customer/towing.png'), 
+    {
+      id: 1,
+      name: 'Towing',
+      icon: require('../../assets/customer/towing.png'),
       bgColor: '#f0f9ff',
       description: 'Professional towing service'
     },
-    { 
-      id: 2, 
-      name: 'Roadside Assistance', 
-      icon: require('../../assets/customer/repair.png'), 
+    {
+      id: 2,
+      name: 'Roadside Assistance',
+      icon: require('../../assets/customer/repair.png'),
       bgColor: '#faf5ff',
       description: '24/7 emergency roadside assistance'
     },
-    { 
-      id: 3, 
-      name: 'Fuel Delivery', 
-      icon: require('../../assets/customer/fuel.png'), 
+    {
+      id: 3,
+      name: 'Fuel Delivery',
+      icon: require('../../assets/customer/fuel.png'),
       bgColor: '#fffcf0',
       description: 'Fuel delivery to your location'
     },
-    
+
     // Location & Vehicle-Info Based Services
-    { 
-      id: 4, 
-      name: 'Battery Replacement', 
-      icon: require('../../assets/customer/battery.png'), 
+    {
+      id: 4,
+      name: 'Battery Replacement',
+      icon: require('../../assets/customer/battery.png'),
       bgColor: '#f0fdf4',
       description: 'Battery replacement service'
     },
-    { 
-      id: 5, 
-      name: 'AC Gas Refill', 
-      icon: require('../../assets/customer/home/ac.png'), 
+    {
+      id: 5,
+      name: 'AC Gas Refill',
+      icon: require('../../assets/customer/home/ac.png'),
       bgColor: '#fef2f2',
       description: 'AC gas refill for your vehicle'
     },
-    { 
-      id: 6, 
-      name: 'Tire Replacement', 
-      icon: require('../../assets/customer/home/tire.png'), 
+    {
+      id: 6,
+      name: 'Tire Replacement',
+      icon: require('../../assets/customer/home/tire.png'),
       bgColor: '#eff6ff',
       description: 'Tire replacement and repair'
     },
-    { 
-      id: 7, 
-      name: 'Oil Change', 
-      icon: require('../../assets/customer/oil.png'), 
+    {
+      id: 7,
+      name: 'Oil Change',
+      icon: require('../../assets/customer/oil.png'),
       bgColor: '#fef2f2',
       description: 'Oil change service'
     },
-    { 
-      id: 8, 
-      name: 'Inspection / Repair', 
-      icon: require('../../assets/customer/inspection.png'), 
+    {
+      id: 8,
+      name: 'Inspection / Repair',
+      icon: require('../../assets/customer/inspection.png'),
       bgColor: '#faf5ff',
       description: 'Vehicle inspection and repair'
     },
-    
+
     // On-Location Services with Scheduling
-    { 
-      id: 9, 
-      name: 'Car Wash', 
-      icon: require('../../assets/customer/home/carwash.png'), 
+    {
+      id: 9,
+      name: 'Car Wash',
+      icon: require('../../assets/customer/home/carwash.png'),
       bgColor: '#f0f9ff',
       description: 'Professional car wash'
     },
-    { 
-      id: 10, 
-      name: 'Car Detailing', 
-      icon: require('../../assets/customer/home/detailing.png'), 
+    {
+      id: 10,
+      name: 'Car Detailing',
+      icon: require('../../assets/customer/home/detailing.png'),
       bgColor: '#fffcf0',
       description: 'Complete car detailing'
     },
-    
+
     // Special Services
-    { 
-      id: 11, 
-      name: 'Car Rental', 
-      icon: require('../../assets/customer/home/rent.png'), 
+    {
+      id: 11,
+      name: 'Car Rental',
+      icon: require('../../assets/customer/home/rent.png'),
       bgColor: '#f0fdf4',
       description: 'Car rental service'
     },
-    { 
-      id: 12, 
-      name: 'Spare Parts', 
-      icon: require('../../assets/customer/home/spareparts.png'), 
+    {
+      id: 12,
+      name: 'Spare Parts',
+      icon: require('../../assets/customer/home/spareparts.png'),
       bgColor: '#eff6ff',
       description: 'Spare parts request'
     },
@@ -283,9 +386,9 @@ const checkExistingBooking = async () => {
 
   const handleSearch = (text: string) => {
     setSearchQuery(text);
-    
+
     if (text.trim().length > 0) {
-      const filtered = services.filter(service => 
+      const filtered = services.filter(service =>
         service.name.toLowerCase().includes(text.toLowerCase()) ||
         service.description.toLowerCase().includes(text.toLowerCase())
       );
@@ -321,11 +424,11 @@ const checkExistingBooking = async () => {
   };
 
   const handlePopularServicePress = (service: PopularService) => {
-    const mainService = services.find(s => 
+    const mainService = services.find(s =>
       s.name.toLowerCase().includes(service.category.toLowerCase()) ||
       s.name.toLowerCase().includes(service.name.toLowerCase().split(' ')[0])
     );
-    
+
     if (mainService) {
       router.push({
         pathname: '/(customer)/ServiceDetails',
@@ -348,7 +451,7 @@ const checkExistingBooking = async () => {
   };
 
   const handleSeeAllPress = () => {
-      router.push('/(customer)/PopularServices');
+    router.push('/(customer)/PopularServices');
   };
 
   const handleMenuPress = () => {
@@ -419,7 +522,7 @@ const checkExistingBooking = async () => {
                 <Text style={styles.clearText}>CLEAR</Text>
               </TouchableOpacity>
             </View>
-            
+
             {filteredServices.length > 0 ? (
               <View style={styles.categoriesGrid}>
                 {filteredServices.map((service) => (
@@ -629,8 +732,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 4,
     marginBottom: 15,
-    borderWidth:1,
-    borderColor:'#e2dfdf',
+    borderWidth: 1,
+    borderColor: '#e2dfdf',
   },
   searchIcon: {
     marginRight: 10,
@@ -655,7 +758,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#3c3c3c',
     letterSpacing: 0.5,
-    marginBottom:6,
+    marginBottom: 6,
   },
   seeAllText: {
     fontSize: 12,
@@ -777,9 +880,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    borderRadius:25,
-    borderWidth:1,
-    borderColor:'#a0d6eb',
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#a0d6eb',
   },
   serviceIcon: {
     width: 28,
