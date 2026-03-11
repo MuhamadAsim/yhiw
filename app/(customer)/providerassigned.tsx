@@ -17,13 +17,18 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
-import ChatPopup from './components/ChatPopup'; // Import the ChatPopup component
+import ChatPopup from './components/ChatPopup';
 
-const { height, width } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 
-// Move API keys to environment variables!
-const ANDROID_API_KEY = process.env.GOOGLE_MAPS_ANDROID_API_KEY || 'AIzaSyDYrX8rOSmDJ4tcsnjRU1yK3IjWoIiJ67A';
-const IOS_API_KEY = process.env.GOOGLE_MAPS_IOS_API_KEY || 'AIzaSyCLcr19qyM9b65watbgznqLtDAvrbQXMNU';
+// API Base URL
+const API_BASE_URL = 'https://yhiw-backend.onrender.com';
+
+// Types
+interface Coordinates {
+  lat: number;
+  lng: number;
+}
 
 interface JobDetails {
   bookingId: string;
@@ -33,17 +38,11 @@ interface JobDetails {
   vehicleType: string;
   pickup: {
     address: string;
-    coordinates: {
-      lat: number;
-      lng: number;
-    };
+    coordinates: Coordinates;
   };
   dropoff?: {
     address: string;
-    coordinates: {
-      lat: number;
-      lng: number;
-    };
+    coordinates: Coordinates;
   };
   provider?: {
     id: string;
@@ -77,24 +76,30 @@ interface JobDetails {
   createdAt: string;
 }
 
-const API_BASE_URL = 'https://yhiw-backend.onrender.com';
+interface RouteData {
+  polyline: string;
+  distance: string;
+  eta: string;
+  distanceValue?: number;
+  etaValue?: number;
+}
 
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
   const pollingTimer = useRef<NodeJS.Timeout | null>(null);
+  const routeFetchTimer = useRef<NodeJS.Timeout | null>(null);
   const isMounted = useRef(true);
   const navigationInProgress = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
-
-  // Add chat visible state
   const [chatVisible, setChatVisible] = useState(false);
 
   // State
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [providerLocation, setProviderLocation] = useState<{latitude: number; longitude: number} | null>(null);
+  const [providerLocation, setProviderLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [routeData, setRouteData] = useState<RouteData | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [eta, setEta] = useState<string>('');
   const [timeRemaining, setTimeRemaining] = useState<number>(0);
@@ -102,6 +107,7 @@ const ProviderAssignedScreen = () => {
   const [hasShownArrivedAlert, setHasShownArrivedAlert] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [isFetchingRoute, setIsFetchingRoute] = useState(false);
 
   // Get ONLY bookingId from params
   const bookingId = useLocalSearchParams().bookingId as string;
@@ -116,10 +122,148 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  // Handle message button press - open chat popup instead of navigating
+  // Handle message button press - open chat popup
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
     setChatVisible(true);
+  };
+
+  // Decode polyline from Google Maps format or simple pipe-separated format
+  const decodePolyline = (encoded: string): any[] => {
+    if (!encoded || typeof encoded !== 'string') {
+      return [];
+    }
+
+    // Check if it's a simple pipe-separated format (lat,lng|lat,lng) - fallback from backend
+    if (encoded.includes('|')) {
+      return encoded.split('|').map(point => {
+        const [lat, lng] = point.split(',').map(Number);
+        return {
+          latitude: lat,
+          longitude: lng,
+        };
+      }).filter(point =>
+        !isNaN(point.latitude) &&
+        !isNaN(point.longitude) &&
+        point.latitude !== 0 &&
+        point.longitude !== 0
+      );
+    }
+
+    // Otherwise, assume it's Google's encoded polyline format
+    const points: any[] = [];
+    let index = 0;
+    let lat = 0;
+    let lng = 0;
+
+    while (index < encoded.length) {
+      let b: number;
+      let shift = 0;
+      let result = 0;
+
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+
+      const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+
+      const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lng += dlng;
+
+      points.push({
+        latitude: lat / 1e5,
+        longitude: lng / 1e5
+      });
+    }
+
+    return points;
+  };
+  // In ProviderAssignedScreen - UPDATED to just use GET (no body needed)
+  const fetchRouteFromBackend = async () => {
+    if (isFetchingRoute || !bookingId) return;
+
+    setIsFetchingRoute(true);
+    addDebug(`📍 Fetching route from backend`);
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        addDebug('❌ No token found');
+        return;
+      }
+
+      // Simple GET request - backend knows both locations from:
+      // - Provider location from ProviderLiveStatus
+      // - Pickup location from job.bookingData
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/route`;
+      addDebug(`🌐 Calling route API: ${url}`);
+
+      const response = await fetch(url, {
+        method: 'GET', // Changed from POST to GET
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        }
+        // NO BODY - backend already knows everything
+      });
+
+      const data = await response.json();
+      addDebug(`📦 Route API response:`, data);
+
+      if (data.success && data.route) {
+        // Store route data
+        setRouteData(data.route);
+
+        // Decode and set route coordinates for map
+        if (data.route.polyline) {
+          const points = decodePolyline(data.route.polyline);
+          setRouteCoordinates(points);
+          addDebug(`🗺️ Route has ${points.length} points`);
+        }
+
+        // Set ETA and distance
+        setEta(data.route.eta || 'Calculating...');
+
+        // Parse ETA to seconds for countdown if available
+        if (data.route.etaValue) {
+          setTimeRemaining(data.route.etaValue);
+        } else if (data.route.eta) {
+          const etaMatch = data.route.eta.match(/(\d+)/);
+          if (etaMatch) {
+            const minutes = parseInt(etaMatch[0]);
+            setTimeRemaining(minutes * 60);
+          }
+        }
+
+        // Update provider location if returned
+        if (data.route.providerLocation) {
+          setProviderLocation({
+            latitude: data.route.providerLocation.latitude,
+            longitude: data.route.providerLocation.longitude,
+          });
+        }
+
+        addDebug(`✅ Route updated: ${data.route.distance}, ETA: ${data.route.eta}`);
+      } else {
+        addDebug(`⚠️ Route fetch failed:`, data.message);
+      }
+    } catch (error) {
+      addDebug(`❌ Error fetching route: ${error}`);
+    } finally {
+      setIsFetchingRoute(false);
+    }
   };
 
   // Fetch complete job details
@@ -141,7 +285,7 @@ const ProviderAssignedScreen = () => {
 
       const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
       addDebug(`🌐 Calling API: ${url}`);
-      
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -164,11 +308,10 @@ const ProviderAssignedScreen = () => {
         addDebug(`   - Status: ${data.job.status}`);
         addDebug(`   - Provider: ${data.job.provider?.name || 'Not assigned'}`);
         addDebug(`   - Pickup: ${data.job.pickup?.address || 'No address'}`);
-        addDebug(`   - Pickup Coordinates:`, data.job.pickup?.coordinates);
-        
+
         setJobDetails(data.job);
         setApiError(null);
-        
+
         // Set initial provider location if available
         if (data.job.providerLocation) {
           addDebug(`📍 Provider location from API:`, data.job.providerLocation);
@@ -177,14 +320,14 @@ const ProviderAssignedScreen = () => {
             longitude: data.job.providerLocation.longitude,
           });
         }
-        
+
         // Set initial ETA
         setEta(data.job.estimatedArrival || '15 min');
         const etaMinutes = parseInt(data.job.estimatedArrival || '15');
         if (!isNaN(etaMinutes)) {
           setTimeRemaining(etaMinutes * 60);
         }
-        
+
         // Center map on pickup if map is ready
         if (mapRef.current && data.job.pickup?.coordinates && mapReady) {
           addDebug(`🗺️ Centering map on pickup location`);
@@ -211,85 +354,86 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-// Handle navigation based on status
-const handleStatusNavigation = (status: string) => {
-  if (navigationInProgress.current) return;
+  // Handle navigation based on status
+  const handleStatusNavigation = (status: string) => {
+    if (navigationInProgress.current) return;
 
-  // Handle ARRIVED - Show alert but stay on screen
-  if (status === 'arrived' && !hasShownArrivedAlert) {
-    addDebug(`🚗 Provider has arrived!`);
-    setHasShownArrivedAlert(true);
-    Alert.alert(
-      'Provider Arrived',
-      `${jobDetails?.provider?.name || 'Your provider'} has arrived at your location.`,
-      [{ text: 'OK' }]
-    );
-  }
-  
-  // Handle STARTED/IN_PROGRESS - Navigate to ServiceInProgress
-  if ((status === 'started' || status === 'in_progress') && !navigationInProgress.current) {
-    addDebug(`🔄 Service started/in_progress - navigating to ServiceInProgress`);
-    navigationInProgress.current = true;
-    
-    if (pollingTimer.current) {
-      clearTimeout(pollingTimer.current);
-      pollingTimer.current = null;
+    // Handle ARRIVED - Show alert but stay on screen
+    if (status === 'arrived' && !hasShownArrivedAlert) {
+      addDebug(`🚗 Provider has arrived!`);
+      setHasShownArrivedAlert(true);
+      Alert.alert(
+        'Provider Arrived',
+        `${jobDetails?.provider?.name || 'Your provider'} has arrived at your location.`,
+        [{ text: 'OK' }]
+      );
     }
-    
-    setTimeout(() => {
+
+    // Handle STARTED/IN_PROGRESS - Navigate to ServiceInProgress
+    if ((status === 'started' || status === 'in_progress') && !navigationInProgress.current) {
+      addDebug(`🔄 Service started/in_progress - navigating to ServiceInProgress`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      setTimeout(() => {
+        if (isMounted.current) {
+          router.push({
+            pathname: '/(customer)/ServiceInProgress',
+            params: {
+              bookingId,
+              providerName: jobDetails?.provider?.name || '',
+              providerId: jobDetails?.provider?.id || '',
+              providerPhone: jobDetails?.provider?.phone || '',
+              serviceType: jobDetails?.serviceName || '',
+              vehicleType: jobDetails?.vehicleType || '',
+              pickupLocation: jobDetails?.pickup?.address || '',
+              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
+              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
+              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+            }
+          });
+        }
+      }, 500);
+    }
+
+    // Handle COMPLETED - Navigate immediately
+    if ((status === 'completed' || status === 'completed_confirmed') && !navigationInProgress.current) {
+      addDebug(`✅✅✅ JOB COMPLETED - navigating to ServiceCompleted`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      // Navigate immediately
       if (isMounted.current) {
         router.push({
-          pathname: '/(customer)/ServiceInProgress',
+          pathname: '/(customer)/ServiceCompleted',
           params: {
             bookingId,
             providerName: jobDetails?.provider?.name || '',
             providerId: jobDetails?.provider?.id || '',
             providerPhone: jobDetails?.provider?.phone || '',
             serviceType: jobDetails?.serviceName || '',
-            vehicleType: jobDetails?.vehicleType || '',
+            totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+            duration: formatTime(timeRemaining),
             pickupLocation: jobDetails?.pickup?.address || '',
             pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
             pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
-            totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+            completedAt: new Date().toISOString(),
           }
         });
       }
-    }, 500);
-  }
-
-  // Handle COMPLETED - Navigate immediately
-  if ((status === 'completed' || status === 'completed_confirmed') && !navigationInProgress.current) {
-    addDebug(`✅✅✅ JOB COMPLETED - navigating to ServiceCompleted`);
-    navigationInProgress.current = true;
-    
-    if (pollingTimer.current) {
-      clearTimeout(pollingTimer.current);
-      pollingTimer.current = null;
     }
-    
-    // Navigate immediately
-    if (isMounted.current) {
-      router.push({
-        pathname: '/(customer)/ServiceCompleted',
-        params: {
-          bookingId,
-          providerName: jobDetails?.provider?.name || '',
-          providerId: jobDetails?.provider?.id || '',
-          providerPhone: jobDetails?.provider?.phone || '',
-          serviceType: jobDetails?.serviceName || '',
-          totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
-          duration: formatTime(timeRemaining),
-          pickupLocation: jobDetails?.pickup?.address || '',
-          pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
-          pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
-          completedAt: new Date().toISOString(),
-        }
-      });
-    }
-  }
-};
+  };
 
-  // Fetch provider location (separate endpoint for real-time updates)
+
+  // Update the call in fetchProviderLocation:
   const fetchProviderLocation = async () => {
     if (!bookingId) return;
 
@@ -307,125 +451,113 @@ const handleStatusNavigation = (status: string) => {
       if (!response.ok) return;
 
       const data = await response.json();
-      
+
       if (data.success && data.location) {
         setPollingAttempts(prev => prev + 1);
-        
+
         const newLocation = {
           latitude: data.location.latitude,
           longitude: data.location.longitude,
         };
-        
+
         addDebug(`📍 Provider location update #${pollingAttempts + 1}:`, newLocation);
         setProviderLocation(newLocation);
-        
-        // Update route and ETA
-        if (jobDetails?.pickup?.coordinates) {
-          fetchRoute(
-            newLocation.latitude, 
-            newLocation.longitude,
-            jobDetails.pickup.coordinates.lat,
-            jobDetails.pickup.coordinates.lng
-          );
-          getEtaFromGoogleMaps(
-            newLocation.latitude, 
-            newLocation.longitude,
-            jobDetails.pickup.coordinates.lat,
-            jobDetails.pickup.coordinates.lng
-          );
+
+        // Fetch route after location update - NO COORDINATES NEEDED
+        if (routeFetchTimer.current) {
+          clearTimeout(routeFetchTimer.current);
         }
+
+        routeFetchTimer.current = setTimeout(() => {
+          fetchRouteFromBackend(); // Just call without parameters
+        }, 2000);
       }
     } catch (error) {
       addDebug(`❌ Error fetching location: ${error}`);
     }
   };
 
+  // Fetch job status
+  const fetchJobStatus = async () => {
+    if (!bookingId || navigationInProgress.current) return;
 
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
 
-// Fetch job status - UPDATED to use same source as details
-const fetchJobStatus = async () => {
-  if (!bookingId || navigationInProgress.current) return;
+      const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
+      addDebug(`📊 Polling #${pollingAttempts + 1} - Checking job details`);
 
-  try {
-    const token = await AsyncStorage.getItem('userToken');
-    if (!token) return;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-    // Use the details endpoint which we know returns correct status
-    const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
-    addDebug(`📊 Polling #${pollingAttempts + 1} - Checking job details at ${url}`);
-    
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+      if (!response.ok) {
+        addDebug(`❌ Status check failed: ${response.status}`);
+        return;
+      }
 
-    if (!response.ok) {
-      addDebug(`❌ Status check failed: ${response.status}`);
-      return;
+      const data = await response.json();
+
+      if (data.success && data.job && data.job.status) {
+        const newStatus = data.job.status;
+        addDebug(`📊 Job status update: ${newStatus}`);
+
+        // Update job details with any new data
+        setJobDetails(prev => prev ? { ...prev, ...data.job } : data.job);
+
+        // Handle navigation based on new status
+        handleStatusNavigation(newStatus);
+      }
+    } catch (error) {
+      addDebug(`❌ Error fetching status: ${error}`);
     }
-
-    const data = await response.json();
-    
-    if (data.success && data.job && data.job.status) {
-      const newStatus = data.job.status;
-      addDebug(`📊 Job status update: ${newStatus}`);
-      
-      // Update job details with any new data
-      setJobDetails(prev => prev ? { ...prev, ...data.job } : data.job);
-      
-      // Handle navigation based on new status
-      handleStatusNavigation(newStatus);
-    }
-  } catch (error) {
-    addDebug(`❌ Error fetching status: ${error}`);
-  }
-};
-
-
+  };
 
   // Polling loop
   const startPolling = () => {
     addDebug('🔄 Starting polling (every 10 seconds)');
-    
+
     const poll = async () => {
       if (!isMounted.current || navigationInProgress.current) return;
-      
+
       await Promise.all([
         fetchProviderLocation(),
         fetchJobStatus()
       ]);
-      
+
       if (isMounted.current && !navigationInProgress.current) {
         pollingTimer.current = setTimeout(poll, 10000);
       }
     };
-    
+
     poll();
   };
 
   // Initial load
   useEffect(() => {
     addDebug(`🚀 Component mounted with bookingId: ${bookingId}`);
-    
+
     if (!bookingId) {
       addDebug('❌ No booking ID in params');
       Alert.alert('Error', 'No booking ID provided');
       router.back();
       return;
     }
-    
+
     // Fetch initial data
     fetchJobDetails().then(() => {
       // Start polling after initial data loads
       startPolling();
     });
-    
+
     // Start ETA countdown
     const interval = setInterval(() => {
       setTimeRemaining(prev => prev > 1 ? prev - 1 : 0);
     }, 1000);
-    
+
     return () => {
       addDebug('🧹 Cleaning up component');
       isMounted.current = false;
@@ -433,98 +565,13 @@ const fetchJobStatus = async () => {
         clearTimeout(pollingTimer.current);
         pollingTimer.current = null;
       }
+      if (routeFetchTimer.current) {
+        clearTimeout(routeFetchTimer.current);
+        routeFetchTimer.current = null;
+      }
       clearInterval(interval);
     };
   }, [bookingId]);
-
-  // Google Maps functions
-  const decodePolyline = (t: string): any[] => {
-    let points = [];
-    let lat = 0;
-    let lng = 0;
-    let index = 0;
-    let shift = 0;
-    let result = 0;
-
-    while (index < t.length) {
-      let b = 0;
-      shift = 0;
-      result = 0;
-
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-
-      shift = 0;
-      result = 0;
-
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-
-      points.push({
-        latitude: lat / 1e5,
-        longitude: lng / 1e5
-      });
-    }
-
-    return points;
-  };
-
-  const fetchRoute = async (startLat: number, startLng: number, endLat: number, endLng: number) => {
-    try {
-      const apiKey = Platform.select({
-        android: ANDROID_API_KEY,
-        ios: IOS_API_KEY,
-      });
-
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&key=${apiKey}`;
-
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.routes.length > 0) {
-        const points = decodePolyline(data.routes[0].overview_polyline.points);
-        setRouteCoordinates(points);
-      }
-    } catch (error) {
-      addDebug(`Error fetching route: ${error}`);
-    }
-  };
-
-  const getEtaFromGoogleMaps = async (originLat: number, originLng: number, destLat: number, destLng: number) => {
-    try {
-      const apiKey = Platform.select({
-        android: ANDROID_API_KEY,
-        ios: IOS_API_KEY,
-      });
-
-      const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${originLat},${originLng}&destinations=${destLat},${destLng}&key=${apiKey}`;
-
-      const response = await fetch(url);
-      const data = await response.json();
-
-      if (data.status === 'OK' && data.rows[0]?.elements[0]?.status === 'OK') {
-        const durationText = data.rows[0].elements[0].duration.text;
-        setEta(durationText);
-        
-        const durationInSeconds = data.rows[0].elements[0].duration.value;
-        setTimeRemaining(durationInSeconds);
-      }
-    } catch (error) {
-      addDebug(`Error getting ETA: ${error}`);
-    }
-  };
 
   // Action handlers
   const handleCall = () => {
@@ -535,8 +582,6 @@ const fetchJobStatus = async () => {
       Alert.alert('Error', 'Provider phone number not available');
     }
   };
-
-  // Removed handleMessage function - now using the one above
 
   const handleOpenInMaps = () => {
     if (providerLocation && jobDetails?.pickup?.coordinates) {
@@ -602,7 +647,7 @@ const fetchJobStatus = async () => {
                 },
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
-              
+
               await AsyncStorage.removeItem('currentBookingId');
               router.replace('/(customer)/Home');
             } catch (error) {
@@ -688,8 +733,6 @@ const fetchJobStatus = async () => {
         <Text style={styles.title}>Provider Assigned!</Text>
         <Text style={styles.subtitle}>Your service provider is on the way</Text>
 
-        {/* Status Badge - REMOVED as requested */}
-
         {/* Map Section */}
         <View style={styles.mapContainer}>
           {/* ETA Badge */}
@@ -763,7 +806,7 @@ const fetchJobStatus = async () => {
                 </Marker>
               )}
 
-              {/* Route */}
+              {/* Route from Backend */}
               {routeCoordinates.length > 0 && (
                 <Polyline
                   coordinates={routeCoordinates}
@@ -811,6 +854,25 @@ const fetchJobStatus = async () => {
             <Text style={styles.pollingText}>Live • {pollingAttempts}</Text>
           </View>
         </View>
+
+        {/* Route Info Card - NEW */}
+        {routeData && (
+          <View style={styles.routeInfoCard}>
+            <View style={styles.routeInfoRow}>
+              <View style={styles.routeInfoItem}>
+                <Ionicons name="time-outline" size={18} color="#68bdee" />
+                <Text style={styles.routeInfoLabel}>ETA</Text>
+                <Text style={styles.routeInfoValue}>{routeData.eta}</Text>
+              </View>
+              <View style={styles.routeInfoDivider} />
+              <View style={styles.routeInfoItem}>
+                <Ionicons name="map-outline" size={18} color="#68bdee" />
+                <Text style={styles.routeInfoLabel}>Distance</Text>
+                <Text style={styles.routeInfoValue}>{routeData.distance}</Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {/* Provider Card */}
         {provider && (
@@ -952,7 +1014,7 @@ const fetchJobStatus = async () => {
                 styles.statusTimeInactive,
                 providerLocation && styles.statusTimeActive
               ]}>
-                {providerLocation ? 'Live tracking active' : `ETA: ${eta}`}
+                {providerLocation ? `ETA: ${eta}` : 'Waiting for provider'}
               </Text>
             </View>
           </View>
@@ -999,24 +1061,7 @@ const fetchJobStatus = async () => {
   );
 };
 
-// Add loading styles
-const loadingStyles = {
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f8f8',
-  },
-  loadingText: {
-    marginTop: 10,
-    fontSize: 14,
-    color: '#8c8c8c',
-  },
-};
-// At the bottom of the file, replace the styles with:
-
 const styles = StyleSheet.create({
-  // Loading styles
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -1035,8 +1080,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
   },
-  
-  // Main container styles
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -1073,59 +1116,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: height * 0.025,
     letterSpacing: 0.3,
-  },
-  statusBadge: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginBottom: 10,
-    alignSelf: 'center',
-  },
-  statusBadgeBlue: {
-    backgroundColor: '#68bdee',
-  },
-  statusBadgeGreen: {
-    backgroundColor: '#4CAF50',
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  debugPanel: {
-    width: '100%',
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 10,
-  },
-  debugTitle: {
-    color: '#00ff00',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginBottom: 5,
-  },
-  debugScroll: {
-    maxHeight: 100,
-    marginBottom: 10,
-  },
-  debugText: {
-    color: '#00ff00',
-    fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    marginBottom: 2,
-  },
-  debugButton: {
-    backgroundColor: '#333',
-    padding: 8,
-    borderRadius: 5,
-    alignItems: 'center',
-  },
-  debugButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
   },
   mapContainer: {
     width: '100%',
@@ -1228,6 +1218,46 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#68bdee',
     fontWeight: '600',
+  },
+  routeInfoCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 15,
+    borderWidth: 2,
+    borderColor: '#68bdee',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  routeInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  routeInfoItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  routeInfoDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: '#e0e0e0',
+  },
+  routeInfoLabel: {
+    fontSize: 11,
+    color: '#8c8c8c',
+    fontWeight: '600',
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  routeInfoValue: {
+    fontSize: 14,
+    color: '#3c3c3c',
+    fontWeight: 'bold',
   },
   pickupMarkerContainer: {
     backgroundColor: 'white',

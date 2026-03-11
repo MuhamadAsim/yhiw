@@ -83,6 +83,15 @@ interface JobDetailsResponse {
   };
 }
 
+interface TimerResponse {
+  success: boolean;
+  timer: {
+    durationSeconds: number;
+    isPaused: boolean;
+    pausedAt: string | null;
+  };
+}
+
 interface JobStatusResponse {
   status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed';
   startedAt?: string;
@@ -102,8 +111,9 @@ const ServiceInProgressScreen = () => {
   
   // Timer state
   const [duration, setDuration] = useState('00:00');
+  const [durationSeconds, setDurationSeconds] = useState(0);
   const [startTime, setStartTime] = useState<Date | null>(null);
-  // FIXED: Added initial value null to useRef
+  const [isPaused, setIsPaused] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   
   // Data state
@@ -129,6 +139,85 @@ const ServiceInProgressScreen = () => {
   const pickupLng = params.pickupLng as string;
   const totalAmountParam = params.totalAmount as string;
 
+  // ===== FETCH TIMER FROM API =====
+  const fetchTimerData = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) {
+        console.log('❌ No token or bookingId for timer fetch');
+        return null;
+      }
+
+      console.log(`⏱️ Fetching timer for booking: ${bookingId}`);
+      
+      const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/timer`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        console.log(`❌ Timer fetch failed: ${response.status}`);
+        return null;
+      }
+
+      const data: TimerResponse = await response.json();
+      console.log('✅ Timer data fetched:', data);
+
+      if (data.success && data.timer) {
+        return data.timer;
+      }
+      return null;
+    } catch (error) {
+      console.log('❌ Error fetching timer:', error);
+      return null;
+    }
+  };
+
+  // ===== FORMAT DURATION FROM SECONDS =====
+  const formatDurationFromSeconds = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    } else {
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+  };
+
+  // ===== START LIVE TIMER =====
+  const startLiveTimer = (initialSeconds: number, paused: boolean) => {
+    console.log(`⏱️ Starting live timer with ${initialSeconds}s, paused: ${paused}`);
+    
+    setDurationSeconds(initialSeconds);
+    setDuration(formatDurationFromSeconds(initialSeconds));
+    setIsPaused(paused);
+
+    // Clear any existing timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    // Don't start interval if paused
+    if (paused) {
+      console.log('⏸️ Timer is paused, not starting interval');
+      return;
+    }
+
+    // Start new timer
+    timerRef.current = setInterval(() => {
+      setDurationSeconds(prev => {
+        const newSeconds = prev + 1;
+        setDuration(formatDurationFromSeconds(newSeconds));
+        return newSeconds;
+      });
+    }, 1000);
+
+    console.log('▶️ Timer interval started');
+  };
+
   // Fetch job details on mount
   useEffect(() => {
     if (bookingId) {
@@ -136,30 +225,15 @@ const ServiceInProgressScreen = () => {
     }
   }, [bookingId]);
 
-  // Start timer when we have startTime
+  // Cleanup timer on unmount
   useEffect(() => {
-    if (!startTime) return;
-
-    timerRef.current = setInterval(() => {
-      const now = new Date();
-      const diff = Math.floor((now.getTime() - startTime.getTime()) / 1000);
-      const hours = Math.floor(diff / 3600);
-      const mins = Math.floor((diff % 3600) / 60);
-      const secs = diff % 60;
-      
-      if (hours > 0) {
-        setDuration(`${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-      } else {
-        setDuration(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
-      }
-    }, 1000);
-
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        console.log('🧹 Timer cleaned up');
       }
     };
-  }, [startTime]);
+  }, []);
 
   // Polling effect - check job status every 5 seconds
   useEffect(() => {
@@ -215,13 +289,26 @@ const ServiceInProgressScreen = () => {
         // Set start time from backend if available
         if (data.data.timeline.startedAt) {
           setStartTime(new Date(data.data.timeline.startedAt));
-        } else {
-          // Fallback to current time
-          setStartTime(new Date());
         }
         
         // Update job status
         setJobStatus(data.data.status);
+
+        // ===== FETCH TIMER DATA =====
+        const timerData = await fetchTimerData();
+        if (timerData) {
+          // Start live timer with fetched data
+          startLiveTimer(timerData.durationSeconds, timerData.isPaused);
+        } else if (data.data.timeline.startedAt) {
+          // Fallback: calculate from startedAt
+          const startedAt = new Date(data.data.timeline.startedAt);
+          const now = new Date();
+          const elapsedSeconds = Math.floor((now.getTime() - startedAt.getTime()) / 1000);
+          startLiveTimer(elapsedSeconds, false);
+        } else {
+          // Final fallback: start from 0
+          startLiveTimer(0, false);
+        }
       }
     } catch (error) {
       console.log('❌ Error fetching job details:', error);
@@ -230,6 +317,8 @@ const ServiceInProgressScreen = () => {
       // Fallback to params if API fails
       if (providerNameParam) {
         setStartTime(new Date());
+        // Start timer from 0 as fallback
+        startLiveTimer(0, false);
       }
     } finally {
       setIsLoading(false);
@@ -267,8 +356,11 @@ const ServiceInProgressScreen = () => {
       if (data.status === 'completed' || data.status === 'completed_confirmed') {
         console.log('✅✅✅ JOB COMPLETED - Navigating to ServiceCompleted');
         
-        // Stop polling
+        // Stop polling and timer
         setIsPolling(false);
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
 
         // Navigate to ServiceCompleted screen
         setTimeout(() => {
@@ -296,8 +388,11 @@ const ServiceInProgressScreen = () => {
         
         setHasShownCancelledAlert(true);
         
-        // Stop polling
+        // Stop polling and timer
         setIsPolling(false);
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+        }
 
         // Remove bookingId from storage
         await AsyncStorage.removeItem('currentBookingId');
@@ -398,12 +493,17 @@ const ServiceInProgressScreen = () => {
   // Format the started time
   const startedAtTime = startTime ? formatTime(startTime) : 'Just now';
 
+  // Show pause indicator if timer is paused
+  const showPaused = isPaused;
+
   return (
     <View style={styles.container}>
       {/* Polling Status Badge */}
       <View style={styles.pollingBadge}>
-        <View style={styles.pollingDot} />
-        <Text style={styles.pollingText}>Live • {pollingAttempts}</Text>
+        <View style={[styles.pollingDot, showPaused && styles.pausedDot]} />
+        <Text style={[styles.pollingText, showPaused && styles.pausedText]}>
+          {showPaused ? 'Paused' : `Live • ${pollingAttempts}`}
+        </Text>
       </View>
 
       <ScrollView
@@ -427,10 +527,10 @@ const ServiceInProgressScreen = () => {
           <Text style={styles.durationTime}>{duration}</Text>
           <Text style={styles.startedTime}>Started at {startedAtTime}</Text>
           
-          {/* Live Indicator */}
-          <View style={styles.liveIndicator}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>LIVE</Text>
+          {/* Live/Paused Indicator */}
+          <View style={[styles.liveIndicator, showPaused && styles.pausedIndicator]}>
+            <View style={[styles.liveDot, showPaused && styles.pausedDot]} />
+            <Text style={styles.liveText}>{showPaused ? 'PAUSED' : 'LIVE'}</Text>
           </View>
         </View>
 
@@ -529,11 +629,13 @@ const ServiceInProgressScreen = () => {
 
           {/* Progress Item 2 - Service In Progress */}
           <View style={styles.progressItem}>
-            <View style={styles.progressIconActive}>
-              <View style={styles.progressDotActive} />
+            <View style={[styles.progressIconActive, showPaused && styles.progressIconPaused]}>
+              <View style={[styles.progressDotActive, showPaused && styles.progressDotPaused]} />
             </View>
             <View style={styles.progressTextContainer}>
-              <Text style={styles.progressTextActive}>Service In Progress</Text>
+              <Text style={[styles.progressTextActive, showPaused && styles.progressTextPaused]}>
+                {showPaused ? 'Service Paused' : 'Service In Progress'}
+              </Text>
               <Text style={styles.progressTimeActive}>
                 {duration} elapsed
               </Text>
@@ -564,9 +666,16 @@ const ServiceInProgressScreen = () => {
           
           {/* Polling status indicator */}
           <View style={styles.pollingIndicator}>
-            <Ionicons name="sync-outline" size={14} color="#4CAF50" />
-            <Text style={styles.pollingIndicatorText}>
-              Checking for updates every 5 seconds
+            <Ionicons 
+              name={showPaused ? "pause-circle-outline" : "sync-outline"} 
+              size={14} 
+              color={showPaused ? "#FFA500" : "#4CAF50"} 
+            />
+            <Text style={[
+              styles.pollingIndicatorText,
+              showPaused && styles.pausedIndicatorText
+            ]}>
+              {showPaused ? 'Timer paused by provider' : 'Checking for updates every 5 seconds'}
             </Text>
           </View>
         </View>
@@ -667,6 +776,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4CAF50',
   },
+  pausedDot: {
+    backgroundColor: '#FFA500',
+  },
+  pausedText: {
+    color: '#FFA500',
+  },
   pollingDot: {
     width: 8,
     height: 8,
@@ -758,6 +873,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
+  },
+  pausedIndicator: {
+    backgroundColor: '#FFA500',
   },
   liveDot: {
     width: 6,
@@ -948,10 +1066,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
+  progressIconPaused: {
+    backgroundColor: '#FFA500',
+  },
   progressDotActive: {
     width: 8,
     height: 8,
     borderRadius: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  progressDotPaused: {
     backgroundColor: '#FFFFFF',
   },
   progressIconInactive: {
@@ -989,6 +1113,9 @@ const styles = StyleSheet.create({
     color: '#3c3c3c',
     fontWeight: 'bold',
     marginBottom: 4,
+  },
+  progressTextPaused: {
+    color: '#FFA500',
   },
   progressTimeActive: {
     fontSize: 11,
@@ -1040,6 +1167,9 @@ const styles = StyleSheet.create({
     color: '#2E7D32',
     fontWeight: '600',
     marginLeft: 6,
+  },
+  pausedIndicatorText: {
+    color: '#FFA500',
   },
   costCard: {
     backgroundColor: '#FFFFFF',

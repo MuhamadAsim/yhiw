@@ -41,6 +41,32 @@ const ServiceCompletedScreen = () => {
   // Generate booking reference
   const bookingRef = `#YHIW-${bookingId?.slice(-5) || '96931'}`;
 
+  // Format duration from seconds
+  const formatDuration = (totalSeconds: number): string => {
+    if (!totalSeconds || totalSeconds === 0) return '35 minutes'; // fallback
+    
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    
+    if (hours > 0) {
+      return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
+    }
+    return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+  };
+
+  // Format time from ISO string
+  const formatTime = (isoString: string): string => {
+    if (!isoString) return new Date().toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    return new Date(isoString).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
   // Fetch job details on mount
   useEffect(() => {
     fetchJobDetails();
@@ -52,6 +78,8 @@ const ServiceCompletedScreen = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token || !bookingId) return;
 
+      console.log('📡 Fetching job details for booking:', bookingId);
+
       // Fetch job details from backend
       const response = await fetch(`${API_BASE_URL}/customer/${bookingId}/details`, {
         headers: {
@@ -61,18 +89,25 @@ const ServiceCompletedScreen = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // The API returns data.job, not data.data
+        // The API returns data.job
         if (data.success && data.job) {
           setJobDetails(data.job);
-          console.log('✅ Job details loaded:', data.job);
+          console.log('✅ Job details loaded:', {
+            serviceName: data.job.serviceName,
+            provider: data.job.provider?.name,
+            timeTracking: data.job.timeTracking,
+            duration: data.job.timeTracking?.totalSeconds
+          });
         }
+      } else {
+        console.log('⚠️ Failed to fetch job details:', response.status);
       }
 
       // Also check for existing rating
       await checkExistingRating();
       
     } catch (error) {
-      console.error('Error fetching job details:', error);
+      console.error('❌ Error fetching job details:', error);
     } finally {
       setIsLoading(false);
     }
@@ -104,119 +139,123 @@ const ServiceCompletedScreen = () => {
     setRating(starIndex);
   };
 
-  // Add this cleanup function that can be called from multiple places
-const cleanupBookingData = async () => {
-  try {
-    await AsyncStorage.removeItem('currentBookingId');
-    console.log('✅ Current bookingId removed from storage');
-  } catch (error) {
-    console.error('Error removing bookingId:', error);
-  }
-};
+  const cleanupBookingData = async () => {
+    try {
+      await AsyncStorage.removeItem('currentBookingId');
+      console.log('✅ Current bookingId removed from storage');
+    } catch (error) {
+      console.error('Error removing bookingId:', error);
+    }
+  };
 
-
-// Modified handleSubmitRating to clean up after successful submission
-const handleSubmitRating = async () => {
-  if (rating === 0) {
-    Alert.alert('Rating Required', 'Please rate your experience before continuing.');
-    return;
-  }
-
-  setIsSubmitting(true);
-
-  try {
-    const token = await AsyncStorage.getItem('userToken');
-    
-    if (!token) {
-      Alert.alert('Error', 'Authentication token not found');
-      setIsSubmitting(false);
+  const handleSubmitRating = async () => {
+    if (rating === 0) {
+      Alert.alert('Rating Required', 'Please rate your experience before continuing.');
       return;
     }
 
-    console.log('📡 Submitting rating for booking:', bookingId);
+    setIsSubmitting(true);
 
-    const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        rating,
-        providerId,
-        bookingId,
-      }),
-    });
-
-    const result = await response.json();
-    console.log('📡 Rating response:', response.status, result);
-
-    if (response.ok && result.success) {
-      // Clean up the booking data after successful rating
-      await cleanupBookingData();
+    try {
+      const token = await AsyncStorage.getItem('userToken');
       
-      Alert.alert(
-        'Thank You!',
-        'Your feedback has been submitted successfully.',
-        [{ text: 'OK' }]
-      );
-      setRating(rating);
-    } else {
-      if (response.status === 400 && result.message?.includes('already rated')) {
-        Alert.alert('Already Rated', 'You have already rated this service.');
-      } else {
-        throw new Error(result.message || 'Failed to submit rating');
+      if (!token) {
+        Alert.alert('Error', 'Authentication token not found');
+        setIsSubmitting(false);
+        return;
       }
+
+      console.log('📡 Submitting rating for booking:', bookingId);
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          rating,
+          providerId,
+          bookingId,
+        }),
+      });
+
+      const result = await response.json();
+      console.log('📡 Rating response:', response.status, result);
+
+      if (response.ok && result.success) {
+        // Clean up the booking data after successful rating
+        await cleanupBookingData();
+        
+        Alert.alert(
+          'Thank You!',
+          'Your feedback has been submitted successfully.',
+          [{ text: 'OK' }]
+        );
+        setRating(rating);
+      } else {
+        if (response.status === 400 && result.message?.includes('already rated')) {
+          Alert.alert('Already Rated', 'You have already rated this service.');
+        } else {
+          throw new Error(result.message || 'Failed to submit rating');
+        }
+      }
+    } catch (error) {
+      console.error('Error submitting rating:', error);
+      Alert.alert('Error', 'Failed to submit rating. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-  } catch (error) {
-    console.error('Error submitting rating:', error);
-    Alert.alert('Error', 'Failed to submit rating. Please try again.');
-  } finally {
-    setIsSubmitting(false);
-  }
-};
+  };
 
   const handleDownloadReceipt = () => {
     Alert.alert('Download Receipt', 'Receipt will be downloaded to your device.');
   };
 
-const handleBackToHome = async () => {
-  try {
-    // Remove the current bookingId from AsyncStorage
-    await AsyncStorage.removeItem('currentBookingId');
-    console.log('✅ Current bookingId removed from storage');
-    
-    // Navigate to home screen
-    router.push('/(customer)/Home');
-  } catch (error) {
-    console.error('Error removing bookingId:', error);
-    // Still navigate even if removal fails
-    router.push('/(customer)/Home');
-  }
-};
+  const handleBackToHome = async () => {
+    try {
+      // Remove the current bookingId from AsyncStorage
+      await AsyncStorage.removeItem('currentBookingId');
+      console.log('✅ Current bookingId removed from storage');
+      
+      // Navigate to home screen
+      router.push('/(customer)/Home');
+    } catch (error) {
+      console.error('Error removing bookingId:', error);
+      // Still navigate even if removal fails
+      router.push('/(customer)/Home');
+    }
+  };
 
-  // Calculate completion time - FIXED: Use correct path
-  const completionTime = jobDetails?.timeline?.completedAt || completedAtParam
-    ? new Date(jobDetails?.timeline?.completedAt || completedAtParam).toLocaleTimeString([], { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      })
-    : new Date().toLocaleTimeString([], { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      });
-
-  // FIXED: Use correct paths based on actual API response
+  // Get data from jobDetails (API) or fallback to params
   const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
   const serviceType = jobDetails?.serviceName || serviceTypeParam || 'Quick Tow (Flatbed)';
   const totalAmount = jobDetails?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
   
-  // Duration might need to be calculated from timeTracking or use param
-  const duration = jobDetails?.timeTracking?.totalSeconds 
-    ? `${Math.floor(jobDetails.timeTracking.totalSeconds / 60)} minutes`
-    : durationParam || '35 minutes';
-    
+  // Get duration from timeTracking (saved by provider) or fallback to param
+  const durationSeconds = jobDetails?.timeTracking?.totalSeconds || 0;
+  const duration = formatDuration(durationSeconds);
+  
+  // Log the duration for debugging
+  useEffect(() => {
+    if (jobDetails?.timeTracking) {
+      console.log('⏱️ Timer data from API:', {
+        seconds: jobDetails.timeTracking.totalSeconds,
+        formatted: duration,
+        isPaused: jobDetails.timeTracking.isPaused
+      });
+    }
+  }, [jobDetails]);
+  
   const pickupLocation = jobDetails?.pickup?.address || pickupLocationParam || '23 Main Street, Manama';
+  
+  // Get completion time from timeline or use param
+  const completionTime = jobDetails?.timeline?.completedAt || completedAtParam
+    ? formatTime(jobDetails?.timeline?.completedAt || completedAtParam)
+    : new Date().toLocaleTimeString([], { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
   
   // Calculate receipt breakdown
   const baseFee = parseFloat(totalAmount) * 0.75;

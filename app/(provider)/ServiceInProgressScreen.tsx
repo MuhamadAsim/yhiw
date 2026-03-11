@@ -18,17 +18,80 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
-// ─── Timer Hook ───────────────────────────────────────────────────────────────
-const useTimer = (initialSeconds: number = 0) => {
+// ─── Timer Hook with Database Save ───────────────────────────────────────────
+const useTimer = (initialSeconds: number = 0, bookingId: string) => {
   const [seconds, setSeconds] = useState<number>(initialSeconds);
   const [paused, setPaused] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
+  const addDebug = (message: string, data?: any) => {
+    console.log(`🔍 [Timer] ${message}`, data || '');
+  };
+
+  // Timer increment effect - NO SAVE HERE (only local)
   useEffect(() => {
     if (paused) return;
-    const interval = setInterval(() => setSeconds(s => s + 1), 1000);
+
+    const interval = setInterval(() => {
+      setSeconds(s => s + 1);
+    }, 1000);
+
     return () => clearInterval(interval);
   }, [paused]);
 
+  // Save timer to database - only called on pause/resume or navigation
+  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete'): Promise<boolean> => {
+    if (!bookingId) return false;
+
+    try {
+      setIsSaving(true);
+      const token = await AsyncStorage.getItem('userToken');
+
+      addDebug(`📡 Saving timer: ${seconds}s, action: ${action}`);
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          durationSeconds: seconds,
+          paused: action === 'pause' ? true : (action === 'resume' ? false : paused),
+          action: action
+        }),
+      });
+
+      const responseData = await response.json();
+
+      if (response.ok) {
+        addDebug(`✅ Timer saved: ${seconds}s, action: ${action}`, responseData);
+        return true;
+      } else {
+        addDebug(`⚠️ Failed to save timer: ${response.status}`, responseData);
+        return false;
+      }
+    } catch (error) {
+      addDebug('❌ Error saving timer:', error);
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Enhanced pause/resume with save
+  const handlePauseResume = async () => {
+    const newPausedState = !paused;
+    const action = newPausedState ? 'pause' : 'resume';
+
+    // Update local state first for immediate UI response
+    setPaused(newPausedState);
+
+    // Then save to database
+    await saveTimerToDatabase(action);
+  };
+
+  // Format time
   const format = (s: number): string => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0');
     const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
@@ -36,7 +99,42 @@ const useTimer = (initialSeconds: number = 0) => {
     return `${h}:${m}:${sec}`;
   };
 
-  return { display: format(seconds), seconds, paused, setPaused };
+  // Load initial timer from database
+  const loadTimerFromDatabase = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+
+      addDebug(`📡 Loading timer for booking: ${bookingId}`);
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        if (data.timer) {
+          setSeconds(data.timer.durationSeconds || 0);
+          setPaused(data.timer.isPaused || false); // Changed from 'paused' to 'isPaused'
+          addDebug(`✅ Timer loaded: ${data.timer.durationSeconds}s, paused: ${data.timer.isPaused}`);
+        }
+      } else {
+        addDebug(`⚠️ Failed to load timer: ${response.status}`, data);
+      }
+    } catch (error) {
+      addDebug('❌ Error loading timer:', error);
+    }
+  };
+
+  return {
+    display: format(seconds),
+    seconds,
+    paused,
+    handlePauseResume,
+    isSaving,
+    loadTimerFromDatabase,
+    saveTimerForCompletion: () => saveTimerToDatabase('complete')
+  };
 };
 
 // ─── Checklist Items ──────────────────────────────────────────────────────────
@@ -66,10 +164,11 @@ export default function ServiceInProgressScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ bookingId: string }>();
   const bookingId = params.bookingId;
-  
+
   const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const appState = useRef(AppState.currentState);
-  
+  const isMounted = useRef(true);
+
   const [loading, setLoading] = useState<boolean>(false);
   const [cancellationAcknowledged, setCancellationAcknowledged] = useState(false);
   const [jobData, setJobData] = useState<JobData>({
@@ -84,7 +183,16 @@ export default function ServiceInProgressScreen() {
     status: 'in_progress',
   });
 
-  const { display, seconds, paused, setPaused } = useTimer(0);
+  // Initialize timer with bookingId for database saves
+  const {
+    display,
+    seconds,
+    paused,
+    handlePauseResume,
+    isSaving: timerSaving,
+    loadTimerFromDatabase,
+    saveTimerForCompletion
+  } = useTimer(0, bookingId || '');
 
   // Debug logger
   const addDebug = (message: string, data?: any) => {
@@ -99,7 +207,7 @@ export default function ServiceInProgressScreen() {
       if (activeBookingsJson) {
         let activeBookings = JSON.parse(activeBookingsJson);
         const bookingIndex = activeBookings.findIndex((b: any) => b.bookingId === bookingId);
-        
+
         if (bookingIndex >= 0) {
           activeBookings[bookingIndex] = {
             ...activeBookings[bookingIndex],
@@ -113,7 +221,7 @@ export default function ServiceInProgressScreen() {
 
       // Update current booking status
       await AsyncStorage.setItem('currentBookingStatus', status);
-      
+
       addDebug(`✅ Storage updated with status: ${status}`);
     } catch (error) {
       addDebug('❌ Error updating storage:', error);
@@ -142,10 +250,12 @@ export default function ServiceInProgressScreen() {
         }),
       });
 
+      const data = await response.json();
+
       if (response.ok) {
-        addDebug('✅ Service marked as started');
+        addDebug('✅ Service marked as started', data);
       } else {
-        addDebug('⚠️ Failed to mark service started:', response.status);
+        addDebug('⚠️ Failed to mark service started:', { status: response.status, data });
       }
     } catch (error) {
       addDebug('Error marking service started:', error);
@@ -156,7 +266,7 @@ export default function ServiceInProgressScreen() {
   const checkJobStatus = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      if (!token || !bookingId) return;
+      if (!token || !bookingId || !isMounted.current) return;
 
       addDebug('📡 Checking job status...');
 
@@ -166,28 +276,26 @@ export default function ServiceInProgressScreen() {
         },
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        
-        if (data.success) {
-          addDebug(`📊 Job status: ${data.status}`);
-          
-          // Check if job is cancelled
-          if (data.status === 'cancelled' && !cancellationAcknowledged) {
-            handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
-          }
-          
-          // Update job details if we have them
-          if (data.job) {
-            setJobData(prev => ({
-              ...prev,
-              ...data.job,
-              status: data.status,
-            }));
-          }
+      const data = await response.json();
+
+      if (response.ok && data.success && isMounted.current) {
+        addDebug(`📊 Job status: ${data.status}`);
+
+        // Check if job is cancelled
+        if (data.status === 'cancelled' && !cancellationAcknowledged) {
+          handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
+        }
+
+        // Update job details if we have them
+        if (data.job) {
+          setJobData(prev => ({
+            ...prev,
+            ...data.job,
+            status: data.status,
+          }));
         }
       } else {
-        addDebug(`⚠️ Status check failed: ${response.status}`);
+        addDebug(`⚠️ Status check failed: ${response.status}`, data);
       }
     } catch (error) {
       addDebug('❌ Error checking job status:', error);
@@ -198,12 +306,14 @@ export default function ServiceInProgressScreen() {
   const handleJobCancelled = (reason: string) => {
     // Prevent multiple alerts
     if (cancellationAcknowledged) return;
-    
+
     setCancellationAcknowledged(true);
-    
+
     // Stop timer if running
-    setPaused(true);
-    
+    if (!paused) {
+      handlePauseResume();
+    }
+
     // Stop status checking
     if (statusCheckInterval.current) {
       clearInterval(statusCheckInterval.current);
@@ -256,7 +366,9 @@ export default function ServiceInProgressScreen() {
   const fetchJobDetails = async (): Promise<void> => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
+      if (!token || !isMounted.current) return;
+
+      addDebug('📡 Fetching job details...');
 
       const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/active-job`, {
         headers: {
@@ -265,8 +377,8 @@ export default function ServiceInProgressScreen() {
       });
 
       const data = await response.json();
-      
-      if (data.success && data.job) {
+
+      if (response.ok && data.success && data.job && isMounted.current) {
         setJobData(prev => ({
           ...prev,
           serviceType: data.job.serviceType || prev.serviceType,
@@ -279,6 +391,9 @@ export default function ServiceInProgressScreen() {
           startedAt: data.job.startedAt || prev.startedAt,
           status: data.job.status || prev.status,
         }));
+        addDebug('✅ Job details fetched', data.job);
+      } else {
+        addDebug('⚠️ Failed to fetch job details:', { status: response.status, data });
       }
     } catch (error) {
       addDebug('Error fetching job details:', error);
@@ -287,6 +402,8 @@ export default function ServiceInProgressScreen() {
 
   // Initialize screen
   useEffect(() => {
+    isMounted.current = true;
+
     if (!bookingId) {
       Alert.alert('Error', 'No booking ID provided');
       router.back();
@@ -295,14 +412,25 @@ export default function ServiceInProgressScreen() {
 
     addDebug('📦 ServiceInProgressScreen mounted with bookingId:', bookingId);
 
-    // Mark service as started
-    markServiceStarted();
+    const initializeScreen = async () => {
+      // Load timer from database
+      await loadTimerFromDatabase();
 
-    // Fetch job details
-    fetchJobDetails();
+      // Mark service as started
+      await markServiceStarted();
+
+      // Fetch job details
+      await fetchJobDetails();
+    };
+
+    initializeScreen();
 
     // Start status checking (every 10 seconds)
-    statusCheckInterval.current = setInterval(checkJobStatus, 10000);
+    statusCheckInterval.current = setInterval(() => {
+      if (isMounted.current) {
+        checkJobStatus();
+      }
+    }, 10000);
 
     // Check status immediately
     checkJobStatus();
@@ -312,16 +440,25 @@ export default function ServiceInProgressScreen() {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         // App has come to the foreground - check status immediately
         checkJobStatus();
+        // Also reload timer in case it was updated elsewhere
+        loadTimerFromDatabase();
       }
       appState.current = nextAppState;
     });
 
     return () => {
+      isMounted.current = false;
       if (statusCheckInterval.current) {
         clearInterval(statusCheckInterval.current);
         statusCheckInterval.current = null;
       }
       subscription.remove();
+
+      // Save timer when component unmounts (navigation away)
+      if (bookingId) {
+        saveTimerForCompletion();
+      }
+
       addDebug('🧹 Cleanup complete');
     };
   }, []);
@@ -353,8 +490,9 @@ export default function ServiceInProgressScreen() {
         text: 'Request',
         onPress: async () => {
           try {
+            setLoading(true);
             const token = await AsyncStorage.getItem('userToken');
-            await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
+            const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
               method: 'PATCH',
               headers: {
                 'Authorization': `Bearer ${token}`,
@@ -365,33 +503,22 @@ export default function ServiceInProgressScreen() {
                 timeData: { minutes: 15, reason: 'Additional time needed' }
               }),
             });
-            Alert.alert('Success', 'Time extension requested');
+
+            const data = await response.json();
+
+            if (response.ok) {
+              Alert.alert('Success', 'Time extension requested');
+            } else {
+              Alert.alert('Error', data.message || 'Failed to request time extension');
+            }
           } catch (error) {
             Alert.alert('Error', 'Failed to request time extension');
+          } finally {
+            setLoading(false);
           }
         }
       }
     ]);
-  };
-
-  const handlePauseResume = async (): Promise<void> => {
-    setPaused(!paused);
-    
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: paused ? 'resume' : 'pause'
-        }),
-      });
-    } catch (error) {
-      addDebug('Error updating timer:', error);
-    }
   };
 
   const handleReportIssue = (): void => {
@@ -414,8 +541,9 @@ export default function ServiceInProgressScreen() {
 
   const reportIssue = async (type: string, description: string): Promise<void> => {
     try {
+      setLoading(true);
       const token = await AsyncStorage.getItem('userToken');
-      await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/issues`, {
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/issues`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -427,9 +555,18 @@ export default function ServiceInProgressScreen() {
           severity: 'medium'
         }),
       });
-      Alert.alert('Success', 'Issue reported successfully');
+
+      const data = await response.json();
+
+      if (response.ok) {
+        Alert.alert('Success', 'Issue reported successfully');
+      } else {
+        Alert.alert('Error', data.message || 'Failed to report issue');
+      }
     } catch (error) {
       Alert.alert('Error', 'Failed to report issue');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -442,25 +579,37 @@ export default function ServiceInProgressScreen() {
         {
           text: 'Yes, Complete',
           onPress: async () => {
-            // Update status in storage before navigating
-            await updateStorageStatus('completed');
-            
-            // Navigate to next page
-            router.push({
-              pathname: '/(provider)/ServiceCompletedScreen',
-              params: {
-                bookingId,
-                earnings: jobData.estimatedEarnings.toString(),
-                serviceType: jobData.serviceType,
-                customerName: jobData.customerName,
-                customerPhone: jobData.customerPhone,
-                vehicleType: jobData.vehicleType,
-                licensePlate: jobData.licensePlate,
-                vehicleModel: jobData.vehicleModel,
-                duration: display,
-                durationSeconds: seconds.toString(),
-              }
-            });
+            setLoading(true);
+
+            try {
+              // Save final timer state before navigating
+              await saveTimerForCompletion();
+
+              // Update status in storage
+              await updateStorageStatus('completed');
+
+              // Navigate to next page with timer data
+              router.push({
+                pathname: '/(provider)/ServiceCompletedScreen',
+                params: {
+                  bookingId,
+                  earnings: jobData.estimatedEarnings.toString(),
+                  serviceType: jobData.serviceType,
+                  customerName: jobData.customerName,
+                  customerPhone: jobData.customerPhone,
+                  vehicleType: jobData.vehicleType,
+                  licensePlate: jobData.licensePlate,
+                  vehicleModel: jobData.vehicleModel,
+                  duration: display,
+                  durationSeconds: seconds.toString(),
+                  timerPaused: paused.toString(),
+                  timerLastSaved: new Date().toISOString(),
+                }
+              });
+            } catch (error) {
+              Alert.alert('Error', 'Failed to complete service');
+              setLoading(false);
+            }
           }
         }
       ]
@@ -478,8 +627,9 @@ export default function ServiceInProgressScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              setLoading(true);
               const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
+              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -487,16 +637,24 @@ export default function ServiceInProgressScreen() {
                 },
                 body: JSON.stringify({ reason: 'provider_cancelled' }),
               });
-              
+
+              const data = await response.json();
+
               // Clean up storage
               await cleanupBooking();
-              
+
+              if (response.ok) {
+                Alert.alert('Success', data.message || 'Service cancelled');
+              }
+
               // Navigate to home
               router.replace('/(provider)/Home');
             } catch (error) {
               console.log('Cancel API call failed:', error);
               // Still navigate home
               router.replace('/(provider)/Home');
+            } finally {
+              setLoading(false);
             }
           }
         }
@@ -515,23 +673,9 @@ export default function ServiceInProgressScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
       {/* ── HEADER ── */}
+      {/* ── HEADER ── */}
       <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.backBtn} 
-          onPress={() => {
-            Alert.alert(
-              'Exit Service',
-              'Are you sure you want to exit? Service will continue in background.',
-              [
-                { text: 'Stay', style: 'cancel' },
-                { text: 'Exit', onPress: () => router.back() }
-              ]
-            );
-          }} 
-          activeOpacity={0.8}
-        >
-          <Feather name="arrow-left" size={25} color="#1e2939" />
-        </TouchableOpacity>
+        <View style={styles.headerLeft} />
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Service In Progress</Text>
           <Text style={styles.headerSub}>{bookingId?.slice(-8) || 'REQ-7891'}</Text>
@@ -554,6 +698,15 @@ export default function ServiceInProgressScreen() {
         <View style={styles.timerCard}>
           <Text style={styles.timerLabel}>SERVICE DURATION</Text>
           <Text style={styles.timerDisplay}>{display}</Text>
+
+          {/* Timer saving indicator */}
+          {timerSaving && (
+            <View style={styles.timerSavingIndicator}>
+              <ActivityIndicator size="small" color="#87cefa" />
+              <Text style={styles.timerSavingText}>Saving...</Text>
+            </View>
+          )}
+
           <Text style={styles.timerStarted}>
             Started at {formatStartTime(jobData.startedAt)}
           </Text>
@@ -562,14 +715,16 @@ export default function ServiceInProgressScreen() {
               style={styles.pauseBtn}
               onPress={handlePauseResume}
               activeOpacity={0.8}
+              disabled={timerSaving}
             >
               <Feather name={paused ? 'play' : 'pause'} size={15} color="#C8960C" />
               <Text style={styles.pauseBtnText}>{paused ? 'Resume' : 'Pause'}</Text>
             </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.addTimeBtn} 
-              onPress={handleAddTime} 
+            <TouchableOpacity
+              style={styles.addTimeBtn}
+              onPress={handleAddTime}
               activeOpacity={0.8}
+              disabled={loading}
             >
               <Feather name="clock" size={15} color="#1A1A2E" />
               <Text style={styles.addTimeBtnText}>Add Time</Text>
@@ -667,23 +822,24 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.reportSubText}>
             Found a problem? Report it before completing the service.
           </Text>
-          <TouchableOpacity 
-            style={styles.reportBtn} 
-            onPress={handleReportIssue} 
+          <TouchableOpacity
+            style={styles.reportBtn}
+            onPress={handleReportIssue}
             activeOpacity={0.8}
+            disabled={loading}
           >
             <Text style={styles.reportBtnText}>Report Issue</Text>
           </TouchableOpacity>
         </View>
 
         {/* ── COMPLETE BUTTON ── */}
-        <TouchableOpacity 
-          style={[styles.completeBtn, loading && styles.buttonDisabled]} 
-          onPress={handleComplete} 
+        <TouchableOpacity
+          style={[styles.completeBtn, (loading || timerSaving) && styles.buttonDisabled]}
+          onPress={handleComplete}
           activeOpacity={0.85}
-          disabled={loading}
+          disabled={loading || timerSaving}
         >
-          {loading ? (
+          {loading || timerSaving ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <>
@@ -694,10 +850,11 @@ export default function ServiceInProgressScreen() {
         </TouchableOpacity>
 
         {/* ── CANCEL SERVICE LINK ── */}
-        <TouchableOpacity 
-          style={styles.cancelLink} 
+        <TouchableOpacity
+          style={styles.cancelLink}
           onPress={handleCancelService}
           activeOpacity={0.7}
+          disabled={loading}
         >
           <Text style={styles.cancelLinkText}>Cancel Service</Text>
         </TouchableOpacity>
@@ -736,6 +893,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ffffff',
+  },
+  headerLeft: {
+    width: 40, // Same width as backBtn was to maintain balance
   },
   headerCenter: {
     flex: 1,
@@ -813,6 +973,18 @@ const styles = StyleSheet.create({
     color: '#87cefa',
     letterSpacing: 2,
     fontVariant: ['tabular-nums'],
+  },
+  timerSavingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  timerSavingText: {
+    fontSize: 11,
+    color: '#87cefa',
+    fontWeight: '600',
   },
   timerStarted: {
     fontSize: 12,
@@ -1125,7 +1297,7 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     opacity: 0.7,
   },
-  
+
   // ── Cancel Link ──
   cancelLink: {
     alignItems: 'center',

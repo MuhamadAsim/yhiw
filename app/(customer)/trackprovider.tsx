@@ -18,7 +18,7 @@ import {
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
 import ChatPopup from './components/ChatPopup'; 
 
-const { height, width } = Dimensions.get('window');
+const { height } = Dimensions.get('window');
 const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 
 interface Coordinates {
@@ -109,19 +109,23 @@ const TrackProviderScreen = () => {
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
   const pollingTimer = useRef<NodeJS.Timeout | null>(null);
+  const routeFetchTimer = useRef<NodeJS.Timeout | null>(null);
   const isMounted = useRef(true);
   const navigationInProgress = useRef(false);
   const initialRouteFetched = useRef(false);
 
-  // Add chat visible state HERE inside the component
+  // Chat state
   const [chatVisible, setChatVisible] = useState(false);
 
+  // Location states
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
   const [pickupLocation, setPickupLocation] = useState<Coordinates | null>(null);
   const [pickupAddress, setPickupAddress] = useState<string>('Loading address...');
   const [dropoffLocation, setDropoffLocation] = useState<Coordinates | null>(null);
   const [dropoffAddress, setDropoffAddress] = useState<string>('');
   const [routeCoordinates, setRouteCoordinates] = useState<Coordinates[]>([]);
+
+  // UI states
   const [isLoading, setIsLoading] = useState(true);
   const [eta, setEta] = useState<string>('Calculating...');
   const [distance, setDistance] = useState<string>('Calculating...');
@@ -167,7 +171,6 @@ const TrackProviderScreen = () => {
     }
   };
 
-  // Add handleMessage function HERE inside the component
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
     setChatVisible(true);
@@ -233,6 +236,10 @@ const TrackProviderScreen = () => {
         clearTimeout(pollingTimer.current);
         pollingTimer.current = null;
       }
+      if (routeFetchTimer.current) {
+        clearTimeout(routeFetchTimer.current);
+        routeFetchTimer.current = null;
+      }
     };
   }, []);
 
@@ -249,9 +256,12 @@ const TrackProviderScreen = () => {
         return;
       }
 
+      // SIMPLE GET request - backend knows all locations
       const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/route`, {
+        method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
       });
 
@@ -362,13 +372,29 @@ const TrackProviderScreen = () => {
 
         // Update provider location
         if (data.location) {
-          setProviderLocation({
+          const newLocation = {
             latitude: data.location.latitude,
             longitude: data.location.longitude,
             heading: data.location.heading || 0,
             speed: data.location.speed || 0,
             lastUpdate: data.location.lastUpdate,
-          });
+          };
+          
+          setProviderLocation(newLocation);
+          
+          // Refresh route when provider location changes significantly
+          if (providerLocation && 
+              (Math.abs(newLocation.latitude - providerLocation.latitude) > 0.001 ||
+               Math.abs(newLocation.longitude - providerLocation.longitude) > 0.001)) {
+            
+            if (routeFetchTimer.current) {
+              clearTimeout(routeFetchTimer.current);
+            }
+            
+            routeFetchTimer.current = setTimeout(() => {
+              fetchRouteData(); // Refresh route with new provider location
+            }, 5000); // Wait 5 seconds after significant movement
+          }
         }
 
         // Update status
@@ -387,7 +413,7 @@ const TrackProviderScreen = () => {
     }
   };
 
-  // Fetch job status - THIS IS THE KEY FUNCTION THAT POLLS EVERY 10 SECONDS
+  // Fetch job status - polls every 10 seconds
   const fetchJobStatus = async () => {
     if (!bookingId || navigationInProgress.current) return;
 
@@ -416,8 +442,6 @@ const TrackProviderScreen = () => {
       if (data.distance) setDistance(data.distance);
 
       // ===== AUTO-NAVIGATE WHEN SERVICE STARTS =====
-      // When provider starts service, status becomes 'in_progress' in backend,
-      // which is mapped to 'started' for frontend
       if (data.status === 'started') {
         addDebug('✅✅✅ SERVICE HAS STARTED - Auto-navigating to ServiceInProgress');
 
@@ -479,7 +503,7 @@ const TrackProviderScreen = () => {
 
       await Promise.all([
         fetchLiveTracking(),
-        fetchJobStatus() // ← This runs every 10 seconds and checks for 'started' status
+        fetchJobStatus()
       ]);
 
       if (isMounted.current && !navigationInProgress.current) {
@@ -508,17 +532,32 @@ const TrackProviderScreen = () => {
   const decodePolyline = (t: string) => {
     if (!t) return [];
 
+    // Check if it's a simple pipe-separated format (lat,lng|lat,lng)
+    if (t.includes('|')) {
+      return t.split('|').map(point => {
+        const [lat, lng] = point.split(',').map(Number);
+        return {
+          latitude: lat,
+          longitude: lng,
+        };
+      }).filter(point => 
+        !isNaN(point.latitude) && 
+        !isNaN(point.longitude) &&
+        point.latitude !== 0 && 
+        point.longitude !== 0
+      );
+    }
+
+    // Google's encoded polyline format
     let points = [];
     let lat = 0;
     let lng = 0;
     let index = 0;
-    let shift = 0;
-    let result = 0;
 
     while (index < t.length) {
       let b = 0;
-      shift = 0;
-      result = 0;
+      let shift = 0;
+      let result = 0;
 
       do {
         b = t.charCodeAt(index++) - 63;
@@ -628,9 +667,7 @@ const TrackProviderScreen = () => {
     addDebug('🔄 Manually refreshing');
     fetchLiveTracking();
     fetchJobStatus();
-    if (!initialRouteFetched.current) {
-      fetchRouteData();
-    }
+    fetchRouteData(); // Always refresh route on manual refresh
   };
 
   const formatTime = (date: Date) => {
@@ -663,12 +700,12 @@ const TrackProviderScreen = () => {
           </View>
         )}
 
-        {/* Debug Button */}
+        {/* Refresh Button */}
         <TouchableOpacity
-          style={styles.debugButton}
+          style={styles.refreshButton}
           onPress={forceRefresh}
         >
-          <Text style={styles.debugButtonText}>🔄</Text>
+          <Ionicons name="refresh" size={20} color="#68bdee" />
         </TouchableOpacity>
 
         <MapView
@@ -714,7 +751,7 @@ const TrackProviderScreen = () => {
             </Marker>
           )}
 
-          {/* Dropoff Marker - Only show if coordinates exist */}
+          {/* Dropoff Marker */}
           {dropoffLocation && dropoffLocation.latitude && dropoffLocation.longitude && (
             <Marker
               coordinate={{
@@ -912,7 +949,7 @@ const TrackProviderScreen = () => {
         </ScrollView>
       </View>
 
-      {/* Chat Popup - Added at the end */}
+      {/* Chat Popup */}
       <ChatPopup
         visible={chatVisible}
         onClose={() => setChatVisible(false)}
@@ -969,23 +1006,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#3c3c3c',
   },
-  debugButton: {
+  refreshButton: {
     position: 'absolute',
     top: 15,
     left: 15,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderWidth: 2,
+    borderColor: '#68bdee',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
     zIndex: 15,
-    elevation: 5,
-  },
-  debugButtonText: {
-    fontSize: 18,
   },
   providerMarker: {
     backgroundColor: 'white',
@@ -1070,8 +1108,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderWidth: 2,
+    borderColor: '#68bdee',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -1089,8 +1127,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderWidth: 2,
+    borderColor: '#68bdee',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -1123,8 +1161,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderWidth: 2,
+    borderColor: '#68bdee',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
