@@ -16,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
-import ChatPopup from './components/ChatPopup'; 
+import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/TrackProviderStyles';
 
 const { height } = Dimensions.get('window');
@@ -380,18 +380,18 @@ const TrackProviderScreen = () => {
             speed: data.location.speed || 0,
             lastUpdate: data.location.lastUpdate,
           };
-          
+
           setProviderLocation(newLocation);
-          
+
           // Refresh route when provider location changes significantly
-          if (providerLocation && 
-              (Math.abs(newLocation.latitude - providerLocation.latitude) > 0.001 ||
-               Math.abs(newLocation.longitude - providerLocation.longitude) > 0.001)) {
-            
+          if (providerLocation &&
+            (Math.abs(newLocation.latitude - providerLocation.latitude) > 0.001 ||
+              Math.abs(newLocation.longitude - providerLocation.longitude) > 0.001)) {
+
             if (routeFetchTimer.current) {
               clearTimeout(routeFetchTimer.current);
             }
-            
+
             routeFetchTimer.current = setTimeout(() => {
               fetchRouteData(); // Refresh route with new provider location
             }, 5000); // Wait 5 seconds after significant movement
@@ -530,55 +530,55 @@ const TrackProviderScreen = () => {
     }
   };
 
-  const decodePolyline = (t: string) => {
-    if (!t) return [];
+  const decodePolyline = (encoded: string): Coordinates[] => {
+    if (!encoded) return [];
 
     // Check if it's a simple pipe-separated format (lat,lng|lat,lng)
-    if (t.includes('|')) {
-      return t.split('|').map(point => {
+    if (encoded.includes('|')) {
+      return encoded.split('|').map(point => {
         const [lat, lng] = point.split(',').map(Number);
         return {
           latitude: lat,
           longitude: lng,
         };
-      }).filter(point => 
-        !isNaN(point.latitude) && 
+      }).filter(point =>
+        !isNaN(point.latitude) &&
         !isNaN(point.longitude) &&
-        point.latitude !== 0 && 
+        point.latitude !== 0 &&
         point.longitude !== 0
       );
     }
 
     // Google's encoded polyline format
-    let points = [];
+    const points: Coordinates[] = [];
+    let index = 0;
     let lat = 0;
     let lng = 0;
-    let index = 0;
+    const len = encoded.length;
 
-    while (index < t.length) {
-      let b = 0;
+    while (index < len) {
+      let b: number;
       let shift = 0;
       let result = 0;
 
       do {
-        b = t.charCodeAt(index++) - 63;
+        b = encoded.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
 
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
       lat += dlat;
 
       shift = 0;
       result = 0;
-
       do {
-        b = t.charCodeAt(index++) - 63;
+        b = encoded.charCodeAt(index++) - 63;
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20);
 
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
       lng += dlng;
 
       points.push({
@@ -590,6 +590,7 @@ const TrackProviderScreen = () => {
     return points;
   };
 
+  
   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
     if (!mapRef.current || !coord1 || !coord2) return;
 
