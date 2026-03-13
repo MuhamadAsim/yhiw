@@ -15,6 +15,7 @@ import {
 const { height } = Dimensions.get('window');
 
 export const styles = StyleSheet.create({
+
   container: {
     flex: 1,
     backgroundColor: '#f8f8f8',
@@ -203,4 +204,5 @@ export const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1,
   },
+  
 });

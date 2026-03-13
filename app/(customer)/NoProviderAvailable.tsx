@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import {
   Alert,
   SafeAreaView,
@@ -13,24 +13,61 @@ import {
 
 export default function NoProvidersAvailableScreen() {
   const router = useRouter();
-
-  const handleSchedule = () => {
-    Alert.alert(
-      "Schedule Service",
-      "Opening scheduler...",
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Schedule", onPress: () => router.push("/(customer)/ScheduleServices") }
-      ]
-    );
-  };
+  const params = useLocalSearchParams();
+  const reason = params.reason as string || 'timeout';
 
   const handleViewAllServices = () => {
-    router.push("/(customer)/PopularServices");
+    // Go to PopularServices
+    router.replace("/(customer)/PopularServices");
   };
 
   const handleGoHome = () => {
+    // Go to Home
     router.replace("/(customer)/Home");
+  };
+
+  const handleBack = () => {
+    // Back button goes to PopularServices
+    router.replace("/(customer)/PopularServices");
+  };
+
+  // Determine which icon to show based on reason
+  const getIconName = () => {
+    switch(reason) {
+      case 'no_providers':
+        return "people-outline";
+      case 'cancelled':
+        return "close-circle-outline";
+      case 'timeout':
+      default:
+        return "alert-circle";
+    }
+  };
+
+  // Determine title based on reason
+  const getTitle = () => {
+    switch(reason) {
+      case 'no_providers':
+        return 'No Providers Available';
+      case 'cancelled':
+        return 'Search Cancelled';
+      case 'timeout':
+      default:
+        return 'No Provider Found';
+    }
+  };
+
+  // Determine description based on reason
+  const getDescription = () => {
+    switch(reason) {
+      case 'no_providers':
+        return "All service providers are currently busy. Please try again in a few minutes.";
+      case 'cancelled':
+        return "Your provider search was cancelled. Please try again or choose a different service.";
+      case 'timeout':
+      default:
+        return "We couldn't find a provider within the expected time. Please try again.";
+    }
   };
 
   return (
@@ -38,44 +75,32 @@ export default function NoProvidersAvailableScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
       <View style={styles.container}>
-        {/* Back Button */}
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        {/* Back Button - Goes to PopularServices */}
+        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color="#3c3c3c" />
         </TouchableOpacity>
 
         {/* Icon */}
         <View style={styles.iconCircle}>
-          <Ionicons name="alert-circle" size={64} color="#f0b100" />
+          <Ionicons 
+            name={getIconName()} 
+            size={64} 
+            color="#f0b100" 
+          />
         </View>
 
-        {/* Title */}
-        <Text style={styles.title}>No Providers Available</Text>
+        {/* Title - Dynamic based on reason */}
+        <Text style={styles.title}>
+          {getTitle()}
+        </Text>
         
-        {/* Description */}
+        {/* Description - Dynamic based on reason */}
         <Text style={styles.description}>
-          All service providers are currently busy.{"\n"}
-          Please try again in a few minutes or{"\n"}
-          schedule for later.
+          {getDescription()}
         </Text>
 
-        {/* Buttons */}
+        {/* Buttons - Only Two Buttons */}
         <View style={styles.btnGroup}>
-          <TouchableOpacity
-            style={styles.scheduleBtn}
-            onPress={handleSchedule}
-            activeOpacity={0.85}
-          >
-            <LinearGradient
-              colors={['#68bdee', '#4a9fd6']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.gradientButton}
-            >
-              <Ionicons name="calendar-outline" size={18} color="#fff" style={styles.btnIcon} />
-              <Text style={styles.scheduleBtnText}>Schedule Service</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.viewAllBtn}
             onPress={handleViewAllServices}
@@ -103,7 +128,7 @@ export default function NoProvidersAvailableScreen() {
           </View>
           <Text style={styles.demandText}>
             We're experiencing high demand.{"\n"}
-            Average wait time is currently 25-30{"\n"}
+            Average wait time is currently 5-10{"\n"}
             minutes.
           </Text>
         </View>
@@ -170,28 +195,6 @@ const styles = StyleSheet.create({
     width: "100%",
     gap: 12,
     marginBottom: 24,
-  },
-  scheduleBtn: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    shadowColor: '#68bdee',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  gradientButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 16,
-  },
-  scheduleBtnText: {
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: "800",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
   },
   viewAllBtn: {
     flexDirection: "row",

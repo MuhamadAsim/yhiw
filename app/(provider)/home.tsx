@@ -1,4 +1,4 @@
-// HomePage.tsx - Complete with provider status check on mount
+// HomePage.tsx - Complete with translations and language field in API requests
 import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -26,12 +26,31 @@ import {
 import MapView, { Marker, Region } from 'react-native-maps';
 import Sidebar from "./components/Sidebar";
 import { styles } from './styles/HomeStyles';
+import { t, getServiceName, tStatus, type Language } from './translations/HomeTranslation';
 
 // Get screen width for styles
 const { width, height } = Dimensions.get('window');
 
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+// Helper to get current language from storage
+const getCurrentLanguage = async (): Promise<Language> => {
+  try {
+    const savedLang = await AsyncStorage.getItem('appLanguage');
+    return (savedLang === 'ar' ? 'ar' : 'en');
+  } catch (error) {
+    console.error('Error getting language:', error);
+    return 'en';
+  }
+};
+
+// Helper to append language parameter to URL
+const addLanguageParam = async (url: string): Promise<string> => {
+  const lang = await getCurrentLanguage();
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}lang=${lang}`;
+};
 
 interface PerformanceData {
   earnings: number;
@@ -148,6 +167,7 @@ const HomePage = () => {
   const [notificationCount, setNotificationCount] = useState(0);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentLanguage, setCurrentLanguage] = useState<Language>('en');
 
   // Store multiple incoming job requests in a queue
   const [jobRequestQueue, setJobRequestQueue] = useState<JobRequestQueue>({});
@@ -216,6 +236,12 @@ const HomePage = () => {
     };
   };
 
+  // Load language on mount
+  const loadLanguage = async () => {
+    const lang = await getCurrentLanguage();
+    setCurrentLanguage(lang);
+  };
+
   // Check provider status from backend
   const checkProviderStatus = async () => {
     try {
@@ -229,7 +255,10 @@ const HomePage = () => {
 
       console.log('📡 Checking provider status for:', firebaseUserId);
 
-      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/status`, {
+      // Add language parameter to URL
+      const url = await addLanguageParam(`${API_BASE_URL}/provider/${firebaseUserId}/status`);
+
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -263,7 +292,7 @@ const HomePage = () => {
             const locationData: LocationData = {
               latitude: lat,
               longitude: lng,
-              address: 'Restored location',
+              address: 'Restored location', // Keep as string literal, not using t()
               isManual: false,
               timestamp: data.data.lastSeen || new Date().toISOString(),
             };
@@ -281,6 +310,7 @@ const HomePage = () => {
   // Initialize component
   useEffect(() => {
     const initializeHomePage = async () => {
+      await loadLanguage();
       await loadProviderData();        // ✅ This sets providerData with token and firebaseUserId
       await checkLocationPermission();
       await checkProviderStatus();      // ✅ This runs AFTER loadProviderData() - SHOULD work
@@ -361,8 +391,11 @@ const HomePage = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
+      // Add language parameter to URL
+      const url = await addLanguageParam(`${API_BASE_URL}/provider/job/${currentBookingId}/status`);
+
       // Make API call to check job status
-      const response = await fetch(`${API_BASE_URL}/provider/job/${currentBookingId}/status`, {
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -575,10 +608,12 @@ const HomePage = () => {
   // HomePage.tsx - Updated fetchPerformanceData function with proper type handling
   const fetchPerformanceData = async (firebaseUserId: string, token: string) => {
     try {
-      const performanceUrl = `${API_BASE_URL}/provider/${firebaseUserId}/info`;
-      console.log('📡 Fetching provider data from:', performanceUrl);
+      // Add language parameter to URL
+      const url = await addLanguageParam(`${API_BASE_URL}/provider/${firebaseUserId}/info`);
       
-      const response = await fetch(performanceUrl, {
+      console.log('📡 Fetching provider data from:', url);
+      
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -633,8 +668,10 @@ const HomePage = () => {
   // Try to fetch recent jobs, but use defaults if fails
   const fetchRecentJobs = async (firebaseUserId: string, token: string) => {
     try {
-      const jobsUrl = `${API_BASE_URL}/jobs/provider/${firebaseUserId}/recent`;
-      const response = await fetch(jobsUrl, {
+      // Add language parameter to URL
+      const url = await addLanguageParam(`${API_BASE_URL}/jobs/provider/${firebaseUserId}/recent`);
+      
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -676,12 +713,12 @@ const HomePage = () => {
 
       const formattedAddress = address ?
         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-        : 'Current Location';
+        : t('currentLocation', currentLanguage);
 
       const locationData: LocationData = {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
-        address: formattedAddress || 'Current Location',
+        address: formattedAddress || t('currentLocation', currentLanguage),
         isManual: isManualSelection,
         timestamp: new Date().toISOString(),
       };
@@ -697,7 +734,7 @@ const HomePage = () => {
       return locationData;
     } catch (error) {
       console.error('Error getting location:', error);
-      Alert.alert('Error', 'Failed to get your current location. Please try again.');
+      Alert.alert(t('error', currentLanguage), t('locationError', currentLanguage));
       return null;
     } finally {
       setIsLoadingLocation(false);
@@ -708,6 +745,7 @@ const HomePage = () => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
+      const lang = await getCurrentLanguage();
       const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/location`;
 
       const response = await fetch(url, {
@@ -722,11 +760,12 @@ const HomePage = () => {
           address: location.address,
           isManual: location.isManual,
           timestamp: location.timestamp,
+          language: lang, // Add language to body for POST requests
         }),
       });
 
       if (response.ok) {
-        console.log(`✅ Location sent successfully (${location.isManual ? 'manual' : 'auto'})`);
+        console.log(`✅ Location sent successfully (${location.isManual ? 'manual' : 'auto'}) with language: ${lang}`);
       }
     } catch (error) {
       console.error('Error sending location to backend:', error);
@@ -816,6 +855,10 @@ const HomePage = () => {
         url += `?lat=${lat}&lng=${lng}`;
       }
 
+      // Add language parameter
+      const lang = await getCurrentLanguage();
+      url += `${url.includes('?') ? '&' : '?'}lang=${lang}`;
+
       console.log('🌐 Polling URL:', url);
 
       const response = await fetch(url, {
@@ -883,10 +926,10 @@ const HomePage = () => {
     return {
       id: jobId,
       bookingId: job.bookingId || jobId,
-      customerName: job.customer?.name || 'Customer',
+      customerName: job.customer?.name || 'Customer', // Use string literal instead of t()
       customerPhone: job.customer?.phone || '',
-      serviceType: job.serviceName || job.serviceType || 'Service',
-      pickupLocation: job.pickup?.address || 'Pickup location',
+      serviceType: job.serviceName || job.serviceType || 'Service', // Use string literal instead of t()
+      pickupLocation: job.pickup?.address || 'Pickup location', // Use string literal instead of t()
       pickupLat: job.pickup?.coordinates?.lat,
       pickupLng: job.pickup?.coordinates?.lng,
       dropoffLocation: job.dropoff?.address,
@@ -923,11 +966,11 @@ const HomePage = () => {
             });
           } else {
             Alert.alert(
-              'Location Permission Required',
-              'Please enable location services to use auto-update location.',
+              t('locationPermissionRequired', currentLanguage),
+              t('locationPermissionMessage', currentLanguage),
               [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Settings', onPress: openLocationSettings }
+                { text: t('cancel', currentLanguage), style: 'cancel' },
+                { text: t('settings', currentLanguage), onPress: openLocationSettings }
               ]
             );
           }
@@ -968,7 +1011,7 @@ const HomePage = () => {
 
           const formattedAddress = address ?
             `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-            : 'Current Location';
+            : t('currentLocation', currentLanguage);
 
           setSelectedLocation({
             latitude: location.coords.latitude,
@@ -1120,7 +1163,7 @@ const HomePage = () => {
       setSearchQuery('');
       setSearchSuggestions([]);
 
-      Alert.alert('Location Set', 'Manual location has been set successfully.');
+      Alert.alert(t('locationSet', currentLanguage), t('locationSetMessage', currentLanguage));
     }
   };
 
@@ -1161,6 +1204,7 @@ const HomePage = () => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
     try {
+      const lang = await getCurrentLanguage();
       const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/status`;
 
       console.log(`📤 Updating provider status to: ${status ? 'ONLINE' : 'OFFLINE'}`);
@@ -1173,6 +1217,7 @@ const HomePage = () => {
         },
         body: JSON.stringify({
           isOnline: status,
+          language: lang, // Add language to body for PUT requests
         }),
       });
 
@@ -1190,8 +1235,8 @@ const HomePage = () => {
       // Revert UI if backend update fails
       setIsOnline(!status);
       Alert.alert(
-        'Status Update Failed',
-        'Could not update your status. Please check your connection and try again.'
+        t('statusUpdateFailed', currentLanguage),
+        t('statusUpdateMessage', currentLanguage)
       );
     }
   };
@@ -1247,7 +1292,7 @@ const HomePage = () => {
           customerPhone: currentJobRequest.customerPhone || '',
           customerRating: currentJobRequest.customerRating?.toString() || '',
           serviceType: currentJobRequest.serviceType,
-          serviceName: currentJobRequest.serviceName || currentJobRequest.serviceType,
+          serviceName: getServiceName(currentJobRequest.serviceType, currentLanguage),
           serviceId: currentJobRequest.serviceId || '',
           pickupLocation: currentJobRequest.pickupLocation,
           pickupLat: currentJobRequest.pickupLat?.toString() || '',
@@ -1274,11 +1319,11 @@ const HomePage = () => {
       });
     } else {
       Alert.alert(
-        'No Job Requests',
+        t('noJobRequests', currentLanguage),
         Object.keys(jobRequestQueue).length > 0
-          ? 'Loading next request...'
-          : 'No pending job requests at the moment.',
-        [{ text: 'OK' }]
+          ? t('loadingNextRequest', currentLanguage)
+          : t('noPendingJobs', currentLanguage),
+        [{ text: t('ok', currentLanguage) }]
       );
     }
   };
@@ -1315,7 +1360,7 @@ const HomePage = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Location Mode</Text>
+              <Text style={styles.modalTitle}>{t('selectLocationMode', currentLanguage)}</Text>
               <TouchableOpacity onPress={() => setLocationModalVisible(false)}>
                 <Feather name="x" size={24} color="#000" />
               </TouchableOpacity>
@@ -1331,9 +1376,9 @@ const HomePage = () => {
                   <Feather name="navigation" size={24} color="#68bdee" />
                 </View>
                 <View style={styles.locationOptionInfo}>
-                  <Text style={styles.locationOptionTitle}>Auto-update Location</Text>
+                  <Text style={styles.locationOptionTitle}>{t('autoUpdateLocation', currentLanguage)}</Text>
                   <Text style={styles.locationOptionDescription}>
-                    Your location will update every 10 seconds automatically
+                    {t('autoUpdateDescription', currentLanguage)}
                   </Text>
                 </View>
                 {isLoadingLocation && (
@@ -1349,9 +1394,9 @@ const HomePage = () => {
                   <Feather name="map-pin" size={24} color="#68bdee" />
                 </View>
                 <View style={styles.locationOptionInfo}>
-                  <Text style={styles.locationOptionTitle}>Manual Location</Text>
+                  <Text style={styles.locationOptionTitle}>{t('manualLocationTitle', currentLanguage)}</Text>
                   <Text style={styles.locationOptionDescription}>
-                    Pick a location on the map (will be sent every 10 seconds)
+                    {t('manualLocationDescription', currentLanguage)}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -1362,7 +1407,7 @@ const HomePage = () => {
                 style={styles.modalCancelButton}
                 onPress={() => setLocationModalVisible(false)}
               >
-                <Text style={styles.modalCancelButtonText}>Cancel</Text>
+                <Text style={styles.modalCancelButtonText}>{t('cancel', currentLanguage)}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1381,9 +1426,9 @@ const HomePage = () => {
             <TouchableOpacity onPress={() => setMapPickerVisible(false)}>
               <Ionicons name="arrow-back" size={24} color="#000" />
             </TouchableOpacity>
-            <Text style={styles.mapPickerTitle}>Select Location</Text>
+            <Text style={styles.mapPickerTitle}>{t('selectLocation', currentLanguage)}</Text>
             <TouchableOpacity onPress={confirmManualLocation}>
-              <Text style={styles.mapPickerConfirm}>Done</Text>
+              <Text style={styles.mapPickerConfirm}>{t('done', currentLanguage)}</Text>
             </TouchableOpacity>
           </View>
 
@@ -1391,7 +1436,7 @@ const HomePage = () => {
             <Ionicons name="search" size={20} color="#9CA3AF" style={styles.searchIcon} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search for a location"
+              placeholder={t('searchPlaceholder', currentLanguage)}
               placeholderTextColor="#9CA3AF"
               value={searchQuery}
               onChangeText={(text) => {
@@ -1460,7 +1505,7 @@ const HomePage = () => {
             <View style={styles.selectedLocationCard}>
               <Ionicons name="location" size={24} color="#68bdee" />
               <View style={styles.selectedLocationInfo}>
-                <Text style={styles.selectedLocationTitle}>Selected Location</Text>
+                <Text style={styles.selectedLocationTitle}>{t('selectedLocation', currentLanguage)}</Text>
                 <Text style={styles.selectedLocationAddress}>
                   {selectedLocation.address}
                 </Text>
@@ -1478,7 +1523,7 @@ const HomePage = () => {
           </TouchableOpacity>
 
           <View style={styles.providerIdContainer}>
-            <Text style={styles.providerIdLabel}>PROVIDER ID</Text>
+            <Text style={styles.providerIdLabel}>{t('providerIdLabel', currentLanguage)}</Text>
             <Text style={styles.providerIdValue}>
               {providerData ? formatProviderId(providerData.providerId) : 'PRV-001234'}
             </Text>
@@ -1517,10 +1562,10 @@ const HomePage = () => {
                 <Ionicons name="star" size={13} color="#000" />
                 <Text style={styles.rating}>{providerData?.rating || 4.8}</Text>
                 <Text style={styles.plus}>+</Text>
-                <Text style={styles.jobCount}>{providerData?.jobsCompleted || 234} Jobs</Text>
+                <Text style={styles.jobCount}>{providerData?.jobsCompleted || 234} {t('jobs', currentLanguage)}</Text>
                 <Text style={styles.plus}>+</Text>
                 <Text style={styles.verified}>
-                  {providerData?.isVerified ? 'VERIFIED' : 'UNVERIFIED'}
+                  {providerData?.isVerified ? t('verified', currentLanguage) : t('unverified', currentLanguage)}
                 </Text>
               </View>
             </View>
@@ -1535,9 +1580,9 @@ const HomePage = () => {
           <View style={styles.statusLeft}>
             <View style={[styles.statusIndicator, isOnline && styles.statusIndicatorOnline]} />
             <View>
-              <Text style={styles.statusText}>{isOnline ? 'ONLINE' : 'OFFLINE'}</Text>
+              <Text style={styles.statusText}>{isOnline ? t('online', currentLanguage) : t('offline', currentLanguage)}</Text>
               <Text style={styles.statusSubtext}>
-                {isOnline ? 'ACCEPTING JOBS' : 'NOT ACCEPTING'}
+                {isOnline ? t('acceptingJobs', currentLanguage) : t('notAccepting', currentLanguage)}
               </Text>
             </View>
           </View>
@@ -1552,9 +1597,9 @@ const HomePage = () => {
         {/* Performance Container */}
         <View style={styles.performanceContainer}>
           <View style={styles.performanceHeader}>
-            <Text style={styles.performanceTitle}>TODAY'S PERFORMANCE</Text>
+            <Text style={styles.performanceTitle}>{t('todaysPerformance', currentLanguage)}</Text>
             <TouchableOpacity>
-              <Text style={styles.viewAllText}>VIEW ALL</Text>
+              <Text style={styles.viewAllText}>{t('viewAll', currentLanguage)}</Text>
             </TouchableOpacity>
           </View>
 
@@ -1562,25 +1607,25 @@ const HomePage = () => {
             <View style={styles.performanceCard}>
               <Feather name="dollar-sign" size={24} color="#87CEFA" />
               <Text style={styles.performanceValue}>{performanceData.earnings}</Text>
-              <Text style={styles.performanceLabel}>BHD</Text>
+              <Text style={styles.performanceLabel}>{t('bhd', currentLanguage)}</Text>
             </View>
 
             <View style={styles.performanceCard}>
               <Feather name="trending-up" size={24} color="#87CEFA" />
               <Text style={styles.performanceValue}>{performanceData.jobs}</Text>
-              <Text style={styles.performanceLabel}>JOBS</Text>
+              <Text style={styles.performanceLabel}>{t('jobsLabel', currentLanguage)}</Text>
             </View>
 
             <View style={styles.performanceCard}>
               <Feather name="clock" size={24} color="#87CEFA" />
               <Text style={styles.performanceValue}>{performanceData.hours}</Text>
-              <Text style={styles.performanceLabel}>HOURS</Text>
+              <Text style={styles.performanceLabel}>{t('hoursLabel', currentLanguage)}</Text>
             </View>
 
             <View style={styles.performanceCard}>
               <Feather name="star" size={24} color="#87CEFA" />
               <Text style={styles.performanceValue}>{performanceData.rating}</Text>
-              <Text style={styles.performanceLabel}>RATING</Text>
+              <Text style={styles.performanceLabel}>{t('ratingLabel', currentLanguage)}</Text>
             </View>
           </View>
         </View>
@@ -1588,9 +1633,9 @@ const HomePage = () => {
         {/* Recent Jobs Container */}
         <View style={styles.recentJobsContainer}>
           <View style={styles.recentJobsHeader}>
-            <Text style={styles.recentJobsTitle}>RECENT JOBS</Text>
+            <Text style={styles.recentJobsTitle}>{t('recentJobs', currentLanguage)}</Text>
             <TouchableOpacity>
-              <Text style={styles.historyText}>HISTORY</Text>
+              <Text style={styles.historyText}>{t('history', currentLanguage)}</Text>
             </TouchableOpacity>
           </View>
 
@@ -1605,7 +1650,9 @@ const HomePage = () => {
                   <View style={styles.jobRight}>
                     <Text style={styles.jobPrice}>{job.price}</Text>
                     <View style={styles.completedBadge}>
-                      <Text style={styles.completedText}>{job.status}</Text>
+                      <Text style={styles.completedText}>
+                        {tStatus(job.status?.toLowerCase(), currentLanguage)}
+                      </Text>
                     </View>
                   </View>
                 </View>
@@ -1613,7 +1660,7 @@ const HomePage = () => {
             ))
           ) : (
             <View style={styles.emptyJobsContainer}>
-              <Text style={styles.emptyJobsText}>No recent jobs</Text>
+              <Text style={styles.emptyJobsText}>{t('noRecentJobs', currentLanguage)}</Text>
             </View>
           )}
 
@@ -1622,14 +1669,14 @@ const HomePage = () => {
             <Feather name="map-pin" size={20} color="#000" />
             <View style={styles.locationInfo}>
               <Text style={styles.locationTitle}>
-                {currentLocation?.isManual ? 'MANUAL LOCATION' : 'CURRENT LOCATION'}
+                {currentLocation?.isManual ? t('manualLocation', currentLanguage) : t('currentLocation', currentLanguage)}
               </Text>
               <Text style={styles.locationAddress} numberOfLines={1}>
-                {currentLocation?.address || 'Not set'}
+                {currentLocation?.address || t('notSet', currentLanguage)}
               </Text>
               <TouchableOpacity onPress={handleUpdateLocation}>
                 <Text style={styles.updateLocationText}>
-                  {currentLocation?.isManual ? 'CHANGE LOCATION' : 'UPDATE LOCATION'}
+                  {currentLocation?.isManual ? t('changeLocation', currentLanguage) : t('updateLocation', currentLanguage)}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1639,16 +1686,15 @@ const HomePage = () => {
         {/* Bottom Buttons */}
         <View style={styles.bottomButtons}>
           <TouchableOpacity style={styles.button}>
-            <Text style={styles.buttonText}>VIEW EARNINGS</Text>
+            <Text style={styles.buttonText}>{t('viewEarnings', currentLanguage)}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.button}>
-            <Text style={styles.buttonText}>MY SCHEDULE</Text>
+            <Text style={styles.buttonText}>{t('mySchedule', currentLanguage)}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 };
-
 
 export default HomePage;

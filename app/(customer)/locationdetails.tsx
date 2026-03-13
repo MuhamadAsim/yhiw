@@ -116,8 +116,12 @@ const LocationDetailsScreen = () => {
   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
   const [isSavingLocation, setIsSavingLocation] = useState(false);
 
-  // Determine if this service needs destination
-  
+  // UPDATED: Track which location to update when tapping the map
+  const [pendingLocationUpdate, setPendingLocationUpdate] = useState<{
+    type: 'pickup' | 'dropoff' | 'waypoint';
+    index?: number;
+  } | null>(null);
+
   // Update initial region to Faisalabad, Pakistan (your actual location area)
   const [region, setRegion] = useState<Region>({
     latitude: 31.4504,  // Faisalabad latitude
@@ -303,7 +307,7 @@ const LocationDetailsScreen = () => {
       if (status !== 'granted') {
         Alert.alert(
           'Permission denied',
-          'Please enable location services to automatically set your current location. You can manually enter a location instead.'
+          'Please enable location services to automatically set your current location. You can manually enter a location or tap on the map instead.'
         );
         setIsGettingLocation(false);
         return;
@@ -345,7 +349,7 @@ const LocationDetailsScreen = () => {
       console.error('Error getting location:', error);
       Alert.alert(
         'Error',
-        'Failed to get your current location. Please enter your pickup location manually.'
+        'Failed to get your current location. Please enter your pickup location manually or tap on the map.'
       );
     } finally {
       setIsGettingLocation(false);
@@ -495,6 +499,179 @@ const LocationDetailsScreen = () => {
     } finally {
       setIsSearching(false);
     }
+  };
+
+  // UPDATED: Handle map press - always enabled, intelligently update based on context
+  const handleMapPress = async (event: any) => {
+    const { coordinate } = event.nativeEvent;
+
+    try {
+      // Determine which location to update
+      let locationType: 'pickup' | 'dropoff' | 'waypoint' = 'pickup';
+      let waypointIndex: number | undefined = undefined;
+
+      if (pendingLocationUpdate) {
+        // Use the pending update from a specific button click
+        locationType = pendingLocationUpdate.type;
+        waypointIndex = pendingLocationUpdate.index;
+        setPendingLocationUpdate(null);
+      } else {
+        // Smart selection based on context
+        if (!pickupCoordinates) {
+          // No pickup yet, default to pickup
+          locationType = 'pickup';
+        } else if (needsDestination && !dropoffCoordinates && waypoints.length === 0) {
+          // No dropoff and no waypoints, default to dropoff
+          locationType = 'dropoff';
+        } else if (needsDestination && waypoints.length > 0 && activeWaypointIndex !== null) {
+          // Active waypoint being edited
+          locationType = 'waypoint';
+          waypointIndex = activeWaypointIndex;
+        } else if (needsDestination && waypoints.length < 5) {
+          // Add as a new waypoint
+          locationType = 'waypoint';
+          const newWaypoint: Waypoint = {
+            id: `waypoint-${Date.now()}`,
+            address: '',
+            coordinates: {
+              latitude: 0,
+              longitude: 0,
+            },
+          };
+          setWaypoints([...waypoints, newWaypoint]);
+          waypointIndex = waypoints.length;
+        } else if (needsDestination && !dropoffCoordinates) {
+          // Default to dropoff
+          locationType = 'dropoff';
+        } else {
+          // Default to pickup (replace)
+          locationType = 'pickup';
+        }
+      }
+
+      // Reverse geocode to get address
+      const [address] = await Location.reverseGeocodeAsync({
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+      });
+
+      const formattedAddress = address ?
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
+        : `${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`;
+
+      // Create location object
+      const location: LocationSuggestion = {
+        id: `map-${Date.now()}`,
+        title: address?.street || address?.name || 'Selected Location',
+        address: formattedAddress,
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+      };
+
+      // Handle based on determined type
+      if (locationType === 'pickup') {
+        setPickupLocation(formattedAddress);
+        setPickupCoordinates({
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+        });
+        fitMapToSinglePoint({
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+        });
+      } else if (locationType === 'dropoff' && needsDestination) {
+        setDropoffLocation(formattedAddress);
+        setDropoffCoordinates({
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+        });
+        if (pickupCoordinates) {
+          fitMapToAllPoints();
+        } else {
+          fitMapToSinglePoint({
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+          });
+        }
+      } else if (locationType === 'waypoint' && needsDestination && waypointIndex !== undefined) {
+        const updatedWaypoints = [...waypoints];
+        if (updatedWaypoints[waypointIndex]) {
+          updatedWaypoints[waypointIndex] = {
+            ...updatedWaypoints[waypointIndex],
+            address: formattedAddress,
+            coordinates: {
+              latitude: coordinate.latitude,
+              longitude: coordinate.longitude,
+            },
+            title: location.title,
+          };
+        } else {
+          // If waypoint doesn't exist at this index, create it
+          updatedWaypoints[waypointIndex] = {
+            id: `waypoint-${Date.now()}-${waypointIndex}`,
+            address: formattedAddress,
+            coordinates: {
+              latitude: coordinate.latitude,
+              longitude: coordinate.longitude,
+            },
+            title: location.title,
+          };
+        }
+        setWaypoints(updatedWaypoints);
+        setActiveWaypointIndex(null);
+        fitMapToAllPoints();
+      }
+
+      // Show save option if user is signed in
+      if (userToken && firebaseUserId) {
+        setTimeout(() => {
+          Alert.alert(
+            'Save Location',
+            'Would you like to save this location for future use?',
+            [
+              { text: 'Not Now', style: 'cancel' },
+              { text: 'Save', onPress: () => openSaveLocationModal(location, locationType) }
+            ]
+          );
+        }, 500);
+      }
+
+    } catch (error) {
+      console.error('Error getting address:', error);
+      Alert.alert('Error', 'Failed to get address for selected location');
+    }
+  };
+
+  // UPDATED: Set pending update for pickup
+  const setPickupPendingUpdate = () => {
+    setPendingLocationUpdate({ type: 'pickup' });
+    Alert.alert(
+      'Select Pickup Location',
+      'Tap on the map to select your pickup location',
+      [{ text: 'OK' }]
+    );
+  };
+
+  // UPDATED: Set pending update for dropoff
+  const setDropoffPendingUpdate = () => {
+    if (!needsDestination) return;
+    setPendingLocationUpdate({ type: 'dropoff' });
+    Alert.alert(
+      'Select Drop-off Location',
+      'Tap on the map to select your drop-off location',
+      [{ text: 'OK' }]
+    );
+  };
+
+  // UPDATED: Set pending update for waypoint
+  const setWaypointPendingUpdate = (index: number) => {
+    if (!needsDestination) return;
+    setPendingLocationUpdate({ type: 'waypoint', index });
+    Alert.alert(
+      `Select Stop ${index + 1}`,
+      'Tap on the map to select this stop location',
+      [{ text: 'OK' }]
+    );
   };
 
   const handlePickupChange = (text: string) => {
@@ -1114,17 +1291,34 @@ const LocationDetailsScreen = () => {
         </View>
       </View>
 
-      {/* Service Type Indicator */}
-      <View style={[styles.serviceTypeIndicator, needsDestination ? styles.destinationService : styles.locationOnlyService]}>
-        <Ionicons 
-          name={needsDestination ? "information-circle" : "location"} 
-          size={20} 
-          color={needsDestination ? "#3c3c3c" : "#68bdee"} 
-        />
-        <Text style={[styles.serviceTypeText, needsDestination ? styles.destinationServiceText : styles.locationOnlyServiceText]}>
-          {getServiceTypeMessage()}
-        </Text>
-      </View>
+
+      {/* UPDATED: Map Selection Hint */}
+      {!pendingLocationUpdate && (
+        <View style={styles.mapSelectionHint}>
+          <Ionicons name="information-circle-outline" size={16} color="#68bdee" />
+          <Text style={styles.mapSelectionHintText}>
+            Tap on the map to select a location
+          </Text>
+        </View>
+      )}
+
+      {/* UPDATED: Pending Selection Indicator */}
+      {pendingLocationUpdate && (
+        <View style={styles.pendingSelectionIndicator}>
+          <Ionicons name="hand-right" size={20} color="#FFFFFF" />
+          <Text style={styles.pendingSelectionText}>
+            Tap on the map to select {pendingLocationUpdate.type === 'pickup' ? 'pickup' : 
+              pendingLocationUpdate.type === 'dropoff' ? 'drop-off' : 
+              `stop ${(pendingLocationUpdate.index || 0) + 1}`} location
+          </Text>
+          <TouchableOpacity 
+            style={styles.cancelPendingButton}
+            onPress={() => setPendingLocationUpdate(null)}
+          >
+            <Ionicons name="close" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scrollView}
@@ -1147,6 +1341,7 @@ const LocationDetailsScreen = () => {
             region={region}
             showsUserLocation={true}
             showsMyLocationButton={false}
+            onPress={handleMapPress}  // Always enabled now
           >
             {isValidCoordinate(pickupCoordinates) && (
               <Marker
@@ -1213,7 +1408,7 @@ const LocationDetailsScreen = () => {
           <View style={styles.currentLocationIndicator}>
             <Ionicons name="checkmark-circle" size={Math.min(20, width * 0.05)} color="#4CAF50" />
             <Text style={styles.currentLocationText} numberOfLines={1}>
-              Pickup location set to your current location
+              Pickup location set
             </Text>
           </View>
         )}
@@ -1260,11 +1455,11 @@ const LocationDetailsScreen = () => {
               ) : (
                 <TouchableOpacity
                   style={styles.inputIcon}
-                  onPress={() => getCurrentLocation()}
+                  onPress={setPickupPendingUpdate}  // UPDATED: Set pending update
                   disabled={isGettingLocation}
                 >
                   <Ionicons
-                    name="navigate-outline"
+                    name="map-outline"
                     size={Math.min(20, width * 0.05)}
                     color={isGettingLocation ? "#b0b0b0" : "#68bdee"}
                   />
@@ -1335,8 +1530,15 @@ const LocationDetailsScreen = () => {
                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity style={styles.inputIcon}>
-                    <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
+                  <TouchableOpacity 
+                    style={styles.inputIcon}
+                    onPress={setDropoffPendingUpdate}  // UPDATED: Set pending update
+                  >
+                    <Ionicons 
+                      name="map-outline" 
+                      size={Math.min(20, width * 0.05)} 
+                      color="#68bdee" 
+                    />
                   </TouchableOpacity>
                 )}
               </View>
@@ -1448,7 +1650,18 @@ const LocationDetailsScreen = () => {
                   >
                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
                   </TouchableOpacity>
-                ) : null}
+                ) : (
+                  <TouchableOpacity
+                    style={styles.inputIcon}
+                    onPress={() => setWaypointPendingUpdate(index)}  // UPDATED: Set pending update
+                  >
+                    <Ionicons 
+                      name="map-outline" 
+                      size={Math.min(20, width * 0.05)} 
+                      color="#68bdee" 
+                    />
+                  </TouchableOpacity>
+                )}
               </View>
 
               {/* Waypoint Suggestions */}
@@ -1479,7 +1692,7 @@ const LocationDetailsScreen = () => {
           ))}
 
           {/* Add Another Stop Button - Only if service needs destination */}
-          {needsDestination && (
+          {needsDestination && waypoints.length < 5 && (
             <TouchableOpacity
               style={styles.addStopButton}
               onPress={() => addWaypoint()}

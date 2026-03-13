@@ -23,7 +23,7 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 export default function ServiceCompleteScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  
+
   // Get data passed from ServiceInProgressScreen
   const bookingId = params.bookingId as string;
   const earnings = params.earnings as string || '81';
@@ -52,9 +52,9 @@ export default function ServiceCompleteScreen() {
   };
 
   // Format completion time
-  const completionTime = new Date().toLocaleTimeString([], { 
-    hour: '2-digit', 
-    minute: '2-digit' 
+  const completionTime = new Date().toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
   });
 
   // FIXED: Calculate fees correctly
@@ -66,7 +66,7 @@ export default function ServiceCompleteScreen() {
   const cleanupBooking = async () => {
     try {
       addDebug('🧹 Cleaning up booking from storage:', bookingId);
-      
+
       // Remove from activeBookings array
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
@@ -86,7 +86,7 @@ export default function ServiceCompleteScreen() {
 
       // Also clear any other booking-related data
       await AsyncStorage.removeItem(`job_${bookingId}`);
-      
+
     } catch (error) {
       addDebug('❌ Error cleaning up booking:', error);
     }
@@ -139,7 +139,7 @@ export default function ServiceCompleteScreen() {
       });
 
       const data = await response.json();
-      
+
       if (data.success && data.data) {
         setTodayEarnings(parseFloat(data.data.earnings) || 0);
         setJobsCompleted(data.data.jobs || 0);
@@ -233,8 +233,60 @@ export default function ServiceCompleteScreen() {
         {
           text: 'Yes, Go Home',
           onPress: async () => {
-            await cleanupBooking();
-            router.replace('/(provider)/HomePage');
+            setIsSubmitting(true);
+
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              if (!token) {
+                Alert.alert('Error', 'Authentication failed');
+                setIsSubmitting(false);
+                return;
+              }
+
+              addDebug('📡 Completing service via back to home for booking:', bookingId);
+
+              // Call API to mark job as completed (same as handleConfirm)
+              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  status: 'completed',
+                  completionDetails: {
+                    notes: notes || 'Completed via back to home', // Use existing notes or default
+                    paymentReceived: paymentChecked, // Use current payment state
+                    customerConfirmed: ratingChecked, // Use current rating state
+                    completedAt: new Date().toISOString(),
+                    duration: durationSeconds,
+                    completedVia: 'back_to_home' // Add flag to track how it was completed
+                  }
+                }),
+              });
+
+              const data = await response.json();
+              addDebug('📡 Complete response (back to home):', { status: response.status, data });
+
+              if (!response.ok) {
+                throw new Error(data.message || 'Failed to complete service');
+              }
+
+              // Clean up booking from storage
+              await cleanupBooking();
+
+              // Navigate to home
+              router.replace('/(provider)/HomePage');
+
+            } catch (error) {
+              addDebug('❌ Complete service error (back to home):', error);
+              Alert.alert(
+                'Error',
+                error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
+              );
+            } finally {
+              setIsSubmitting(false);
+            }
           }
         }
       ]
@@ -422,9 +474,9 @@ export default function ServiceCompleteScreen() {
         </View>
 
         {/* ── CONFIRM BUTTON ── */}
-        <TouchableOpacity 
-          style={[styles.confirmBtn, isSubmitting && styles.buttonDisabled]} 
-          onPress={handleConfirm} 
+        <TouchableOpacity
+          style={[styles.confirmBtn, isSubmitting && styles.buttonDisabled]}
+          onPress={handleConfirm}
           activeOpacity={0.85}
           disabled={isSubmitting}
         >
@@ -444,9 +496,9 @@ export default function ServiceCompleteScreen() {
         )}
 
         {/* ── BACK TO HOME ── */}
-        <TouchableOpacity 
-          style={styles.backHomeBtn} 
-          onPress={handleBackToHome} 
+        <TouchableOpacity
+          style={styles.backHomeBtn}
+          onPress={handleBackToHome}
           activeOpacity={0.8}
           disabled={isSubmitting}
         >

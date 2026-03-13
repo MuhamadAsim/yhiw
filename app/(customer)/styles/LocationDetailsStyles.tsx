@@ -582,4 +582,101 @@ export const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: '600',
   },
+  // Add these to your existing styles
+// Add these to your existing LocationDetailsStyles.ts file
+
+// Map Selection Indicator
+mapSelectionIndicator: {
+  position: 'absolute',
+  top: Platform.OS === 'ios' ? 100 : 80,
+  left: 20,
+  right: 20,
+  zIndex: 1000,
+  backgroundColor: '#68bdee',
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+  borderRadius: 8,
+  elevation: 5,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 3.84,
+},
+mapSelectionText: {
+  flex: 1,
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: '600',
+  marginLeft: 8,
+},
+cancelSelectionButton: {
+  width: 30,
+  height: 30,
+  borderRadius: 15,
+  backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginLeft: 8,
+},
+disabledText: {
+  color: '#b0b0b0',
+},
+// Add these to your existing LocationDetailsStyles.ts file
+
+// Map Selection Hint
+mapSelectionHint: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 8,
+  paddingHorizontal: 16,
+  backgroundColor: '#f0f8ff',
+  borderBottomWidth: 1,
+  borderBottomColor: '#e0e0e0',
+},
+mapSelectionHintText: {
+  fontSize: 12,
+  color: '#68bdee',
+  marginLeft: 4,
+},
+
+// Pending Selection Indicator
+pendingSelectionIndicator: {
+  position: 'absolute',
+  top: Platform.OS === 'ios' ? 100 : 80,
+  left: 20,
+  right: 20,
+  zIndex: 1000,
+  backgroundColor: '#68bdee',
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+  borderRadius: 8,
+  elevation: 5,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.25,
+  shadowRadius: 3.84,
+},
+pendingSelectionText: {
+  flex: 1,
+  color: '#FFFFFF',
+  fontSize: 14,
+  fontWeight: '600',
+  marginLeft: 8,
+},
+cancelPendingButton: {
+  width: 30,
+  height: 30,
+  borderRadius: 15,
+  backgroundColor: 'rgba(255, 255, 255, 0.3)',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginLeft: 8,
+},
 });
