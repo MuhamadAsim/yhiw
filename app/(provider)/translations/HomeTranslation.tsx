@@ -305,6 +305,23 @@ export const TRANSLATIONS = {
     en: 'Failed to get your current location. Please try again.',
     ar: 'فشل الحصول على موقعك الحالي. يرجى المحاولة مرة أخرى.',
   },
+  // Add these to your translations object
+  success: {
+    en: 'Success',
+    ar: 'نجاح'
+  },
+  autoLocationActivated: {
+    en: 'Auto location activated. Getting your current position...',
+    ar: 'تم تفعيل الموقع التلقائي. جاري الحصول على موقعك الحالي...'
+  },
+  updatingLocation: {
+    en: 'Updating location...',
+    ar: 'جاري تحديث الموقع...'
+  },
+  fetchingLocation: {
+    en: 'Fetching GPS...',
+    ar: 'جلب نظام تحديد المواقع...'
+  },
 
   // ── Job Status (for job cards from backend) ──
   jobStatus: {

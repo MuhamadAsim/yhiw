@@ -195,12 +195,22 @@ export const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 15,
   },
+  // NEW: Selected rating hint text
+  selectedRatingHint: {
+    fontSize: 13,
+    color: '#68bdee',
+    fontWeight: '600',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
   submitRatingButton: {
     backgroundColor: '#68bdee',
     paddingVertical: 12,
     paddingHorizontal: 30,
     borderRadius: 8,
     marginTop: 5,
+    width: '100%',
+    alignItems: 'center',
   },
   submitRatingText: {
     color: '#FFFFFF',
@@ -208,6 +218,26 @@ export const styles = StyleSheet.create({
     fontWeight: 'bold',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  // NEW: Clear rating button
+  clearRatingButton: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+  },
+  clearRatingText: {
+    fontSize: 12,
+    color: '#ff4444',
+    fontWeight: '500',
+    textDecorationLine: 'underline',
+  },
+  // NEW: Already rated text
+  alreadyRatedText: {
+    fontSize: 13,
+    color: '#4CAF50',
+    fontWeight: '600',
+    marginTop: 10,
+    textAlign: 'center',
   },
   disabledButton: {
     backgroundColor: '#A0A0A0',
@@ -319,4 +349,24 @@ export const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  // Add these to your existing styles object
+
+downloadButtonDisabled: {
+  opacity: 0.5,
+},
+
+screenshotHint: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginTop: 10,
+  paddingVertical: 8,
+},
+
+screenshotHintText: {
+  fontSize: 12,
+  color: '#999',
+  marginLeft: 5,
+  textDecorationLine: 'underline',
+},
 });

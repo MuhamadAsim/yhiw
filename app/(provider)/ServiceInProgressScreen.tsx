@@ -15,6 +15,7 @@ import {
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ChatPopup from './components/ChatPopup'; // Import ChatPopup
 import { styles } from './styles/ServiceInProgressScreenStyles';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
@@ -41,7 +42,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
   }, [paused]);
 
   // Save timer to database - only called on pause/resume or navigation
-  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete'): Promise<boolean> => {
+  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete' | 'add_time', additionalData?: any): Promise<boolean> => {
     if (!bookingId) return false;
 
     try {
@@ -59,7 +60,8 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
         body: JSON.stringify({
           durationSeconds: seconds,
           paused: action === 'pause' ? true : (action === 'resume' ? false : paused),
-          action: action
+          action: action,
+          ...additionalData
         }),
       });
 
@@ -92,6 +94,18 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
     await saveTimerToDatabase(action);
   };
 
+  // Add time function - directly adds minutes to timer
+  const addTime = async (minutes: number): Promise<boolean> => {
+    // Calculate new duration
+    const newSeconds = seconds + (minutes * 60);
+    
+    // Update local state immediately
+    setSeconds(newSeconds);
+    
+    // Save to database with the new duration
+    return await saveTimerToDatabase('add_time', { addedMinutes: minutes });
+  };
+
   // Format time
   const format = (s: number): string => {
     const h = String(Math.floor(s / 3600)).padStart(2, '0');
@@ -116,7 +130,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
       if (response.ok && data.success) {
         if (data.timer) {
           setSeconds(data.timer.durationSeconds || 0);
-          setPaused(data.timer.isPaused || false); // Changed from 'paused' to 'isPaused'
+          setPaused(data.timer.isPaused || false);
           addDebug(`✅ Timer loaded: ${data.timer.durationSeconds}s, paused: ${data.timer.isPaused}`);
         }
       } else {
@@ -132,6 +146,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
     seconds,
     paused,
     handlePauseResume,
+    addTime,
     isSaving,
     loadTimerFromDatabase,
     saveTimerForCompletion: () => saveTimerToDatabase('complete')
@@ -160,11 +175,20 @@ interface JobData {
   status?: string;
 }
 
+interface HasMessageResponse {
+  success: boolean;
+  hasAnyMessage: boolean;
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function ServiceInProgressScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ bookingId: string }>();
   const bookingId = params.bookingId;
+
+  // Chat state
+  const [chatVisible, setChatVisible] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
   const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
   const appState = useRef(AppState.currentState);
@@ -190,6 +214,7 @@ export default function ServiceInProgressScreen() {
     seconds,
     paused,
     handlePauseResume,
+    addTime,
     isSaving: timerSaving,
     loadTimerFromDatabase,
     saveTimerForCompletion
@@ -198,6 +223,52 @@ export default function ServiceInProgressScreen() {
   // Debug logger
   const addDebug = (message: string, data?: any) => {
     console.log(`🔍 [ServiceInProgress] ${message}`, data || '');
+  };
+
+  // Check if there are any messages
+  const checkForAnyMessage = async () => {
+    if (!bookingId || chatVisible) return; // Don't check if chat is open
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/chat/${bookingId}/has-message`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data: HasMessageResponse = await response.json();
+      
+      if (data.success) {
+        setHasNewMessage(data.hasAnyMessage || false);
+        
+        if (data.hasAnyMessage) {
+          addDebug('📬 There is a message available');
+        }
+      }
+    } catch (error) {
+      addDebug('❌ Error checking messages:', error);
+    }
+  };
+
+  // Handle message button press
+  const handleMessage = () => {
+    addDebug('💬 Opening chat popup with customer');
+    setHasNewMessage(false); // Reset indicator when opening
+    setChatVisible(true);
+  };
+
+  // Handle chat close
+  const handleChatClose = () => {
+    setChatVisible(false);
+    // Small delay to ensure chat is fully closed before checking
+    setTimeout(() => {
+      checkForAnyMessage();
+    }, 500);
   };
 
   // Update local storage with current status
@@ -422,6 +493,9 @@ export default function ServiceInProgressScreen() {
 
       // Fetch job details
       await fetchJobDetails();
+
+      // Check for messages
+      await checkForAnyMessage();
     };
 
     initializeScreen();
@@ -429,18 +503,23 @@ export default function ServiceInProgressScreen() {
     // Start status checking (every 10 seconds)
     statusCheckInterval.current = setInterval(() => {
       if (isMounted.current) {
-        checkJobStatus();
+        Promise.all([
+          checkJobStatus(),
+          checkForAnyMessage() // Check messages in the same interval
+        ]);
       }
     }, 10000);
 
-    // Check status immediately
+    // Check status and messages immediately
     checkJobStatus();
+    checkForAnyMessage();
 
     // Listen for app state changes
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to the foreground - check status immediately
+        // App has come to the foreground - check status and messages immediately
         checkJobStatus();
+        checkForAnyMessage();
         // Also reload timer in case it was updated elsewhere
         loadTimerFromDatabase();
       }
@@ -472,54 +551,85 @@ export default function ServiceInProgressScreen() {
     }
   };
 
-  const handleMessage = (): void => {
-    if (jobData.customerPhone && jobData.customerPhone !== '+973 3XXX XXXX') {
-      Linking.openURL(`sms:${jobData.customerPhone}`);
-    } else {
-      Alert.alert('Message', 'Opening message...');
-    }
-  };
-
   const handleAddPhoto = (): void => {
     Alert.alert('Add Photo', 'Camera functionality will be implemented');
   };
 
+  // UPDATED: Handle Add Time - Directly adds time without approval
   const handleAddTime = (): void => {
-    Alert.alert('Add Time', 'Request additional time?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Request',
-        onPress: async () => {
-          try {
+    Alert.alert(
+      'Add Time',
+      'How much additional time do you need?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: '+15 minutes',
+          onPress: async () => {
             setLoading(true);
-            const token = await AsyncStorage.getItem('userToken');
-            const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
-              method: 'PATCH',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                action: 'add_time',
-                timeData: { minutes: 15, reason: 'Additional time needed' }
-              }),
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-              Alert.alert('Success', 'Time extension requested');
+            const success = await addTime(15);
+            if (success) {
+              Alert.alert('Success', '15 minutes added to service time');
             } else {
-              Alert.alert('Error', data.message || 'Failed to request time extension');
+              Alert.alert('Error', 'Failed to add time. Please try again.');
             }
-          } catch (error) {
-            Alert.alert('Error', 'Failed to request time extension');
-          } finally {
             setLoading(false);
           }
+        },
+        {
+          text: '+30 minutes',
+          onPress: async () => {
+            setLoading(true);
+            const success = await addTime(30);
+            if (success) {
+              Alert.alert('Success', '30 minutes added to service time');
+            } else {
+              Alert.alert('Error', 'Failed to add time. Please try again.');
+            }
+            setLoading(false);
+          }
+        },
+        {
+          text: '+1 hour',
+          onPress: async () => {
+            setLoading(true);
+            const success = await addTime(60);
+            if (success) {
+              Alert.alert('Success', '1 hour added to service time');
+            } else {
+              Alert.alert('Error', 'Failed to add time. Please try again.');
+            }
+            setLoading(false);
+          }
+        },
+        {
+          text: 'Custom',
+          onPress: () => {
+            // For custom time, you could implement a number input modal
+            // For now, just show a message
+            Alert.alert(
+              'Custom Time',
+              'Enter custom minutes:',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Add 45 min',
+                  onPress: async () => {
+                    setLoading(true);
+                    const success = await addTime(45);
+                    if (success) {
+                      Alert.alert('Success', '45 minutes added to service time');
+                    } else {
+                      Alert.alert('Error', 'Failed to add time. Please try again.');
+                    }
+                    setLoading(false);
+                  }
+                }
+              ]
+            );
+          }
         }
-      }
-    ]);
+      ]
+    );
   };
 
   const handleReportIssue = (): void => {
@@ -674,7 +784,6 @@ export default function ServiceInProgressScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
       {/* ── HEADER ── */}
-      {/* ── HEADER ── */}
       <View style={styles.header}>
         <View style={styles.headerLeft} />
         <View style={styles.headerCenter}>
@@ -725,7 +834,7 @@ export default function ServiceInProgressScreen() {
               style={styles.addTimeBtn}
               onPress={handleAddTime}
               activeOpacity={0.8}
-              disabled={loading}
+              disabled={loading || timerSaving}
             >
               <Feather name="clock" size={15} color="#1A1A2E" />
               <Text style={styles.addTimeBtnText}>Add Time</Text>
@@ -768,8 +877,15 @@ export default function ServiceInProgressScreen() {
               <Text style={styles.contactBtnText}>Call</Text>
             </TouchableOpacity>
             <View style={styles.contactBtnSep} />
-            <TouchableOpacity style={styles.contactBtn} onPress={handleMessage} activeOpacity={0.7}>
-              <Feather name="message-square" size={15} color="#9dd7fb" />
+            <TouchableOpacity 
+              style={styles.contactBtn} 
+              onPress={handleMessage} 
+              activeOpacity={0.7}
+            >
+              <View style={styles.messageIconContainer}>
+                <Feather name="message-square" size={15} color="#9dd7fb" />
+                {hasNewMessage && <View style={styles.messageDot} />}
+              </View>
               <Text style={styles.contactBtnText}>Message</Text>
             </TouchableOpacity>
           </View>
@@ -864,6 +980,17 @@ export default function ServiceInProgressScreen() {
 
         <View style={{ height: 16 }} />
       </ScrollView>
+
+      {/* Chat Popup */}
+      <ChatPopup
+        visible={chatVisible}
+        onClose={handleChatClose}
+        bookingId={bookingId || ''}
+        customerName={jobData.customerName}
+        onChatClosed={() => {
+          setHasNewMessage(false);
+        }}
+      />
     </SafeAreaView>
   );
 }

@@ -45,7 +45,12 @@ interface JobDetails {
   eta: string;
   navigationTips?: string;
   status?: string;
-  routePolyline?: string; // Add this for route from backend
+  routePolyline?: string;
+}
+
+interface HasMessageResponse {
+  success: boolean;
+  hasAnyMessage: boolean;
 }
 
 export default function NavigateToCustomerScreen() {
@@ -61,7 +66,10 @@ export default function NavigateToCustomerScreen() {
   const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
   const routeFetchTimeout = useRef<NodeJS.Timeout | null>(null);
   const appState = useRef(AppState.currentState);
+  
+  // Chat state
   const [chatVisible, setChatVisible] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -97,6 +105,52 @@ export default function NavigateToCustomerScreen() {
   // Debug logger
   const addDebug = (message: string, data?: any) => {
     console.log(`🔍 [NavigateToCustomer] ${message}`, data || '');
+  };
+
+  // Check if there are any messages
+  const checkForAnyMessage = async () => {
+    if (!bookingId || chatVisible) return; // Don't check if chat is open
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/chat/${bookingId}/has-message`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data: HasMessageResponse = await response.json();
+      
+      if (data.success) {
+        setHasNewMessage(data.hasAnyMessage || false);
+        
+        if (data.hasAnyMessage) {
+          addDebug('📬 There is a message available');
+        }
+      }
+    } catch (error) {
+      addDebug('❌ Error checking messages:', error);
+    }
+  };
+
+  // Handle message button press
+  const handleMessage = () => {
+    addDebug('💬 Opening chat popup with customer');
+    setHasNewMessage(false); // Reset indicator when opening
+    setChatVisible(true);
+  };
+
+  // Handle chat close
+  const handleChatClose = () => {
+    setChatVisible(false);
+    // Small delay to ensure chat is fully closed before checking
+    setTimeout(() => {
+      checkForAnyMessage();
+    }, 500);
   };
 
   // Save booking to AsyncStorage when component mounts
@@ -173,12 +227,13 @@ export default function NavigateToCustomerScreen() {
     }
   };
 
-  // Handle job cancellation
-  const handleJobCancelled = (reason: string) => {
+  // Handle job cancellation from backend
+  const handleJobCancelled = (reason: string, cancelledBy?: string) => {
     if (cancellationAcknowledged) return;
     
     setCancellationAcknowledged(true);
     
+    // Clear all intervals
     if (locationInterval.current) {
       clearInterval(locationInterval.current);
       locationInterval.current = null;
@@ -196,6 +251,15 @@ export default function NavigateToCustomerScreen() {
       routeFetchTimeout.current = null;
     }
 
+    // If cancelled by provider, just go home without alert
+    if (cancelledBy === 'provider') {
+      cleanupBooking().then(() => {
+        router.replace('/(provider)/HomePage');
+      });
+      return;
+    }
+
+    // Show customer cancellation message only if cancelled by customer
     Alert.alert(
       'Service Cancelled',
       `The customer has cancelled this service.\n\nReason: ${reason}`,
@@ -204,7 +268,7 @@ export default function NavigateToCustomerScreen() {
           text: 'OK',
           onPress: async () => {
             await cleanupBooking();
-            router.replace('/(provider)/HomePage');
+            router.replace('/(provider)/Home');
           }
         }
       ],
@@ -437,6 +501,30 @@ export default function NavigateToCustomerScreen() {
     }
   }, [currentLocation, jobDetails?.pickupLat, jobDetails?.pickupLng]);
 
+  // Add message checking to status check interval
+  useEffect(() => {
+    if (!bookingId || !statusCheckInterval.current) return;
+
+    // Modify the interval to also check for messages
+    const originalInterval = statusCheckInterval.current;
+    
+    // Clear and recreate with message check
+    clearInterval(originalInterval);
+    
+    statusCheckInterval.current = setInterval(async () => {
+      await Promise.all([
+        checkJobStatus(),
+        checkForAnyMessage()
+      ]);
+    }, 10000);
+
+    return () => {
+      if (statusCheckInterval.current) {
+        clearInterval(statusCheckInterval.current);
+      }
+    };
+  }, [bookingId]);
+
   const checkLocationPermission = async () => {
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
@@ -631,11 +719,6 @@ export default function NavigateToCustomerScreen() {
     }
   };
 
-  const handleMessage = () => {
-    addDebug('💬 Opening chat popup with customer');
-    setChatVisible(true);
-  };
-
   const handleArrived = () => {
     if (!jobDetails) {
       Alert.alert('Error', 'Job details not loaded');
@@ -687,20 +770,49 @@ export default function NavigateToCustomerScreen() {
           onPress: async () => {
             try {
               const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
+              
+              // Call API to cancel
+              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ reason: 'provider_cancelled' }),
+                body: JSON.stringify({ 
+                  reason: 'provider_cancelled',
+                  cancelledBy: 'provider' 
+                }),
               });
-              
+
+              // Clean up regardless of API response
               await cleanupBooking();
-              router.replace('/(provider)/Home');
+              
+              // Clear all intervals
+              if (locationInterval.current) {
+                clearInterval(locationInterval.current);
+                locationInterval.current = null;
+              }
+              if (statusCheckInterval.current) {
+                clearInterval(statusCheckInterval.current);
+                statusCheckInterval.current = null;
+              }
+              if (jobRefreshInterval.current) {
+                clearInterval(jobRefreshInterval.current);
+                jobRefreshInterval.current = null;
+              }
+              if (routeFetchTimeout.current) {
+                clearTimeout(routeFetchTimeout.current);
+                routeFetchTimeout.current = null;
+              }
+
+              // Navigate to home screen directly
+              router.replace('/(provider)/HomePage');
+              
             } catch (error) {
               console.log('Cancel API call failed:', error);
-              router.replace('/(provider)/Home');
+              // Still clean up and navigate home
+              await cleanupBooking();
+              router.replace('/(provider)/HomePage');
             }
           }
         }
@@ -818,8 +930,6 @@ export default function NavigateToCustomerScreen() {
           )}
         </MapView>
 
-    
-
         <TouchableOpacity style={styles.compassBtn} onPress={handleCompass} activeOpacity={0.8}>
           <Feather name="navigation" size={20} color="#8fd1fb" />
         </TouchableOpacity>
@@ -888,8 +998,15 @@ export default function NavigateToCustomerScreen() {
                 <Text style={styles.actionBtnText}>Call</Text>
               </TouchableOpacity>
               <View style={styles.actionBtnDivider} />
-              <TouchableOpacity style={styles.actionBtn} onPress={handleMessage} activeOpacity={0.7}>
-                <Feather name="message-square" size={16} color="#8fd1fb" />
+              <TouchableOpacity 
+                style={styles.actionBtn} 
+                onPress={handleMessage} 
+                activeOpacity={0.7}
+              >
+                <View style={styles.messageIconContainer}>
+                  <Feather name="message-square" size={16} color="#8fd1fb" />
+                  {hasNewMessage && <View style={styles.messageDot} />}
+                </View>
                 <Text style={styles.actionBtnText}>Message</Text>
               </TouchableOpacity>
             </View>
@@ -950,9 +1067,12 @@ export default function NavigateToCustomerScreen() {
       
       <ChatPopup
         visible={chatVisible}
-        onClose={() => setChatVisible(false)}
+        onClose={handleChatClose}
         bookingId={bookingId}
         customerName={jobDetails?.customerName || 'Customer'}
+        onChatClosed={() => {
+          setHasNewMessage(false);
+        }}
       />
     </SafeAreaView>
   );

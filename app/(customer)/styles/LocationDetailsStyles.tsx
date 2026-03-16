@@ -679,4 +679,9 @@ cancelPendingButton: {
   justifyContent: 'center',
   marginLeft: 8,
 },
+readOnlyInput: {
+  backgroundColor: '#f5f5f5',
+  color: '#3c3c3c',
+  fontWeight: '500',
+},
 });

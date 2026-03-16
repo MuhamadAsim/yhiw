@@ -21,6 +21,25 @@ const { height, width } = Dimensions.get('window');
 
 
 export const styles = StyleSheet.create({
+  // Add these to your styles object
+messageIconContainer: {
+  position: 'relative',
+  width: 24,
+  height: 24,
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+messageDot: {
+  position: 'absolute',
+  top: -2,
+  right: -2,
+  width: 8,
+  height: 8,
+  borderRadius: 4,
+  backgroundColor: '#FF4444',
+  borderWidth: 1,
+  borderColor: '#FFFFFF',
+},
   container: {
     flex: 1,
     backgroundColor: '#e8f4f8',

@@ -11,14 +11,13 @@ import {
   Platform,
   RefreshControl,
   ScrollView,
-  StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import ChatPopup from './components/ChatPopup';
-import {styles} from './styles/ProviderAssignedStyles';
+import { styles } from './styles/ProviderAssignedStyles';
 
 const { height } = Dimensions.get('window');
 
@@ -85,6 +84,11 @@ interface RouteData {
   etaValue?: number;
 }
 
+interface HasMessageResponse {
+  success: boolean;
+  hasAnyMessage: boolean;
+}
+
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -95,6 +99,7 @@ const ProviderAssignedScreen = () => {
   const navigationInProgress = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [chatVisible, setChatVisible] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
   // State
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
@@ -123,10 +128,69 @@ const ProviderAssignedScreen = () => {
     }
   };
 
+  // Cleanup and navigate home
+  const cleanupAndNavigateHome = async () => {
+    try {
+      addDebug('🧹 Cleaning up and navigating home');
+      
+      // Clear any stored booking data
+      await AsyncStorage.removeItem('currentBookingId');
+      await AsyncStorage.removeItem('currentBookingStatus');
+      
+      // Navigate to home
+      router.replace('/(customer)/Home');
+    } catch (error) {
+      addDebug('❌ Error during cleanup:', error);
+      // Still try to navigate
+      router.replace('/(customer)/Home');
+    }
+  };
+
+  // Check if there are any messages
+  const checkForAnyMessage = async () => {
+    if (!bookingId || chatVisible) return; // Don't check if chat is open
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/has-message`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data: HasMessageResponse = await response.json();
+      
+      if (data.success) {
+        // Set true if there's at least one message
+        setHasNewMessage(data.hasAnyMessage || false);
+        
+        if (data.hasAnyMessage) {
+          addDebug(`📬 There is a message available`);
+        }
+      }
+    } catch (error) {
+      addDebug(`❌ Error checking messages: ${error}`);
+    }
+  };
+
   // Handle message button press - open chat popup
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
+    setHasNewMessage(false); // Reset indicator when opening
     setChatVisible(true);
+  };
+
+  // Handle chat close
+  const handleChatClose = () => {
+    setChatVisible(false);
+    // Small delay to ensure chat is fully closed before checking
+    setTimeout(() => {
+      checkForAnyMessage();
+    }, 500);
   };
 
   // Decode polyline from Google Maps format or simple pipe-separated format
@@ -191,7 +255,8 @@ const ProviderAssignedScreen = () => {
 
     return points;
   };
-  // In ProviderAssignedScreen - UPDATED to just use GET (no body needed)
+
+  // Fetch route from backend
   const fetchRouteFromBackend = async () => {
     if (isFetchingRoute || !bookingId) return;
 
@@ -205,39 +270,31 @@ const ProviderAssignedScreen = () => {
         return;
       }
 
-      // Simple GET request - backend knows both locations from:
-      // - Provider location from ProviderLiveStatus
-      // - Pickup location from job.bookingData
       const url = `${API_BASE_URL}/api/customer/${bookingId}/route`;
       addDebug(`🌐 Calling route API: ${url}`);
 
       const response = await fetch(url, {
-        method: 'GET', // Changed from POST to GET
+        method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         }
-        // NO BODY - backend already knows everything
       });
 
       const data = await response.json();
       addDebug(`📦 Route API response:`, data);
 
       if (data.success && data.route) {
-        // Store route data
         setRouteData(data.route);
 
-        // Decode and set route coordinates for map
         if (data.route.polyline) {
           const points = decodePolyline(data.route.polyline);
           setRouteCoordinates(points);
           addDebug(`🗺️ Route has ${points.length} points`);
         }
 
-        // Set ETA and distance
         setEta(data.route.eta || 'Calculating...');
 
-        // Parse ETA to seconds for countdown if available
         if (data.route.etaValue) {
           setTimeRemaining(data.route.etaValue);
         } else if (data.route.eta) {
@@ -248,7 +305,6 @@ const ProviderAssignedScreen = () => {
           }
         }
 
-        // Update provider location if returned
         if (data.route.providerLocation) {
           setProviderLocation({
             latitude: data.route.providerLocation.latitude,
@@ -272,6 +328,21 @@ const ProviderAssignedScreen = () => {
     if (!bookingId) {
       addDebug('❌ No bookingId provided');
       setApiError('No booking ID provided');
+      setIsLoading(false);
+      
+      Alert.alert(
+        'Error',
+        'No booking ID provided',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              cleanupAndNavigateHome();
+            }
+          }
+        ],
+        { cancelable: false }
+      );
       return;
     }
 
@@ -281,6 +352,20 @@ const ProviderAssignedScreen = () => {
       if (!token) {
         addDebug('❌ No token found');
         setApiError('Authentication failed');
+        setIsLoading(false);
+        
+        Alert.alert(
+          'Authentication Error',
+          'Please log in again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                cleanupAndNavigateHome();
+              }
+            }
+          ]
+        );
         return;
       }
 
@@ -295,60 +380,154 @@ const ProviderAssignedScreen = () => {
 
       addDebug(`📡 Response status: ${response.status}`);
 
+      // Handle 404 - Job not found
+      if (response.status === 404) {
+        addDebug('❌ Job not found (404)');
+        
+        // Clear invalid booking data
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+        
+        Alert.alert(
+          'Job Not Found',
+          'This job no longer exists or has been cancelled.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                router.replace('/(customer)/Home');
+              }
+            }
+          ],
+          { cancelable: false }
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      // Handle 401/403 - Auth errors
+      if (response.status === 401 || response.status === 403) {
+        addDebug('❌ Authentication error');
+        Alert.alert(
+          'Session Expired',
+          'Please log in again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                cleanupAndNavigateHome();
+              }
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
         addDebug(`❌ API Error ${response.status}: ${errorText}`);
-        throw new Error(`HTTP ${response.status}`);
+        
+        Alert.alert(
+          'Error Loading Job',
+          `Unable to load job details (${response.status}). Please try again.`,
+          [
+            {
+              text: 'Go Home',
+              onPress: () => cleanupAndNavigateHome()
+            },
+            {
+              text: 'Retry',
+              onPress: () => {
+                setIsLoading(true);
+                fetchJobDetails();
+              }
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
       }
 
       const data = await response.json();
       addDebug(`📦 API Response:`, data);
 
-      if (data.success && data.job) {
-        addDebug(`✅ Job details fetched successfully`);
-        addDebug(`   - Status: ${data.job.status}`);
-        addDebug(`   - Provider: ${data.job.provider?.name || 'Not assigned'}`);
-        addDebug(`   - Pickup: ${data.job.pickup?.address || 'No address'}`);
-
-        setJobDetails(data.job);
-        setApiError(null);
-
-        // Set initial provider location if available
-        if (data.job.providerLocation) {
-          addDebug(`📍 Provider location from API:`, data.job.providerLocation);
-          setProviderLocation({
-            latitude: data.job.providerLocation.latitude,
-            longitude: data.job.providerLocation.longitude,
-          });
-        }
-
-        // Set initial ETA
-        setEta(data.job.estimatedArrival || '15 min');
-        const etaMinutes = parseInt(data.job.estimatedArrival || '15');
-        if (!isNaN(etaMinutes)) {
-          setTimeRemaining(etaMinutes * 60);
-        }
-
-        // Center map on pickup if map is ready
-        if (mapRef.current && data.job.pickup?.coordinates && mapReady) {
-          addDebug(`🗺️ Centering map on pickup location`);
-          mapRef.current.animateToRegion({
-            latitude: data.job.pickup.coordinates.lat,
-            longitude: data.job.pickup.coordinates.lng,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }, 1000);
-        }
-
-        // Check initial status and navigate if needed
-        handleStatusNavigation(data.job.status);
-      } else {
+      if (!data.success || !data.job) {
         addDebug(`❌ API returned success=false or no job data`);
-        setApiError('No job data received');
+        
+        Alert.alert(
+          'Invalid Response',
+          'The server returned an invalid response.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
       }
+
+      addDebug(`✅ Job details fetched successfully`);
+      addDebug(`   - Status: ${data.job.status}`);
+      addDebug(`   - Provider: ${data.job.provider?.name || 'Not assigned'}`);
+      addDebug(`   - Pickup: ${data.job.pickup?.address || 'No address'}`);
+
+      setJobDetails(data.job);
+      setApiError(null);
+
+      // Set initial provider location if available
+      if (data.job.providerLocation) {
+        addDebug(`📍 Provider location from API:`, data.job.providerLocation);
+        setProviderLocation({
+          latitude: data.job.providerLocation.latitude,
+          longitude: data.job.providerLocation.longitude,
+        });
+      }
+
+      // Set initial ETA
+      setEta(data.job.estimatedArrival || '15 min');
+      const etaMinutes = parseInt(data.job.estimatedArrival || '15');
+      if (!isNaN(etaMinutes)) {
+        setTimeRemaining(etaMinutes * 60);
+      }
+
+      // Center map on pickup if map is ready
+      if (mapRef.current && data.job.pickup?.coordinates && mapReady) {
+        addDebug(`🗺️ Centering map on pickup location`);
+        mapRef.current.animateToRegion({
+          latitude: data.job.pickup.coordinates.lat,
+          longitude: data.job.pickup.coordinates.lng,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        }, 1000);
+      }
+
+      // Check initial status and navigate if needed
+      handleStatusNavigation(data.job.status);
+      
     } catch (error) {
       addDebug(`❌ Error fetching job details: ${error}`);
       setApiError(error instanceof Error ? error.message : 'Unknown error');
+      
+      Alert.alert(
+        'Connection Error',
+        'Failed to connect to server. Please check your internet connection.',
+        [
+          {
+            text: 'Go Home',
+            onPress: () => cleanupAndNavigateHome()
+          },
+          {
+            text: 'Retry',
+            onPress: () => {
+              setIsLoading(true);
+              fetchJobDetails();
+            }
+          }
+        ]
+      );
     } finally {
       setIsLoading(false);
       setRefreshing(false);
@@ -431,10 +610,33 @@ const ProviderAssignedScreen = () => {
         });
       }
     }
+
+    // Handle CANCELLED - Navigate home
+    if (status === 'cancelled' && !navigationInProgress.current) {
+      addDebug(`❌ Job cancelled - navigating home`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      Alert.alert(
+        'Job Cancelled',
+        'This service request has been cancelled.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              cleanupAndNavigateHome();
+            }
+          }
+        ]
+      );
+    }
   };
 
-
-  // Update the call in fetchProviderLocation:
+  // Fetch provider location
   const fetchProviderLocation = async () => {
     if (!bookingId) return;
 
@@ -464,13 +666,13 @@ const ProviderAssignedScreen = () => {
         addDebug(`📍 Provider location update #${pollingAttempts + 1}:`, newLocation);
         setProviderLocation(newLocation);
 
-        // Fetch route after location update - NO COORDINATES NEEDED
+        // Fetch route after location update
         if (routeFetchTimer.current) {
           clearTimeout(routeFetchTimer.current);
         }
 
         routeFetchTimer.current = setTimeout(() => {
-          fetchRouteFromBackend(); // Just call without parameters
+          fetchRouteFromBackend();
         }, 2000);
       }
     } catch (error) {
@@ -494,6 +696,21 @@ const ProviderAssignedScreen = () => {
           'Authorization': `Bearer ${token}`,
         },
       });
+
+      if (response.status === 404) {
+        addDebug('❌ Job not found during polling - navigating home');
+        Alert.alert(
+          'Job Not Found',
+          'This job no longer exists.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        return;
+      }
 
       if (!response.ok) {
         addDebug(`❌ Status check failed: ${response.status}`);
@@ -526,7 +743,8 @@ const ProviderAssignedScreen = () => {
 
       await Promise.all([
         fetchProviderLocation(),
-        fetchJobStatus()
+        fetchJobStatus(),
+        checkForAnyMessage() // Add message check
       ]);
 
       if (isMounted.current && !navigationInProgress.current) {
@@ -543,16 +761,54 @@ const ProviderAssignedScreen = () => {
 
     if (!bookingId) {
       addDebug('❌ No booking ID in params');
-      Alert.alert('Error', 'No booking ID provided');
-      router.back();
+      Alert.alert(
+        'Error',
+        'No booking ID provided',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              cleanupAndNavigateHome();
+            }
+          }
+        ],
+        { cancelable: false }
+      );
       return;
     }
 
+    // Set a timeout to prevent infinite loading
+    const timeoutId = setTimeout(() => {
+      if (isLoading && isMounted.current) {
+        addDebug('⚠️ Loading timeout - redirecting to home');
+        Alert.alert(
+          'Loading Timeout',
+          'Unable to load job details. Please try again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                cleanupAndNavigateHome();
+              }
+            }
+          ],
+          { cancelable: false }
+        );
+      }
+    }, 15000); // 15 second timeout
+
     // Fetch initial data
-    fetchJobDetails().then(() => {
-      // Start polling after initial data loads
-      startPolling();
-    });
+    fetchJobDetails()
+      .then(() => {
+        clearTimeout(timeoutId);
+        // Start polling after initial data loads
+        startPolling();
+      })
+      .catch((error) => {
+        addDebug('❌ Failed to load job details:', error);
+        clearTimeout(timeoutId);
+        // Error is already handled in fetchJobDetails
+      });
 
     // Start ETA countdown
     const interval = setInterval(() => {
@@ -562,6 +818,7 @@ const ProviderAssignedScreen = () => {
     return () => {
       addDebug('🧹 Cleaning up component');
       isMounted.current = false;
+      clearTimeout(timeoutId);
       if (pollingTimer.current) {
         clearTimeout(pollingTimer.current);
         pollingTimer.current = null;
@@ -640,7 +897,7 @@ const ProviderAssignedScreen = () => {
             addDebug(`❌ Cancelling request: ${bookingId}`);
             try {
               const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
+              const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -649,11 +906,16 @@ const ProviderAssignedScreen = () => {
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
 
-              await AsyncStorage.removeItem('currentBookingId');
-              router.replace('/(customer)/Home');
+              if (response.ok) {
+                addDebug('✅ Cancel request successful');
+              } else {
+                addDebug('❌ Cancel request failed');
+              }
+
+              await cleanupAndNavigateHome();
             } catch (error) {
               console.error('Cancel error:', error);
-              router.replace('/(customer)/Home');
+              await cleanupAndNavigateHome();
             }
           }
         }
@@ -665,6 +927,7 @@ const ProviderAssignedScreen = () => {
     addDebug(`🔄 Manual refresh triggered`);
     setRefreshing(true);
     await fetchJobDetails();
+    await checkForAnyMessage(); // Check messages on refresh
   };
 
   const formatTime = (seconds: number): string => {
@@ -682,6 +945,7 @@ const ProviderAssignedScreen = () => {
         {apiError && (
           <Text style={styles.errorText}>Error: {apiError}</Text>
         )}
+  
       </View>
     );
   }
@@ -701,7 +965,7 @@ const ProviderAssignedScreen = () => {
           )}
           <TouchableOpacity
             style={[styles.trackButton, { marginTop: 30 }]}
-            onPress={() => router.replace('/(customer)/Home')}
+            onPress={cleanupAndNavigateHome}
           >
             <Text style={styles.trackButtonText}>Go Home</Text>
           </TouchableOpacity>
@@ -856,7 +1120,7 @@ const ProviderAssignedScreen = () => {
           </View>
         </View>
 
-        {/* Route Info Card - NEW */}
+        {/* Route Info Card */}
         {routeData && (
           <View style={styles.routeInfoCard}>
             <View style={styles.routeInfoRow}>
@@ -926,12 +1190,16 @@ const ProviderAssignedScreen = () => {
                 <Text style={styles.callButtonText}>Call</Text>
               </TouchableOpacity>
 
+              {/* Updated Message Button with Red Dot */}
               <TouchableOpacity
                 style={styles.messageButton}
                 onPress={handleMessage}
                 activeOpacity={0.7}
               >
-                <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
+                <View style={styles.messageIconContainer}>
+                  <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
+                  {hasNewMessage && <View style={styles.messageDot} />}
+                </View>
                 <Text style={styles.messageButtonText}>Message</Text>
               </TouchableOpacity>
             </View>
@@ -1054,9 +1322,12 @@ const ProviderAssignedScreen = () => {
       {/* Chat Popup */}
       <ChatPopup
         visible={chatVisible}
-        onClose={() => setChatVisible(false)}
+        onClose={handleChatClose}
         bookingId={bookingId}
         providerName={jobDetails?.provider?.name || 'Provider'}
+        onChatClosed={() => {
+          setHasNewMessage(false);
+        }}
       />
     </View>
   );

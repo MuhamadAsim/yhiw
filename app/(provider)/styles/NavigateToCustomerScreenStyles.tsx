@@ -365,4 +365,24 @@ export const styles = StyleSheet.create({
   dropoffMarker: {
     padding: 5,
   },
+  // Add these to your styles object
+messageIconContainer: {
+  position: 'relative',
+  width: 20,
+  height: 20,
+  justifyContent: 'center',
+  alignItems: 'center',
+  marginRight: 4,
+},
+messageDot: {
+  position: 'absolute',
+  top: -3,
+  right: -3,
+  width: 8,
+  height: 8,
+  borderRadius: 4,
+  backgroundColor: '#FF4444',
+  borderWidth: 1,
+  borderColor: '#FFFFFF',
+},
 });

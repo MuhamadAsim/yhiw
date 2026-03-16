@@ -10,7 +10,6 @@ import {
   SafeAreaView,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -18,7 +17,6 @@ import {
 
 import { styles } from './styles/NewRequestNotificationScreenStyles';
 
-// API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 interface JobData {
@@ -34,460 +32,429 @@ interface JobData {
   isLastInQueue?: string;
 }
 
+interface QueueData {
+  jobs: JobData[];
+  currentIndex: number;
+  totalJobs: number;
+}
+
 const NewRequestNotification = () => {
+
   const router = useRouter();
   const params = useLocalSearchParams();
   const appState = useRef(AppState.currentState);
-  const [hasMarkedAsSeen, setHasMarkedAsSeen] = useState(false);
 
-  // Parse the job data from params
-  const jobData: JobData = {
-    jobId: params.jobId as string || '',
-    bookingId: params.bookingId as string || params.jobId as string || '',
-    customerName: params.customerName as string || 'Customer',
-    serviceType: params.serviceType as string || 'SERVICE',
-    pickupLocation: params.pickupLocation as string || 'Pickup location',
-    price: params.price as string || params.estimatedEarnings as string || '0',
-    distance: params.distance as string || '2.5 km',
-    urgency: params.urgency as string || 'normal',
-    queueSize: params.queueSize as string || '0',
-    isLastInQueue: params.isLastInQueue as string || 'true',
-  };
+  const RESPONSE_TIME = 30;
 
-  const RESPONSE_TIME = 30; // 30 seconds total response time
+  const [queueData, setQueueData] = useState<QueueData>({
+    jobs: [],
+    currentIndex: 0,
+    totalJobs: 0
+  });
 
-  // Always start from 30 seconds when landing on page
+  const [currentJob, setCurrentJob] = useState<JobData | null>(null);
   const [timeLeft, setTimeLeft] = useState(RESPONSE_TIME);
-  const [progress] = useState(new Animated.Value(1)); // Start at 100%
+  const [progress] = useState(new Animated.Value(1));
   const [isExpired, setIsExpired] = useState(false);
+  const [hasMarkedAsSeen, setHasMarkedAsSeen] = useState(false);
   const [hasShownExpiredAlert, setHasShownExpiredAlert] = useState(false);
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
   const statusCheckRef = useRef<NodeJS.Timeout | null>(null);
   const initialDelayRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Handle app state changes (background/foreground)
+  // guards
+  const isNavigatedAwayRef = useRef(false);
+  const expireLockRef = useRef(false);
+
+  /* ------------------ QUEUE INITIALIZATION ------------------ */
+
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App came to foreground - restart timer with remaining time
-        if (!isExpired && timeLeft > 0) {
-          restartTimer(timeLeft);
-        }
-      }
-      appState.current = nextAppState;
-    });
 
-    return () => {
-      subscription.remove();
-    };
-  }, [isExpired, timeLeft]);
+    isNavigatedAwayRef.current = false;
 
-  // Mark job as seen when component unmounts (leaving page)
-  useEffect(() => {
-    return () => {
-      // Only mark as seen when actually leaving the page (not when expired)
-      if (!isExpired && !hasMarkedAsSeen) {
-        markJobAsSeen();
-      }
+    const initializeQueue = () => {
+      try {
 
-      // Clear all timers
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      if (animationRef.current) {
-        animationRef.current.stop();
-      }
-      if (statusCheckRef.current) {
-        clearInterval(statusCheckRef.current);
-      }
-      if (initialDelayRef.current) {
-        clearTimeout(initialDelayRef.current);
-      }
-    };
-  }, [isExpired, hasMarkedAsSeen]);
+        if (params.remainingJobs) {
 
-  // Handle job expiration - SILENTLY hide without alert
-  const handleExpire = (silent: boolean = false) => {
-    if (isExpired) return;
+          const parsedQueue = JSON.parse(params.remainingJobs as string);
+          setQueueData(parsedQueue);
+          setCurrentJob(parsedQueue.jobs[0] || null);
 
-    console.log(`⏰ Job expired (${silent ? 'silent' : 'timer'})`);
-    setIsExpired(true);
+        } else {
 
-    // Mark as seen when expired
-    if (!hasMarkedAsSeen) {
-      markJobAsSeen();
-      setHasMarkedAsSeen(true);
-    }
+          const singleJob: JobData = {
+            jobId: params.jobId as string || '',
+            bookingId: params.bookingId as string || '',
+            customerName: params.customerName as string || 'Customer',
+            serviceType: params.serviceType as string || 'SERVICE',
+            pickupLocation: params.pickupLocation as string || 'Pickup location',
+            price: params.price as string || '0',
+            distance: params.distance as string || '2.5 km',
+            urgency: params.urgency as string || 'normal',
+          };
 
-    // Only show alert if it's a timer expiration (not status check)
-    if (!silent && !hasShownExpiredAlert) {
-      setHasShownExpiredAlert(true);
-      Alert.alert(
-        'Request Expired',
-        'The time to respond to this request has expired.',
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              router.back();
-            }
-          }
-        ]
-      );
-    } else {
-      // Silent expiration - just go back without alert
-      router.back();
-    }
-  };
+          const newQueue: QueueData = {
+            jobs: [singleJob],
+            currentIndex: 0,
+            totalJobs: 1
+          };
 
-  // Restart timer with new time
-  const restartTimer = (remainingTime: number) => {
-    // Clear existing timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    if (animationRef.current) {
-      animationRef.current.stop();
-    }
-
-    // Start new countdown
-    timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current!);
-          handleExpire(false); // Timer expiration - show alert
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    // Start new animation
-    progress.setValue(remainingTime / RESPONSE_TIME);
-    animationRef.current = Animated.timing(progress, {
-      toValue: 0,
-      duration: remainingTime * 1000,
-      useNativeDriver: false,
-    });
-    animationRef.current.start();
-  };
-
-  // Mark job as seen in AsyncStorage (only called when leaving or expired)
-  const markJobAsSeen = async () => {
-    try {
-      const bookingId = jobData.bookingId;
-      if (!bookingId) return;
-
-      const seenJobsStr = await AsyncStorage.getItem('seenJobs');
-      let seenJobs: string[] = seenJobsStr ? JSON.parse(seenJobsStr) : [];
-
-      // Add to seen jobs if not already there
-      if (!seenJobs.includes(bookingId)) {
-        seenJobs.unshift(bookingId); // Add to beginning
-
-        // Keep only last 20
-        if (seenJobs.length > 20) {
-          seenJobs = seenJobs.slice(0, 20);
+          setQueueData(newQueue);
+          setCurrentJob(singleJob);
         }
 
-        await AsyncStorage.setItem('seenJobs', JSON.stringify(seenJobs));
-        console.log(`✅ Job ${bookingId} marked as seen. Total seen: ${seenJobs.length}`);
-        setHasMarkedAsSeen(true);
-      }
-    } catch (error) {
-      console.error('Error marking job as seen:', error);
-    }
-  };
-
-  // Check if job still exists in backend - SILENTLY handle
-  const checkJobStatus = async () => {
-    // Don't check if already expired
-    if (isExpired) return;
-
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) {
-        console.log('❌ No token found');
-        return;
-      }
-
-      const bookingId = jobData.bookingId;
-      if (!bookingId) {
-        console.log('❌ No booking ID');
-        return;
-      }
-
-      console.log(`🔍 Checking job status for ${bookingId}...`);
-
-      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/status`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      console.log(`📡 API Response status: ${response.status}`);
-
-      if (!response.ok) {
-        console.log('❌ Job not found - silently removing');
-        handleExpire(true); // Silent expiration
-        return;
-      }
-
-      const data = await response.json();
-      console.log('📦 Job status data:', data);
-
-      // If job status is 'accepted' or other non-available status, silently hide
-      // Don't interfere with provider experience
-      if (data.status !== 'searching' && data.status !== 'pending') {
-        console.log(`❌ Job no longer available - status: ${data.status} - silently hiding`);
-        handleExpire(true); // Silent expiration
-        return;
-      } else {
-        console.log(`✅ Job still available - status: ${data.status}`);
-      }
-    } catch (error) {
-      console.error('Error checking job status:', error);
-      // Don't expire on network errors - let the timer handle it
-    }
-  };
-
-  // Check status periodically - but SILENTLY handle
-  useEffect(() => {
-    // Wait 2 seconds before first status check
-    initialDelayRef.current = setTimeout(() => {
-      checkJobStatus();
-    }, 2000);
-
-    statusCheckRef.current = setInterval(checkJobStatus, 10000); // Check every 10 seconds
-
-    return () => {
-      if (initialDelayRef.current) {
-        clearTimeout(initialDelayRef.current);
-      }
-      if (statusCheckRef.current) {
-        clearInterval(statusCheckRef.current);
+      } catch (err) {
+        console.error("Queue parse error", err);
       }
     };
-  }, []);
 
-  // Initial timer setup - starts from 30 seconds when page loads
-  useEffect(() => {
-    console.log('⏱️ Timer started: 30 seconds');
+    initializeQueue();
 
-    // Start timer from 30 seconds
-    timerRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        console.log(`⏱️ Time left: ${prev - 1}s`);
-        if (prev <= 1) {
-          console.log('⏱️ Timer reached zero');
-          clearInterval(timerRef.current!);
-          handleExpire(false); // Timer expiration - show alert
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  }, [params]);
 
-    // Start progress animation from 100% to 0% over 30 seconds
-    animationRef.current = Animated.timing(progress, {
-      toValue: 0,
-      duration: RESPONSE_TIME * 1000,
-      useNativeDriver: false,
-    });
-    animationRef.current.start();
+  /* ------------------ TIMER CLEANUP ------------------ */
 
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      if (animationRef.current) {
-        animationRef.current.stop();
-      }
-    };
-  }, []); // Empty dependency array - runs once when component mounts
+  const clearAllTimers = () => {
 
-  const handleViewFullDetails = () => {
-    if (isExpired) {
-      Alert.alert('Expired', 'This job is no longer available.');
-      return;
-    }
-
-    // CRITICAL: Stop ALL timers and polling before navigating
-    // Clear timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
-    // Stop animation
     if (animationRef.current) {
       animationRef.current.stop();
       animationRef.current = null;
     }
 
-    // Clear status check interval
     if (statusCheckRef.current) {
       clearInterval(statusCheckRef.current);
       statusCheckRef.current = null;
     }
 
-    // Clear initial delay
     if (initialDelayRef.current) {
       clearTimeout(initialDelayRef.current);
       initialDelayRef.current = null;
     }
 
-    console.log('🛑 All timers stopped - navigating to details');
+    progress.setValue(1);
+  };
 
-    // Navigate to details page
+  /* ------------------ TIMER START ------------------ */
+
+  const startTimer = () => {
+
+    timerRef.current = setInterval(() => {
+
+      setTimeLeft(prev => {
+
+        if (prev <= 1) {
+          clearInterval(timerRef.current!);
+          timerRef.current = null;
+          return 0;
+        }
+
+        return prev - 1;
+
+      });
+
+    }, 1000);
+
+    animationRef.current = Animated.timing(progress, {
+      toValue: 0,
+      duration: RESPONSE_TIME * 1000,
+      useNativeDriver: false,
+    });
+
+    animationRef.current.start();
+  };
+
+  /* ------------------ TIMER OWNER ------------------ */
+
+  useEffect(() => {
+
+    if (currentJob && !isExpired) {
+
+      expireLockRef.current = false;
+
+      setTimeLeft(RESPONSE_TIME);
+      progress.setValue(1);
+      startTimer();
+    }
+
+    return () => clearAllTimers();
+
+  }, [currentJob]);
+
+  /* ------------------ TIMER EXPIRATION ------------------ */
+
+  useEffect(() => {
+
+    if (timeLeft === 0 && !isExpired && currentJob && !isNavigatedAwayRef.current) {
+      handleExpire(false);
+    }
+
+  }, [timeLeft]);
+
+  /* ------------------ EXPIRE HANDLER ------------------ */
+
+  const handleExpire = (silent = false) => {
+
+    if (
+      expireLockRef.current ||
+      isExpired ||
+      !currentJob ||
+      isNavigatedAwayRef.current
+    ) return;
+
+    expireLockRef.current = true;
+
+    console.log("⏰ Job expired:", currentJob.bookingId);
+
+    setIsExpired(true);
+
+    if (!hasMarkedAsSeen) {
+      markJobAsSeen(currentJob.bookingId);
+      setHasMarkedAsSeen(true);
+    }
+
+    if (!silent && !hasShownExpiredAlert) {
+
+      setHasShownExpiredAlert(true);
+
+      Alert.alert(
+        "Request Expired",
+        "The time to respond to this request has expired.",
+        [{ text: "OK", onPress: moveToNextJob }]
+      );
+
+    } else {
+      moveToNextJob();
+    }
+  };
+
+  /* ------------------ MOVE TO NEXT JOB ------------------ */
+
+  const moveToNextJob = () => {
+
+    if (isNavigatedAwayRef.current) return;
+
+    clearAllTimers();
+
+    const remainingJobs = queueData.jobs.filter(
+      (_, i) => i !== queueData.currentIndex
+    );
+
+    if (remainingJobs.length > 0) {
+
+      const newQueue = {
+        jobs: remainingJobs,
+        currentIndex: 0,
+        totalJobs: remainingJobs.length
+      };
+
+      setQueueData(newQueue);
+      setCurrentJob(remainingJobs[0]);
+
+      setIsExpired(false);
+      setHasMarkedAsSeen(false);
+      setHasShownExpiredAlert(false);
+
+    } else {
+
+      router.back();
+
+    }
+  };
+
+  /* ------------------ MARK JOB SEEN ------------------ */
+
+  const markJobAsSeen = async (bookingId: string) => {
+
+    try {
+
+      const seenJobsStr = await AsyncStorage.getItem('seenJobs');
+      let seenJobs = seenJobsStr ? JSON.parse(seenJobsStr) : [];
+
+      if (!seenJobs.includes(bookingId)) {
+
+        seenJobs.unshift(bookingId);
+
+        if (seenJobs.length > 20)
+          seenJobs = seenJobs.slice(0, 20);
+
+        await AsyncStorage.setItem('seenJobs', JSON.stringify(seenJobs));
+      }
+
+    } catch (err) {
+      console.log("Seen job error", err);
+    }
+  };
+
+  /* ------------------ POLLING ------------------ */
+
+  const checkJobStatus = async () => {
+
+    if (isExpired || !currentJob || isNavigatedAwayRef.current) return;
+
+    try {
+
+      const token = await AsyncStorage.getItem("userToken");
+      if (!token) return;
+
+      const res = await fetch(
+        `${API_BASE_URL}/jobs/${currentJob.bookingId}/status`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (!res.ok) {
+        handleExpire(true);
+        return;
+      }
+
+      const data = await res.json();
+
+      if (data.status !== "searching" && data.status !== "pending") {
+        handleExpire(true);
+      }
+
+    } catch (err) {
+      console.log("Status check error", err);
+    }
+  };
+
+  useEffect(() => {
+
+    if (!currentJob) return;
+
+    initialDelayRef.current = setTimeout(checkJobStatus, 2000);
+    statusCheckRef.current = setInterval(checkJobStatus, 10000);
+
+    return () => {
+      if (initialDelayRef.current) clearTimeout(initialDelayRef.current);
+      if (statusCheckRef.current) clearInterval(statusCheckRef.current);
+    };
+
+  }, [currentJob]);
+
+  /* ------------------ NAVIGATION ------------------ */
+
+  const handleViewFullDetails = () => {
+
+    if (isExpired || !currentJob) return;
+
+    isNavigatedAwayRef.current = true;
+
+    clearAllTimers();
+
+    const remainingJobs = queueData.jobs.filter(
+      (_, i) => i !== queueData.currentIndex
+    );
+
     router.push({
       pathname: "/RequestDetailScreen",
       params: {
-        bookingId: jobData.bookingId,
+        bookingId: currentJob.bookingId,
+        remainingJobs: JSON.stringify({
+          jobs: remainingJobs,
+          currentIndex: 0,
+          totalJobs: remainingJobs.length
+        })
       }
     });
   };
 
   const handleBackPress = () => {
-    // Mark as seen when manually going back
-    if (!isExpired && !hasMarkedAsSeen) {
-      markJobAsSeen();
-    }
+
+    isNavigatedAwayRef.current = true;
+
+    clearAllTimers();
+
     router.back();
   };
+
+  if (!currentJob || isExpired) return null;
 
   const progressWidth = progress.interpolate({
     inputRange: [0, 1],
     outputRange: ["0%", "100%"],
   });
 
-  // Format urgency display
-  const getUrgencyBadge = () => {
-    const urgency = jobData.urgency?.toLowerCase() || 'normal';
-
-    if (urgency === 'urgent' || urgency === 'emergency') {
-      return (
-        <View style={styles.urgentBadge}>
-          <Text style={styles.urgentText}>{jobData.urgency?.toUpperCase() || 'URGENT'}</Text>
-        </View>
-      );
-    }
-    return null;
-  };
-
-  // If expired, don't render anything
-  if (isExpired) {
-    return null;
-  }
+  /* ------------------ UI ------------------ */
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+
         <View style={styles.container}>
-          {/* Back Button */}
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={handleBackPress}
-          >
+
+          <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
             <Feather name="arrow-left" size={24} color="#000" />
           </TouchableOpacity>
 
-          {/* Bell Icon */}
           <View style={styles.iconContainer}>
             <View style={styles.iconCircle}>
               <Feather name="bell" size={48} color="#87CEFA" />
             </View>
           </View>
 
-          {/* Title */}
           <Text style={styles.title}>NEW REQUEST!</Text>
           <Text style={styles.subtitle}>A CUSTOMER NEEDS YOUR SERVICE</Text>
 
-          {/* Service Card */}
           <View style={styles.serviceCard}>
+
             <View style={styles.serviceHeader}>
               <Text style={styles.serviceTitle}>
-                {jobData.serviceType?.toUpperCase() || 'SERVICE'}
+                {currentJob.serviceType?.toUpperCase()}
               </Text>
-              {getUrgencyBadge()}
             </View>
 
-            {/* Pickup Location */}
             <View style={styles.infoRow}>
               <Feather name="map-pin" size={16} color="#87CEFA" />
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>PICKUP LOCATION</Text>
-                <Text style={styles.infoValue}>{jobData.pickupLocation}</Text>
+                <Text style={styles.infoValue}>{currentJob.pickupLocation}</Text>
               </View>
             </View>
 
-            {/* Price and Distance */}
-            <View style={styles.detailsRow}>
-              <View style={styles.detailItem}>
-                <Feather name="dollar-sign" size={16} color="#87CEFA" />
-                <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>ESTIMATED</Text>
-                  <Text style={styles.detailValue}>{jobData.price} BHD</Text>
-                </View>
-              </View>
-
-              <View style={styles.detailItem}>
-                <Feather name="navigation" size={16} color="#87CEFA" />
-                <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>DISTANCE</Text>
-                  <Text style={styles.detailValue}>{jobData.distance}</Text>
-                </View>
-              </View>
-            </View>
           </View>
 
-          {/* Timer Card */}
           <View style={styles.timerCard}>
+
             <View style={styles.timerHeader}>
-              <View style={styles.timerLeft}>
-                <Feather name="clock" size={20} color="#EF4444" />
-                <Text style={styles.timerText}>RESPOND WITHIN</Text>
-              </View>
+              <Feather name="clock" size={20} color="#EF4444" />
               <Text style={styles.timerValue}>{timeLeft}s</Text>
             </View>
+
             <View style={styles.progressBarContainer}>
               <Animated.View
                 style={[styles.progressBar, { width: progressWidth }]}
               />
             </View>
+
           </View>
 
           <TouchableOpacity
-            style={[styles.detailsButton, isExpired && styles.disabledButton]}
+            style={styles.detailsButton}
             onPress={handleViewFullDetails}
-            disabled={isExpired}
-            activeOpacity={0.8}
           >
-            <Text style={styles.detailsButtonText}>VIEW FULL DETAILS</Text>
+            <Text style={styles.detailsButtonText}>
+              VIEW FULL DETAILS
+            </Text>
           </TouchableOpacity>
 
-          {/* Auto-decline message */}
           <Text style={styles.autoDeclineText}>
             REQUEST WILL AUTO-DECLINE IN {timeLeft} SECONDS
           </Text>
 
-          {/* Queue info */}
-          {parseInt(jobData.queueSize || '0') > 0 && (
-            <Text style={styles.queueText}>
-              {parseInt(jobData.isLastInQueue || 'false')
-                ? 'Last request in queue'
-                : `${jobData.queueSize} more request(s) in queue`}
-            </Text>
-          )}
-
-          {/* Notification Icon Image */}
           <View style={styles.notificationIconContainer}>
             <Image
               source={require("../../assets/provider/notification.png")}
@@ -495,11 +462,11 @@ const NewRequestNotification = () => {
               resizeMode="contain"
             />
           </View>
+
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 };
-
 
 export default NewRequestNotification;

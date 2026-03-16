@@ -13,10 +13,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
+
 
 const { height } = Dimensions.get('window');
 
-import {styles} from './styles/ServiceCompletedStyles';
+import { styles } from './styles/ServiceCompletedStyles';
 
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
@@ -24,11 +28,14 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 const ServiceCompletedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  
+
   const [rating, setRating] = useState(0);
+  const [selectedRating, setSelectedRating] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false); // NEW: Download loading state
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<any>(null);
+  const [hasExistingRating, setHasExistingRating] = useState(false);
 
   // Get data from params (as fallback)
   const bookingId = params.bookingId as string;
@@ -39,17 +46,17 @@ const ServiceCompletedScreen = () => {
   const durationParam = params.duration as string;
   const pickupLocationParam = params.pickupLocation as string;
   const completedAtParam = params.completedAt as string;
-  
+
   // Generate booking reference
   const bookingRef = `#YHIW-${bookingId?.slice(-5) || '96931'}`;
 
   // Format duration from seconds
   const formatDuration = (totalSeconds: number): string => {
-    if (!totalSeconds || totalSeconds === 0) return '35 minutes'; // fallback
-    
+    if (!totalSeconds || totalSeconds === 0) return '35 minutes';
+
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
-    
+
     if (hours > 0) {
       return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
     }
@@ -58,14 +65,29 @@ const ServiceCompletedScreen = () => {
 
   // Format time from ISO string
   const formatTime = (isoString: string): string => {
-    if (!isoString) return new Date().toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    if (!isoString) return new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     });
-    
-    return new Date(isoString).toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+
+    return new Date(isoString).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Format date for receipt
+  const formatDate = (isoString: string): string => {
+    if (!isoString) return new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    return new Date(isoString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
     });
   };
 
@@ -82,7 +104,6 @@ const ServiceCompletedScreen = () => {
 
       console.log('📡 Fetching job details for booking:', bookingId);
 
-      // Fetch job details from backend
       const response = await fetch(`${API_BASE_URL}/customer/${bookingId}/details`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -91,23 +112,14 @@ const ServiceCompletedScreen = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // The API returns data.job
         if (data.success && data.job) {
           setJobDetails(data.job);
-          console.log('✅ Job details loaded:', {
-            serviceName: data.job.serviceName,
-            provider: data.job.provider?.name,
-            timeTracking: data.job.timeTracking,
-            duration: data.job.timeTracking?.totalSeconds
-          });
+          console.log('✅ Job details loaded');
         }
-      } else {
-        console.log('⚠️ Failed to fetch job details:', response.status);
       }
 
-      // Also check for existing rating
       await checkExistingRating();
-      
+
     } catch (error) {
       console.error('❌ Error fetching job details:', error);
     } finally {
@@ -120,7 +132,7 @@ const ServiceCompletedScreen = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token || !bookingId) return;
 
-      const response = await fetch(`${API_BASE_URL}/job/${bookingId}/rating`, {
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rating`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -130,6 +142,8 @@ const ServiceCompletedScreen = () => {
         const data = await response.json();
         if (data.success && data.data?.rating) {
           setRating(data.data.rating);
+          setSelectedRating(data.data.rating);
+          setHasExistingRating(true);
         }
       }
     } catch (error) {
@@ -138,21 +152,29 @@ const ServiceCompletedScreen = () => {
   };
 
   const handleStarPress = (starIndex: number) => {
-    setRating(starIndex);
+    if (hasExistingRating) {
+      Alert.alert('Already Rated', 'You have already rated this service.');
+      return;
+    }
+    setSelectedRating(starIndex);
   };
 
   const cleanupBookingData = async () => {
     try {
       await AsyncStorage.removeItem('currentBookingId');
-      console.log('✅ Current bookingId removed from storage');
     } catch (error) {
       console.error('Error removing bookingId:', error);
     }
   };
 
   const handleSubmitRating = async () => {
-    if (rating === 0) {
-      Alert.alert('Rating Required', 'Please rate your experience before continuing.');
+    if (selectedRating === 0) {
+      Alert.alert('Rating Required', 'Please select a rating before continuing.');
+      return;
+    }
+
+    if (hasExistingRating) {
+      Alert.alert('Already Rated', 'You have already rated this service.');
       return;
     }
 
@@ -160,14 +182,12 @@ const ServiceCompletedScreen = () => {
 
     try {
       const token = await AsyncStorage.getItem('userToken');
-      
+
       if (!token) {
         Alert.alert('Error', 'Authentication token not found');
         setIsSubmitting(false);
         return;
       }
-
-      console.log('📡 Submitting rating for booking:', bookingId);
 
       const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/rate`, {
         method: 'POST',
@@ -176,28 +196,28 @@ const ServiceCompletedScreen = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          rating,
+          rating: selectedRating,
           providerId,
           bookingId,
         }),
       });
 
       const result = await response.json();
-      console.log('📡 Rating response:', response.status, result);
 
       if (response.ok && result.success) {
-        // Clean up the booking data after successful rating
+        setRating(selectedRating);
+        setHasExistingRating(true);
         await cleanupBookingData();
-        
+
         Alert.alert(
           'Thank You!',
           'Your feedback has been submitted successfully.',
           [{ text: 'OK' }]
         );
-        setRating(rating);
       } else {
         if (response.status === 400 && result.message?.includes('already rated')) {
           Alert.alert('Already Rated', 'You have already rated this service.');
+          await checkExistingRating();
         } else {
           throw new Error(result.message || 'Failed to submit rating');
         }
@@ -210,21 +230,316 @@ const ServiceCompletedScreen = () => {
     }
   };
 
-  const handleDownloadReceipt = () => {
-    Alert.alert('Download Receipt', 'Receipt will be downloaded to your device.');
+  const handleClearRating = () => {
+    if (!hasExistingRating) {
+      setSelectedRating(0);
+    }
+  };
+
+  // NEW: Generate HTML for PDF receipt
+  const generateReceiptHTML = () => {
+    const currentDate = new Date().toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const baseFee = parseFloat(totalAmount) * 0.75;
+    const distanceFee = parseFloat(totalAmount) * 0.15;
+    const serviceFee = parseFloat(totalAmount) * 0.10;
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>YHIW Receipt - ${bookingRef}</title>
+          <style>
+            body {
+              font-family: 'Helvetica', 'Arial', sans-serif;
+              margin: 0;
+              padding: 20px;
+              background-color: #f5f5f5;
+            }
+            .receipt-container {
+              max-width: 600px;
+              margin: 0 auto;
+              background-color: white;
+              border-radius: 20px;
+              padding: 30px;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px solid #68bdee;
+              padding-bottom: 20px;
+              margin-bottom: 20px;
+            }
+            .logo {
+              font-size: 28px;
+              font-weight: bold;
+              color: #333;
+              margin-bottom: 5px;
+            }
+            .logo span {
+              color: #68bdee;
+            }
+            .receipt-title {
+              font-size: 24px;
+              color: #333;
+              margin: 10px 0;
+            }
+            .booking-ref {
+              background-color: #f0f0f0;
+              padding: 10px;
+              border-radius: 10px;
+              font-size: 16px;
+              color: #666;
+              text-align: center;
+              margin: 15px 0;
+            }
+            .service-completed {
+              background-color: #4CAF50;
+              color: white;
+              padding: 8px 15px;
+              border-radius: 20px;
+              display: inline-block;
+              font-size: 14px;
+              margin-bottom: 15px;
+            }
+            .info-section {
+              margin: 20px 0;
+              padding: 15px;
+              background-color: #f9f9f9;
+              border-radius: 15px;
+            }
+            .section-title {
+              font-size: 16px;
+              font-weight: bold;
+              color: #68bdee;
+              margin-bottom: 10px;
+              text-transform: uppercase;
+            }
+            .info-row {
+              display: flex;
+              justify-content: space-between;
+              margin-bottom: 10px;
+              padding: 5px 0;
+              border-bottom: 1px dashed #e0e0e0;
+            }
+            .info-label {
+              color: #666;
+              font-size: 14px;
+            }
+            .info-value {
+              color: #333;
+              font-weight: 500;
+              font-size: 14px;
+              text-align: right;
+            }
+            .payment-details {
+              background-color: #e8f4fd;
+              padding: 15px;
+              border-radius: 15px;
+              margin: 20px 0;
+            }
+            .total-amount {
+              font-size: 24px;
+              font-weight: bold;
+              color: #333;
+              text-align: right;
+              margin: 10px 0;
+            }
+            .breakdown-row {
+              display: flex;
+              justify-content: space-between;
+              margin-bottom: 8px;
+              color: #666;
+              font-size: 14px;
+            }
+            .divider {
+              height: 1px;
+              background-color: #ddd;
+              margin: 15px 0;
+            }
+            .footer {
+              margin-top: 30px;
+              text-align: center;
+              color: #999;
+              font-size: 12px;
+            }
+            .thank-you {
+              font-size: 18px;
+              color: #4CAF50;
+              text-align: center;
+              margin: 20px 0;
+            }
+            .provider-rating {
+              text-align: center;
+              margin: 15px 0;
+              padding: 10px;
+              background-color: #fff3cd;
+              border-radius: 10px;
+            }
+            .star-rating {
+              color: #FFD700;
+              font-size: 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-container">
+            <div class="header">
+              <div class="logo">YHIW <span>Services</span></div>
+              <div class="receipt-title">Service Receipt</div>
+              <div class="service-completed">✓ Service Completed</div>
+              <div class="booking-ref">Booking ID: ${bookingRef}</div>
+            </div>
+
+            <div class="info-section">
+              <div class="section-title">Service Details</div>
+              <div class="info-row">
+                <span class="info-label">Service Type:</span>
+                <span class="info-value">${serviceType}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Provider:</span>
+                <span class="info-value">${providerName}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Provider ID:</span>
+                <span class="info-value">${providerId}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Duration:</span>
+                <span class="info-value">${duration}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Date:</span>
+                <span class="info-value">${formatDate(completedAtParam)}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Completion Time:</span>
+                <span class="info-value">${completionTime}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Location:</span>
+                <span class="info-value">${pickupLocation}</span>
+              </div>
+            </div>
+
+            <div class="payment-details">
+              <div class="section-title">Payment Summary</div>
+              <div class="breakdown-row">
+                <span>Base Fee:</span>
+                <span>${baseFee.toFixed(2)} BHD</span>
+              </div>
+              <div class="breakdown-row">
+                <span>Distance Fee:</span>
+                <span>${distanceFee.toFixed(2)} BHD</span>
+              </div>
+              <div class="breakdown-row">
+                <span>Service Fee:</span>
+                <span>${serviceFee.toFixed(2)} BHD</span>
+              </div>
+              <div class="divider"></div>
+              <div class="breakdown-row" style="font-weight: bold;">
+                <span>Total Amount:</span>
+                <span>${parseFloat(totalAmount).toFixed(2)} BHD</span>
+              </div>
+              <div class="info-row" style="margin-top: 10px;">
+                <span class="info-label">Payment Method:</span>
+                <span class="info-value">Cash</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Payment Status:</span>
+                <span class="info-value" style="color: #4CAF50;">Paid ✓</span>
+              </div>
+            </div>
+
+            ${hasExistingRating ? `
+              <div class="provider-rating">
+                <div class="section-title">Your Rating</div>
+                <div class="star-rating">
+                  ${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}
+                </div>
+                <div style="margin-top: 5px;">${rating} out of 5 stars</div>
+              </div>
+            ` : ''}
+
+            <div class="thank-you">
+              Thank you for choosing YHIW!
+            </div>
+
+            <div class="footer">
+              <p>Receipt generated on ${currentDate}</p>
+              <p>For any inquiries, please contact support@yhiw.com</p>
+              <p>This is a computer-generated receipt. No signature required.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+
+
+
+
+  const handleDownloadReceipt = async () => {
+    try {
+      setIsDownloading(true);
+
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+      if (!isSharingAvailable) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+
+      // Generate PDF
+      const { uri } = await Print.printToFileAsync({
+        html: generateReceiptHTML(),
+        base64: false
+      });
+
+      console.log('📄 PDF generated at:', uri);
+
+      // ✅ Share directly — no need to move the file
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Download Receipt',
+        UTI: 'com.adobe.pdf'
+      });
+
+      Alert.alert('Success', 'Receipt generated successfully!', [{ text: 'OK' }]);
+
+    } catch (error) {
+      console.error('❌ Error downloading receipt:', error);
+      Alert.alert('Download Failed', 'Unable to generate receipt. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+
+
+  // Optional: Add screenshot hint
+  const handleTakeScreenshot = () => {
+    Alert.alert(
+      'Take Screenshot',
+      'You can take a screenshot of this screen to save your receipt.\n\nPress Power + Volume Down buttons simultaneously on most devices.',
+      [{ text: 'Got it' }]
+    );
   };
 
   const handleBackToHome = async () => {
     try {
-      // Remove the current bookingId from AsyncStorage
       await AsyncStorage.removeItem('currentBookingId');
-      console.log('✅ Current bookingId removed from storage');
-      
-      // Navigate to home screen
       router.push('/(customer)/Home');
     } catch (error) {
       console.error('Error removing bookingId:', error);
-      // Still navigate even if removal fails
       router.push('/(customer)/Home');
     }
   };
@@ -233,36 +548,24 @@ const ServiceCompletedScreen = () => {
   const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
   const serviceType = jobDetails?.serviceName || serviceTypeParam || 'Quick Tow (Flatbed)';
   const totalAmount = jobDetails?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
-  
-  // Get duration from timeTracking (saved by provider) or fallback to param
+
   const durationSeconds = jobDetails?.timeTracking?.totalSeconds || 0;
   const duration = formatDuration(durationSeconds);
-  
-  // Log the duration for debugging
-  useEffect(() => {
-    if (jobDetails?.timeTracking) {
-      console.log('⏱️ Timer data from API:', {
-        seconds: jobDetails.timeTracking.totalSeconds,
-        formatted: duration,
-        isPaused: jobDetails.timeTracking.isPaused
-      });
-    }
-  }, [jobDetails]);
-  
+
   const pickupLocation = jobDetails?.pickup?.address || pickupLocationParam || '23 Main Street, Manama';
-  
-  // Get completion time from timeline or use param
+
   const completionTime = jobDetails?.timeline?.completedAt || completedAtParam
     ? formatTime(jobDetails?.timeline?.completedAt || completedAtParam)
-    : new Date().toLocaleTimeString([], { 
-        hour: '2-digit', 
-        minute: '2-digit' 
-      });
-  
-  // Calculate receipt breakdown
+    : new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
   const baseFee = parseFloat(totalAmount) * 0.75;
   const distanceFee = parseFloat(totalAmount) * 0.15;
   const serviceFee = parseFloat(totalAmount) * 0.10;
+
+  const displayRating = hasExistingRating ? rating : selectedRating;
 
   if (isLoading) {
     return (
@@ -356,37 +659,62 @@ const ServiceCompletedScreen = () => {
 
         {/* Rate Your Experience Card */}
         <View style={[styles.ratingCard, styles.cardWithBorder]}>
-          <Text style={styles.cardTitle}>RATE YOUR EXPERIENCE</Text>
+          <Text style={styles.cardTitle}>
+            {hasExistingRating ? 'YOUR RATING' : 'RATE YOUR EXPERIENCE'}
+          </Text>
+
           <View style={styles.starsContainer}>
             {[1, 2, 3, 4, 5].map((star) => (
               <TouchableOpacity
                 key={star}
                 onPress={() => handleStarPress(star)}
                 activeOpacity={0.7}
-                disabled={isSubmitting || rating > 0}
+                disabled={hasExistingRating || isSubmitting}
               >
                 <Ionicons
-                  name={star <= rating ? 'star' : 'star-outline'}
+                  name={star <= displayRating ? 'star' : 'star-outline'}
                   size={42}
-                  color={star <= rating ? '#FFD700' : '#d0d0d0'}
+                  color={star <= displayRating ? '#FFD700' : '#d0d0d0'}
                 />
               </TouchableOpacity>
             ))}
           </View>
-          
-          {rating > 0 && !isSubmitting && (
+
+          {!hasExistingRating && selectedRating > 0 && (
+            <Text style={styles.selectedRatingHint}>
+              You selected {selectedRating} star{selectedRating > 1 ? 's' : ''}
+            </Text>
+          )}
+
+          {!hasExistingRating && selectedRating > 0 && !isSubmitting && (
             <TouchableOpacity
               style={styles.submitRatingButton}
               onPress={handleSubmitRating}
               disabled={isSubmitting}
               activeOpacity={0.7}
             >
-              <Text style={styles.submitRatingText}>Submit Rating</Text>
+              <Text style={styles.submitRatingText}>Submit {selectedRating}-Star Rating</Text>
+            </TouchableOpacity>
+          )}
+
+          {!hasExistingRating && selectedRating > 0 && !isSubmitting && (
+            <TouchableOpacity
+              style={styles.clearRatingButton}
+              onPress={handleClearRating}
+              disabled={isSubmitting}
+            >
+              <Text style={styles.clearRatingText}>Clear Selection</Text>
             </TouchableOpacity>
           )}
 
           {isSubmitting && (
             <ActivityIndicator size="small" color="#68bdee" style={{ marginTop: 15 }} />
+          )}
+
+          {hasExistingRating && (
+            <Text style={styles.alreadyRatedText}>
+              Thank you for your feedback!
+            </Text>
           )}
         </View>
 
@@ -416,13 +744,30 @@ const ServiceCompletedScreen = () => {
             <Text style={styles.receiptTotalValue}>{parseFloat(totalAmount).toFixed(2)} BHD</Text>
           </View>
 
+          {/* Updated Download Button with loading state */}
           <TouchableOpacity
-            style={styles.downloadButton}
+            style={[styles.downloadButton, isDownloading && styles.downloadButtonDisabled]}
             onPress={handleDownloadReceipt}
             activeOpacity={0.7}
+            disabled={isDownloading}
           >
-            <Ionicons name="download-outline" size={20} color="#68bdee" />
-            <Text style={styles.downloadButtonText}>Download Receipt</Text>
+            {isDownloading ? (
+              <ActivityIndicator size="small" color="#68bdee" />
+            ) : (
+              <>
+                <Ionicons name="download-outline" size={20} color="#68bdee" />
+                <Text style={styles.downloadButtonText}>Download Receipt</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          {/* Optional screenshot hint */}
+          <TouchableOpacity
+            style={styles.screenshotHint}
+            onPress={handleTakeScreenshot}
+          >
+            <Ionicons name="camera-outline" size={16} color="#999" />
+            <Text style={styles.screenshotHintText}>Or take a screenshot</Text>
           </TouchableOpacity>
         </View>
 
@@ -438,7 +783,7 @@ const ServiceCompletedScreen = () => {
           style={styles.homeButton}
           onPress={handleBackToHome}
           activeOpacity={0.8}
-          disabled={isSubmitting}
+          disabled={isSubmitting || isDownloading}
         >
           <Image
             source={require('../../assets/customer/dollar_icon.png')}
@@ -451,7 +796,5 @@ const ServiceCompletedScreen = () => {
     </View>
   );
 };
-
-
 
 export default ServiceCompletedScreen;

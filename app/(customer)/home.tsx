@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import {styles} from './styles/HomeStyles';
+import { styles } from './styles/HomeStyles';
 
 // Define types for our data structures
 type Service = {
@@ -45,6 +45,8 @@ const HomeScreen = () => {
   const [showSearchResults, setShowSearchResults] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [navigationInProgress, setNavigationInProgress] = useState<boolean>(false);
+  const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
 
   // Check for existing booking whenever screen comes into focus
   useFocusEffect(
@@ -52,181 +54,236 @@ const HomeScreen = () => {
       checkExistingBooking();
     }, [])
   );
-const checkExistingBooking = async () => {
-  if (navigationInProgress) {
-    console.log('🏠 Navigation already in progress, skipping...');
-    return;
-  }
 
-  try {
-    setIsLoading(true);
-    
-    const currentBookingId = await AsyncStorage.getItem('currentBookingId');
-    const currentBookingStatus = await AsyncStorage.getItem('currentBookingStatus');
-    const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
-    
-    console.log('🏠 HomeScreen - Checking existing booking:', { 
-      currentBookingId, 
-      currentBookingStatus,
-      hasActiveBookings: !!activeBookingsJson
-    });
-    
-    if (currentBookingId) {
-      setNavigationInProgress(true);
-      
-      // Get additional booking details from activeBookings
-      let customerName = 'Customer';
-      let pickupLocation = '';
-      let serviceType = '';
-      let totalAmount = '0';
-      let duration = '';
-      let providerName = '';
-      let providerId = '';
-      let providerPhone = '';
-      
-      if (activeBookingsJson) {
+
+
+
+  // In HomeScreen.tsx - replace checkExistingBooking with this:
+
+  const checkExistingBooking = async () => {
+    if (navigationInProgress) {
+      console.log('🏠 Navigation already in progress, skipping...');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+
+      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+
+      console.log('🏠 HomeScreen - Checking existing booking:', { currentBookingId });
+
+      if (currentBookingId) {
+        setNavigationInProgress(true);
+
+        // ✅ MAKE API CALL TO GET REAL STATUS
+        const token = await AsyncStorage.getItem('userToken');
+        if (!token) {
+          setIsLoading(false);
+          setNavigationInProgress(false);
+          return;
+        }
+
         try {
-          const activeBookings = JSON.parse(activeBookingsJson);
-          const currentBooking = activeBookings.find((b: any) => b.bookingId === currentBookingId);
-          if (currentBooking) {
-            customerName = currentBooking.customerName || 'Customer';
-            pickupLocation = currentBooking.pickupLocation || '';
-            serviceType = currentBooking.serviceType || '';
-            totalAmount = currentBooking.totalAmount || '0';
-            duration = currentBooking.duration || '';
-            providerName = currentBooking.providerName || 'Provider';
-            providerId = currentBooking.providerId || '';
-            providerPhone = currentBooking.providerPhone || '';
+          const response = await fetch(`${API_BASE_URL}/jobs/${currentBookingId}/status`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (!response.ok) {
+            // If 404, booking doesn't exist anymore - clean up
+            if (response.status === 404) {
+              await AsyncStorage.removeItem('currentBookingId');
+              setIsLoading(false);
+              setNavigationInProgress(false);
+              return;
+            }
+            throw new Error('Failed to fetch status');
           }
-        } catch (e) {
-          console.error('Error parsing activeBookings:', e);
+
+          const data = await response.json();
+          console.log('📊 HomeScreen - Real status from backend:', data);
+
+          // Get additional booking details from activeBookings or fetch them
+          let customerName = 'Customer';
+          let pickupLocation = '';
+          let serviceType = '';
+          let totalAmount = '0';
+          let duration = '';
+          let providerName = '';
+          let providerId = '';
+          let providerPhone = '';
+
+          const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+          if (activeBookingsJson) {
+            try {
+              const activeBookings = JSON.parse(activeBookingsJson);
+              const currentBooking = activeBookings.find((b: any) => b.bookingId === currentBookingId);
+              if (currentBooking) {
+                customerName = currentBooking.customerName || 'Customer';
+                pickupLocation = currentBooking.pickupLocation || '';
+                serviceType = currentBooking.serviceType || '';
+                totalAmount = currentBooking.totalAmount || '0';
+                duration = currentBooking.duration || '';
+                providerName = currentBooking.providerName || 'Provider';
+                providerId = currentBooking.providerId || '';
+                providerPhone = currentBooking.providerPhone || '';
+              }
+            } catch (e) {
+              console.error('Error parsing activeBookings:', e);
+            }
+          }
+
+          // Small delay to ensure navigation doesn't conflict with mounting
+          setTimeout(async () => {
+            console.log(`➡️ Navigating with bookingId: ${currentBookingId}, status: ${data.status}`);
+
+            // ===== HANDLE ALL POSSIBLE STATUSES =====
+            switch (data.status) {
+              case 'searching':
+                // Still looking for provider
+                router.replace({
+                  pathname: '/(customer)/FindingProvider',
+                  params: { bookingId: currentBookingId }
+                });
+                break;
+
+              case 'accepted':
+                router.replace({
+                  pathname: '/(customer)/ProviderAssigned',
+                  params: {
+                    bookingId: currentBookingId,
+                    providerName: providerName,
+                    providerId: providerId,
+                    providerPhone: providerPhone
+                  }
+                });
+                break;
+
+              case 'in_progress':
+                // Service is in progress
+                router.replace({
+                  pathname: '/(customer)/ServiceInProgress',
+                  params: {
+                    bookingId: currentBookingId,
+                    providerName: providerName,
+                    providerId: providerId,
+                    providerPhone: providerPhone,
+                    serviceType: serviceType,
+                    pickupLocation: pickupLocation,
+                    totalAmount: totalAmount,
+                    startedAt: data.startedAt
+                  }
+                });
+                break;
+
+              case 'completed':
+                // Service completed but not yet confirmed by customer
+                router.replace({
+                  pathname: '/(customer)/ServiceCompleted',
+                  params: {
+                    bookingId: currentBookingId,
+                    providerName: providerName,
+                    serviceType: serviceType,
+                    totalAmount: totalAmount,
+                    duration: duration,
+                    pickupLocation: pickupLocation,
+                    completedAt: data.completedAt
+                  }
+                });
+                break;
+
+              case 'completed_confirmed':
+                // Service fully completed - CLEAN UP
+                console.log('✅ Service completed_confirmed - Clearing storage data');
+                await AsyncStorage.removeItem('currentBookingId');
+                await AsyncStorage.removeItem('currentBookingStatus');
+
+                // Remove from activeBookings
+                if (activeBookingsJson) {
+                  try {
+                    const activeBookings = JSON.parse(activeBookingsJson);
+                    const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
+                    await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
+                  } catch (e) {
+                    console.error('Error updating activeBookings:', e);
+                  }
+                }
+
+                // Stay on home screen (no navigation)
+                setIsLoading(false);
+                setNavigationInProgress(false);
+                break;
+
+              case 'cancelled':
+                // Job was cancelled
+                console.log('❌ Job was cancelled - Showing alert and cleaning up');
+
+                // Clean up storage
+                await AsyncStorage.removeItem('currentBookingId');
+                if (activeBookingsJson) {
+                  try {
+                    const activeBookings = JSON.parse(activeBookingsJson);
+                    const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
+                    await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
+                  } catch (e) {
+                    console.error('Error updating activeBookings:', e);
+                  }
+                }
+
+                // Show alert
+                Alert.alert(
+                  'Service Cancelled',
+                  data.cancelledBy === 'provider'
+                    ? `The provider has cancelled this service.\n\nReason: ${data.cancellationReason || 'No reason provided'}`
+                    : `This service was cancelled.\n\nReason: ${data.cancellationReason || 'No reason provided'}`,
+                  [{ text: 'OK' }]
+                );
+
+                // Stay on home screen
+                setIsLoading(false);
+                setNavigationInProgress(false);
+                break;
+
+              case 'expired':
+                // Job expired (no provider found)
+                console.log('⏰ Job expired - Cleaning up');
+                await AsyncStorage.removeItem('currentBookingId');
+
+                // Remove from activeBookings
+                if (activeBookingsJson) {
+                  try {
+                    const activeBookings = JSON.parse(activeBookingsJson);
+                    const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
+                    await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
+                  } catch (e) {
+                    console.error('Error updating activeBookings:', e);
+                  }
+                }
+
+                // Stay on home screen
+                setIsLoading(false);
+                setNavigationInProgress(false);
+                break;
+
+              default:
+                console.log('Unknown status:', data.status);
+                setIsLoading(false);
+                setNavigationInProgress(false);
+            }
+          }, 100);
+        } catch (error) {
+          console.error('Error fetching job status:', error);
+          setIsLoading(false);
+          setNavigationInProgress(false);
         }
+      } else {
+        setIsLoading(false);
       }
-      
-      // Small delay to ensure navigation doesn't conflict with mounting
-      setTimeout(async () => {
-        console.log(`➡️ Navigating with bookingId: ${currentBookingId}, status: ${currentBookingStatus}`);
-        
-        // ===== HANDLE DIFFERENT STATUSES =====
-        if (currentBookingStatus === 'accepted') {
-          // Provider accepted, waiting for them to start
-          router.replace({
-            pathname: '/(customer)/FindingProvider',
-            params: {
-              bookingId: currentBookingId,
-              customerName: customerName,
-              pickupLocation: pickupLocation
-            }
-          });
-        } 
-        else if (currentBookingStatus === 'in_progress' || currentBookingStatus === 'started') {
-          // Service is in progress
-          router.replace({
-            pathname: '/(customer)/ServiceInProgress',
-            params: {
-              bookingId: currentBookingId,
-              providerName: providerName,
-              providerId: providerId,
-              providerPhone: providerPhone,
-              serviceType: serviceType,
-              pickupLocation: pickupLocation,
-              totalAmount: totalAmount
-            }
-          });
-        }
-        else if (currentBookingStatus === 'completed_confirmed') {
-          // Service is fully completed and confirmed - CLEAR ALL STORAGE
-          console.log('✅ Service completed_confirmed - Clearing storage data');
-          
-          try {
-            // Get the booking data before clearing
-            const bookingData = {
-              bookingId: currentBookingId,
-              serviceType: serviceType,
-              totalAmount: totalAmount,
-              duration: duration,
-              pickupLocation: pickupLocation,
-              providerName: providerName
-            };
-            
-            // Clear ALL booking-related data from AsyncStorage
-            await AsyncStorage.removeItem('currentBookingId');
-            await AsyncStorage.removeItem('currentBookingStatus');
-            
-            // Update activeBookings by removing this completed booking
-            if (activeBookingsJson) {
-              try {
-                const activeBookings = JSON.parse(activeBookingsJson);
-                const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
-                await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
-                console.log('✅ Removed completed booking from activeBookings');
-              } catch (e) {
-                console.error('Error updating activeBookings:', e);
-              }
-            }
-            
-            // Also clear any other booking-related items
-            await AsyncStorage.removeItem('currentBookingDetails');
-            await AsyncStorage.removeItem('currentServiceType');
-            
-            console.log('➡️ Navigating to ServiceCompleted with cleared storage');
-            
-            // Navigate to ServiceCompleted screen
-            router.replace({
-              pathname: '/(customer)/ServiceCompleted',
-              params: bookingData
-            });
-            
-          } catch (error) {
-            console.error('Error clearing storage for completed_confirmed:', error);
-            // Still navigate even if storage clear fails
-            router.replace({
-              pathname: '/(customer)/ServiceCompleted',
-              params: {
-                bookingId: currentBookingId,
-                serviceType: serviceType,
-                totalAmount: totalAmount,
-                duration: duration,
-                pickupLocation: pickupLocation,
-                providerName: providerName
-              }
-            });
-          }
-        }
-        else if (currentBookingStatus === 'completed') {
-          // Service completed but not yet confirmed by customer
-          router.replace({
-            pathname: '/(customer)/ServiceCompleted',
-            params: {
-              bookingId: currentBookingId,
-              providerName: providerName,
-              serviceType: serviceType,
-              totalAmount: totalAmount,
-              duration: duration,
-              pickupLocation: pickupLocation
-            }
-          });
-        }
-        else {
-          // Default/fallback - FindingProvider
-          router.replace({
-            pathname: '/(customer)/FindingProvider',
-            params: {
-              bookingId: currentBookingId,
-              customerName: customerName,
-              pickupLocation: pickupLocation
-            }
-          });
-        }
-      }, 100);
-    } else {
+    } catch (error) {
+      console.error('Error checking booking ID:', error);
       setIsLoading(false);
     }
-  } catch (error) {
-    console.error('Error checking booking ID:', error);
-    setIsLoading(false);
-  }
-};
+  };
 
 
   // Also check when component mounts (initial load)

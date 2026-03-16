@@ -69,34 +69,49 @@ const SignInScreen = () => {
 
     loadSavedCredentials();
   }, []);
-
   const fetchUserDataFromBackend = async (firebaseUserId: string): Promise<UserData | null> => {
     try {
       const backendUrl = 'https://yhiw-backend.onrender.com';
-      
-      console.log('Fetching user data for Firebase UID:', firebaseUserId);
-      
-      const response = await fetch(`${backendUrl}/api/users/${firebaseUserId}`);
+
+      console.log('1. Fetching user data for Firebase UID:', firebaseUserId);
+
+      // Check what token we have (if any)
+      const existingToken = await AsyncStorage.getItem('userToken');
+      console.log('2. Existing token in storage:', existingToken ? 'Yes (length: ' + existingToken.length + ')' : 'No');
+
+      const response = await fetch(`${backendUrl}/api/users/${firebaseUserId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          // Don't send any auth header for signin - it's public!
+        },
+      });
+
+      console.log('3. Response status:', response.status);
+      console.log('4. Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
-        console.warn('Failed to fetch user data from backend:', response.status);
+        const errorText = await response.text();
+        console.log('5. Error response body:', errorText);
         return null;
       }
 
       const data: BackendResponse = await response.json();
-      
+      console.log('6. Success response data:', JSON.stringify(data, null, 2));
+
       if (data.success && data.data) {
-        console.log('User data fetched from backend:', {
-          id: data.data.id,
-          email: data.data.email,
-          role: data.data.role
-        });
+        console.log('7. New token received:', data.data.token.substring(0, 20) + '...');
+
+        // Save the new token
+        await AsyncStorage.setItem('userToken', data.data.token);
+        await AsyncStorage.setItem('userData', JSON.stringify(data.data));
+
         return data.data;
       }
-      
+
       return null;
     } catch (error) {
-      console.error('Error fetching user data from backend:', error);
+      console.error('8. Error fetching user data:', error);
       return null;
     }
   };
@@ -153,12 +168,12 @@ const SignInScreen = () => {
       if (userData.role !== 'customer') {
         // Sign out the user
         await signInWithEmailAndPassword(auth, email, password);
-        
+
         // Show appropriate message based on role
-        const message = userData.role === 'provider' 
+        const message = userData.role === 'provider'
           ? 'This account is registered as a service provider. Please use the provider app to sign in.'
           : 'You do not have customer access. Please contact support.';
-        
+
         Alert.alert('Access Denied', message, [{ text: 'OK' }]);
         setIsLoading(false);
         return;
@@ -167,7 +182,7 @@ const SignInScreen = () => {
       // Save the JWT token and user data from backend
       await AsyncStorage.setItem('userToken', userData.token);
       await AsyncStorage.setItem('userData', JSON.stringify(userData));
-      
+
       // Store remember me preference
       if (rememberMe) {
         await AsyncStorage.setItem('rememberMe', 'true');
@@ -230,7 +245,7 @@ const SignInScreen = () => {
   };
 
   const handleSignUpNavigation = () => {
-    router.push('/customer_signup');  
+    router.push('/customer_signup');
   };
 
   const handleForgotPassword = () => {

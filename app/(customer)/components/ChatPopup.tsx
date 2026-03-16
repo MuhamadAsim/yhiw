@@ -31,7 +31,7 @@ interface ChatPopupProps {
   onClose: () => void;
   bookingId: string;
   providerName: string;
-  // No need to pass providerId - backend will get from token and booking
+  onChatClosed?: () => void; // Add this prop
 }
 
 const ChatPopup: React.FC<ChatPopupProps> = ({
@@ -39,6 +39,7 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
   onClose,
   bookingId,
   providerName,
+  onChatClosed,
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -58,6 +59,10 @@ const ChatPopup: React.FC<ChatPopupProps> = ({
       if (pollingTimer.current) {
         clearTimeout(pollingTimer.current);
         pollingTimer.current = null;
+      }
+      // Call onChatClosed when modal closes
+      if (onChatClosed) {
+        onChatClosed();
       }
     }
 

@@ -1,4 +1,4 @@
-// HomePage.tsx - Complete with translations and language field in API requests
+// HomePage.tsx - Complete with immediate UI feedback for location switching
 import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -16,17 +16,16 @@ import {
   SafeAreaView,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   Vibration,
-  View,
+  View
 } from "react-native";
 import MapView, { Marker, Region } from 'react-native-maps';
 import Sidebar from "./components/Sidebar";
 import { styles } from './styles/HomeStyles';
-import { t, getServiceName, tStatus, type Language } from './translations/HomeTranslation';
+import { getServiceName, t, tStatus, type Language } from './translations/HomeTranslation';
 
 // Get screen width for styles
 const { width, height } = Dimensions.get('window');
@@ -158,16 +157,17 @@ const HomePage = () => {
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
   const [performanceData, setPerformanceData] = useState<PerformanceData>({
-    earnings: 245,
-    jobs: 8,
-    hours: 5.5,
-    rating: 4.8,
+    earnings: 0,
+    jobs: 0,
+    hours: 0,
+    rating: 0, // Changed from 4.8 to 0
   });
   const [recentJobs, setRecentJobs] = useState<any[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
   const [providerData, setProviderData] = useState<ProviderData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [currentLanguage, setCurrentLanguage] = useState<Language>('en');
+  const [locationUpdateStatus, setLocationUpdateStatus] = useState<'idle' | 'updating' | 'success' | 'error'>('idle');
 
   // Store multiple incoming job requests in a queue
   const [jobRequestQueue, setJobRequestQueue] = useState<JobRequestQueue>({});
@@ -198,16 +198,7 @@ const HomePage = () => {
     longitudeDelta: 0.05,
   });
 
-  // Add this helper function at the top with your other interfaces
-  const isValidCoordinate = (coord: any): coord is { latitude: number; longitude: number } => {
-    return coord &&
-      typeof coord.latitude === 'number' &&
-      typeof coord.longitude === 'number' &&
-      !isNaN(coord.latitude) &&
-      !isNaN(coord.longitude) &&
-      coord.latitude !== 0 &&
-      coord.longitude !== 0;
-  };
+
 
   // Helper to create a safe region
   const createSafeRegion = (
@@ -292,7 +283,7 @@ const HomePage = () => {
             const locationData: LocationData = {
               latitude: lat,
               longitude: lng,
-              address: 'Restored location', // Keep as string literal, not using t()
+              address: 'Restored location',
               isManual: false,
               timestamp: data.data.lastSeen || new Date().toISOString(),
             };
@@ -311,9 +302,9 @@ const HomePage = () => {
   useEffect(() => {
     const initializeHomePage = async () => {
       await loadLanguage();
-      await loadProviderData();        // ✅ This sets providerData with token and firebaseUserId
+      await loadProviderData();
       await checkLocationPermission();
-      await checkProviderStatus();      // ✅ This runs AFTER loadProviderData() - SHOULD work
+      await checkProviderStatus();
       await loadSeenJobsFromStorage();
       await checkActiveJob();
     };
@@ -374,6 +365,16 @@ const HomePage = () => {
       setCurrentJobRequest(jobRequestQueue[nextJobId]);
     }
   }, [jobRequestQueue, hasActiveJob]);
+
+  // Reset location update status after 3 seconds
+  useEffect(() => {
+    if (locationUpdateStatus === 'success' || locationUpdateStatus === 'error') {
+      const timer = setTimeout(() => {
+        setLocationUpdateStatus('idle');
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [locationUpdateStatus]);
 
   // Add this function to check for active job
   const checkActiveJob = async () => {
@@ -610,9 +611,9 @@ const HomePage = () => {
     try {
       // Add language parameter to URL
       const url = await addLanguageParam(`${API_BASE_URL}/provider/${firebaseUserId}/info`);
-      
+
       console.log('📡 Fetching provider data from:', url);
-      
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -624,8 +625,8 @@ const HomePage = () => {
         const data = await response.json();
         if (data.success) {
           console.log('✅ Received provider data:', data.data);
-          
-          // Update provider data with profile information
+
+          // Update provider data with profile information (uses LIFETIME rating)
           if (data.data.profile) {
             setProviderData(prev => {
               // Create a new object with all required fields
@@ -633,8 +634,8 @@ const HomePage = () => {
                 id: prev?.id || data.data.profile.id || 'PRV-001234',
                 name: data.data.profile.name || prev?.name || 'AHMED AL-KHALIFA',
                 providerId: data.data.profile.providerId || prev?.providerId || 'PRV-001234',
-                rating: data.data.profile.rating || prev?.rating || 4.8,
-                jobsCompleted: data.data.profile.totalJobs || prev?.jobsCompleted || 234,
+                rating: data.data.profile.rating || prev?.rating || 4.8, // LIFETIME rating for profile
+                jobsCompleted: data.data.profile.totalJobs || prev?.jobsCompleted || 234, // LIFETIME jobs
                 isVerified: data.data.profile.isVerified || prev?.isVerified || true,
                 firebaseUserId: prev?.firebaseUserId || firebaseUserId,
                 token: prev?.token || token,
@@ -642,35 +643,61 @@ const HomePage = () => {
               return updatedProvider;
             });
           }
-          
-          // Update performance data
-          setPerformanceData({
-            earnings: data.data.performance?.earnings || 0,
-            jobs: data.data.performance?.jobs || 0,
-            hours: data.data.performance?.hours || 0,
-            rating: data.data.performance?.rating || 4.8,
-          });
-          
+
+          // Update performance data with TODAY'S data (including today's rating)
+          if (data.data.performance) {
+            setPerformanceData({
+              earnings: data.data.performance.earnings || 0, // Today's earnings
+              jobs: data.data.performance.jobs || 0,        // Today's job count
+              hours: data.data.performance.hours || 0,      // Today's hours
+              rating: data.data.performance.rating || 0,    // Today's rating (will be 0 if no jobs)
+            });
+          } else {
+            // Set default zero values if no performance data
+            setPerformanceData({
+              earnings: 0,
+              jobs: 0,
+              hours: 0,
+              rating: 0,
+            });
+          }
+
           // Update recent jobs if available
           if (data.data.recentJobs && data.data.recentJobs.length > 0) {
             setRecentJobs(data.data.recentJobs);
+          } else {
+            setRecentJobs([]);
           }
         }
       } else {
         console.log('⚠️ Failed to fetch performance data:', response.status);
+        // Set default zero values on error
+        setPerformanceData({
+          earnings: 0,
+          jobs: 0,
+          hours: 0,
+          rating: 0,
+        });
+        setRecentJobs([]);
       }
     } catch (error) {
-      console.error('Error fetching performance data, using defaults:', error);
-      // Keep default values
+      console.error('Error fetching performance data:', error);
+      // Set default zero values on error
+      setPerformanceData({
+        earnings: 0,
+        jobs: 0,
+        hours: 0,
+        rating: 0,
+      });
+      setRecentJobs([]);
     }
   };
-
   // Try to fetch recent jobs, but use defaults if fails
   const fetchRecentJobs = async (firebaseUserId: string, token: string) => {
     try {
       // Add language parameter to URL
       const url = await addLanguageParam(`${API_BASE_URL}/jobs/provider/${firebaseUserId}/recent`);
-      
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -690,17 +717,19 @@ const HomePage = () => {
       setRecentJobs([]);
     }
   };
-
   const getCurrentLocation = async (isManualSelection: boolean = false) => {
-    if (currentLocation?.isManual && !isManualSelection) {
-      return currentLocation;
-    }
+    // Remove this condition - we want to always get new location when switching to auto
+    // if (currentLocation?.isManual && !isManualSelection) {
+    //   return currentLocation;
+    // }
 
     if (!locationPermission) {
       return null;
     }
 
     setIsLoadingLocation(true);
+    setLocationUpdateStatus('updating');
+
     try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
@@ -724,6 +753,7 @@ const HomePage = () => {
       };
 
       setCurrentLocation(locationData);
+      setLocationUpdateStatus('success');
 
       // If online and not manual, location will be sent by tracking interval
       // If manual, send once
@@ -734,13 +764,13 @@ const HomePage = () => {
       return locationData;
     } catch (error) {
       console.error('Error getting location:', error);
+      setLocationUpdateStatus('error');
       Alert.alert(t('error', currentLanguage), t('locationError', currentLanguage));
       return null;
     } finally {
       setIsLoadingLocation(false);
     }
   };
-
   const sendLocationToBackend = async (location: LocationData) => {
     if (!providerData?.firebaseUserId || !providerData?.token) return;
 
@@ -760,7 +790,7 @@ const HomePage = () => {
           address: location.address,
           isManual: location.isManual,
           timestamp: location.timestamp,
-          language: lang, // Add language to body for POST requests
+          language: lang,
         }),
       });
 
@@ -771,11 +801,12 @@ const HomePage = () => {
       console.error('Error sending location to backend:', error);
     }
   };
-
   const startLocationTracking = () => {
     if (locationInterval.current) {
       clearInterval(locationInterval.current);
     }
+
+    console.log(`📍 Starting location tracking - Current mode: ${currentLocation?.isManual ? 'MANUAL' : 'AUTO'}`);
 
     // Send location every 10 seconds
     locationInterval.current = setInterval(async () => {
@@ -785,21 +816,31 @@ const HomePage = () => {
         return;
       }
 
+      console.log(`📍 Tracking interval - Mode: ${currentLocation.isManual ? 'MANUAL' : 'AUTO'}`);
+
       if (!currentLocation.isManual) {
         // Auto mode - get new GPS location
+        console.log('📍 Auto mode: fetching new GPS location');
         const newLocation = await getCurrentLocation(false);
         if (newLocation && isOnline) {
           await sendLocationToBackend(newLocation);
+          // Update current location with new GPS coordinates but keep isManual = false
+          setCurrentLocation(prev => ({
+            ...prev!,
+            latitude: newLocation.latitude,
+            longitude: newLocation.longitude,
+            address: newLocation.address,
+            timestamp: newLocation.timestamp
+          }));
         }
       } else {
         // Manual mode - resend the same location
+        console.log('📍 Manual mode: resending same location');
         if (isOnline) {
           await sendLocationToBackend(currentLocation);
         }
       }
     }, 10000); // 10 seconds
-
-    console.log('📍 Location tracking started (every 10 seconds)');
   };
 
   const stopLocationTracking = () => {
@@ -926,10 +967,10 @@ const HomePage = () => {
     return {
       id: jobId,
       bookingId: job.bookingId || jobId,
-      customerName: job.customer?.name || 'Customer', // Use string literal instead of t()
+      customerName: job.customer?.name || 'Customer',
       customerPhone: job.customer?.phone || '',
-      serviceType: job.serviceName || job.serviceType || 'Service', // Use string literal instead of t()
-      pickupLocation: job.pickup?.address || 'Pickup location', // Use string literal instead of t()
+      serviceType: job.serviceName || job.serviceType || 'Service',
+      pickupLocation: job.pickup?.address || 'Pickup location',
       pickupLat: job.pickup?.coordinates?.lat,
       pickupLng: job.pickup?.coordinates?.lng,
       dropoffLocation: job.dropoff?.address,
@@ -952,19 +993,78 @@ const HomePage = () => {
     };
   };
 
+  // UPDATED: handleLocationSelection with proper auto mode activation
   const handleLocationSelection = (type: 'auto' | 'manual') => {
     setLocationModalVisible(false);
 
     if (type === 'auto') {
+      // IMMEDIATE FEEDBACK: Show loading state and update UI right away
+      setIsLoadingLocation(true);
+      setLocationUpdateStatus('updating');
+
+      // Immediately update the location mode to auto on the frontend
+      setCurrentLocation(prev => {
+        if (prev) {
+          return {
+            ...prev,
+            isManual: false // This will immediately update the UI to show "Current Location"
+          };
+        }
+        return prev;
+      });
+
+      // Stop any existing tracking first
+      stopLocationTracking();
+
       if (!locationPermission) {
         requestLocationPermissionIfNeeded().then((granted) => {
           if (granted) {
-            getCurrentLocation(false).then(() => {
-              if (isOnline) {
-                startLocationTracking();
+            // Force get new GPS location
+            getCurrentLocation(false).then((newLocation) => {
+              if (newLocation) {
+                // Make sure isManual is set to false
+                const autoLocation = {
+                  ...newLocation,
+                  isManual: false
+                };
+
+                setCurrentLocation(autoLocation);
+
+                if (isOnline) {
+                  // Start tracking with auto mode
+                  startLocationTracking();
+                  // Send the new location to backend
+                  sendLocationToBackend(autoLocation);
+                }
+
+                setLocationUpdateStatus('success');
+
+                // Show success message
+                Alert.alert(
+                  t('success', currentLanguage),
+                  t('autoLocationActivated', currentLanguage)
+                );
               }
+              setIsLoadingLocation(false);
+            }).catch(error => {
+              console.error('Error getting auto location:', error);
+              setLocationUpdateStatus('error');
+              setIsLoadingLocation(false);
             });
           } else {
+            setIsLoadingLocation(false);
+            setLocationUpdateStatus('error');
+            // If permission denied, revert the UI change
+            setCurrentLocation(prev => {
+              if (prev) {
+                return {
+                  ...prev,
+                  isManual: true // Revert back to manual
+                };
+              }
+              return prev;
+            });
+
             Alert.alert(
               t('locationPermissionRequired', currentLanguage),
               t('locationPermissionMessage', currentLanguage),
@@ -976,10 +1076,37 @@ const HomePage = () => {
           }
         });
       } else {
-        getCurrentLocation(false).then(() => {
-          if (isOnline) {
-            startLocationTracking();
+        // Force get new GPS location
+        getCurrentLocation(false).then((newLocation) => {
+          if (newLocation) {
+            // Make sure isManual is set to false
+            const autoLocation = {
+              ...newLocation,
+              isManual: false
+            };
+
+            setCurrentLocation(autoLocation);
+
+            if (isOnline) {
+              // Start tracking with auto mode
+              startLocationTracking();
+              // Send the new location to backend
+              sendLocationToBackend(autoLocation);
+            }
+
+            setLocationUpdateStatus('success');
+
+            // Show success message
+            Alert.alert(
+              t('success', currentLanguage),
+              t('autoLocationActivated', currentLanguage)
+            );
           }
+          setIsLoadingLocation(false);
+        }).catch(error => {
+          console.error('Error getting auto location:', error);
+          setLocationUpdateStatus('error');
+          setIsLoadingLocation(false);
         });
       }
     } else {
@@ -1147,6 +1274,7 @@ const HomePage = () => {
       };
 
       setCurrentLocation(manualLocation);
+      setLocationUpdateStatus('success');
 
       // Send manual location once
       if (isOnline && providerData?.token) {
@@ -1217,7 +1345,7 @@ const HomePage = () => {
         },
         body: JSON.stringify({
           isOnline: status,
-          language: lang, // Add language to body for PUT requests
+          language: lang,
         }),
       });
 
@@ -1345,6 +1473,16 @@ const HomePage = () => {
     return `PRV-${id.slice(-6)}`;
   };
 
+  // Get status color for location update
+  const getLocationStatusColor = () => {
+    switch (locationUpdateStatus) {
+      case 'updating': return '#68bdee';
+      case 'success': return '#4CAF50';
+      case 'error': return '#F44336';
+      default: return '#000';
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
@@ -1368,7 +1506,7 @@ const HomePage = () => {
 
             <View style={styles.modalBody}>
               <TouchableOpacity
-                style={styles.locationOption}
+                style={[styles.locationOption, isLoadingLocation && styles.locationOptionDisabled]}
                 onPress={() => handleLocationSelection('auto')}
                 disabled={isLoadingLocation}
               >
@@ -1389,6 +1527,7 @@ const HomePage = () => {
               <TouchableOpacity
                 style={styles.locationOption}
                 onPress={() => handleLocationSelection('manual')}
+                disabled={isLoadingLocation}
               >
                 <View style={styles.locationOptionIcon}>
                   <Feather name="map-pin" size={24} color="#68bdee" />
@@ -1664,19 +1803,46 @@ const HomePage = () => {
             </View>
           )}
 
-          {/* Location Card */}
-          <View style={styles.locationCard}>
-            <Feather name="map-pin" size={20} color="#000" />
+          {/* Location Card - UPDATED with immediate feedback */}
+          <View style={[styles.locationCard, locationUpdateStatus === 'updating' && styles.locationCardUpdating]}>
+            <Feather
+              name={locationUpdateStatus === 'updating' ? "loader" : "map-pin"}
+              size={20}
+              color={getLocationStatusColor()}
+            />
             <View style={styles.locationInfo}>
-              <Text style={styles.locationTitle}>
-                {currentLocation?.isManual ? t('manualLocation', currentLanguage) : t('currentLocation', currentLanguage)}
-              </Text>
+              <View style={styles.locationTitleContainer}>
+                <Text style={[styles.locationTitle, { color: getLocationStatusColor() }]}>
+                  {locationUpdateStatus === 'updating' ? (
+                    t('updatingLocation', currentLanguage)
+                  ) : (
+                    currentLocation?.isManual ? t('manualLocation', currentLanguage) : t('currentLocation', currentLanguage)
+                  )}
+                </Text>
+                {locationUpdateStatus === 'updating' && (
+                  <ActivityIndicator size="small" color="#68bdee" style={{ marginLeft: 8 }} />
+                )}
+                {locationUpdateStatus === 'success' && (
+                  <Feather name="check-circle" size={16} color="#4CAF50" style={{ marginLeft: 8 }} />
+                )}
+                {locationUpdateStatus === 'error' && (
+                  <Feather name="alert-circle" size={16} color="#F44336" style={{ marginLeft: 8 }} />
+                )}
+              </View>
               <Text style={styles.locationAddress} numberOfLines={1}>
                 {currentLocation?.address || t('notSet', currentLanguage)}
               </Text>
-              <TouchableOpacity onPress={handleUpdateLocation}>
-                <Text style={styles.updateLocationText}>
-                  {currentLocation?.isManual ? t('changeLocation', currentLanguage) : t('updateLocation', currentLanguage)}
+              <TouchableOpacity onPress={handleUpdateLocation} disabled={locationUpdateStatus === 'updating'}>
+                <Text style={[
+                  styles.updateLocationText,
+                  locationUpdateStatus === 'updating' && styles.updateLocationTextDisabled
+                ]}>
+                  {locationUpdateStatus === 'updating'
+                    ? t('fetchingLocation', currentLanguage)
+                    : currentLocation?.isManual
+                      ? t('changeLocation', currentLanguage)
+                      : t('updateLocation', currentLanguage)
+                  }
                 </Text>
               </TouchableOpacity>
             </View>

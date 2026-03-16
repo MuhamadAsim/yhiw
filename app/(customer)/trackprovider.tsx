@@ -10,10 +10,9 @@ import {
   Linking,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE, Polyline, Region } from 'react-native-maps';
 import ChatPopup from './components/ChatPopup';
@@ -105,6 +104,12 @@ interface LiveTrackingResponse {
   providerPhone?: string;
 }
 
+interface HasMessageResponse {
+  success: boolean;
+  hasAnyMessage: boolean; // Change from hasProviderMessage to hasAnyMessage
+}
+
+
 const TrackProviderScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -117,6 +122,7 @@ const TrackProviderScreen = () => {
 
   // Chat state
   const [chatVisible, setChatVisible] = useState(false);
+  const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
 
   // Location states
   const [providerLocation, setProviderLocation] = useState<ProviderLocation | null>(null);
@@ -171,10 +177,50 @@ const TrackProviderScreen = () => {
       console.log(logMessage);
     }
   };
+  const checkForProviderMessage = async () => {
+    if (!bookingId || chatVisible) return; // Don't check if chat is open
 
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/has-message`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const data: HasMessageResponse = await response.json();
+
+      if (data.success) {
+        // Use hasAnyMessage (not hasProviderMessage)
+        setHasNewMessage(data.hasAnyMessage || false);
+
+        if (data.hasAnyMessage) {
+          addDebug(`📬 Provider has sent a message`);
+        }
+      }
+    } catch (error) {
+      addDebug(`❌ Error checking messages: ${error}`);
+    }
+  };
+
+  // Handle opening chat
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
+    setHasNewMessage(false); // Reset indicator when opening
     setChatVisible(true);
+  };
+
+  // Handle chat close
+  const handleChatClose = () => {
+    setChatVisible(false);
+    // Small delay to ensure chat is fully closed before checking
+    setTimeout(() => {
+      checkForProviderMessage();
+    }, 500);
   };
 
   useEffect(() => {
@@ -504,7 +550,8 @@ const TrackProviderScreen = () => {
 
       await Promise.all([
         fetchLiveTracking(),
-        fetchJobStatus()
+        fetchJobStatus(),
+        checkForProviderMessage() // Check for provider messages
       ]);
 
       if (isMounted.current && !navigationInProgress.current) {
@@ -590,7 +637,7 @@ const TrackProviderScreen = () => {
     return points;
   };
 
-  
+
   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
     if (!mapRef.current || !coord1 || !coord2) return;
 
@@ -862,12 +909,16 @@ const TrackProviderScreen = () => {
               <Text style={styles.callButtonText}>Call</Text>
             </TouchableOpacity>
 
+            {/* Updated Message Button with Red Dot */}
             <TouchableOpacity
               style={styles.messageButton}
               onPress={handleMessage}
               activeOpacity={0.7}
             >
-              <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
+              <View style={styles.messageIconContainer}>
+                <Ionicons name="chatbubble-outline" size={20} color="#68bdee" />
+                {hasNewMessage && <View style={styles.messageDot} />}
+              </View>
               <Text style={styles.messageButtonText}>Message</Text>
             </TouchableOpacity>
           </View>
@@ -954,15 +1005,15 @@ const TrackProviderScreen = () => {
       {/* Chat Popup */}
       <ChatPopup
         visible={chatVisible}
-        onClose={() => setChatVisible(false)}
+        onClose={handleChatClose}
         bookingId={bookingId}
         providerName={providerName}
+        onChatClosed={() => {
+          setHasNewMessage(false);
+        }}
       />
     </View>
   );
 };
-
-
-
 
 export default TrackProviderScreen;

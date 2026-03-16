@@ -1,16 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
 
 import { styles } from './styles/PriceSummaryStyles';
 
@@ -108,6 +107,7 @@ const PriceSummaryScreen = () => {
     { label: '10 BHD', value: 10 },
     { label: '15 BHD', value: 15 },
   ];
+  
   useEffect(() => {
     // Parse waypoints for detailed logging
     let parsedWaypoints: any[] = [];
@@ -118,6 +118,15 @@ const PriceSummaryScreen = () => {
         console.error('Error parsing waypoints for log:', e);
       }
     }
+
+    // Parse service price
+    const baseServiceFee = parsePrice(servicePrice);
+    const distanceFee = isCarRental ? 0 : 15;
+    const platformServiceFee = 5;
+    const taxRate = 0.05;
+    const subtotal = baseServiceFee + distanceFee + platformServiceFee;
+    const tax = Math.round(subtotal * taxRate);
+    const totalAmount = subtotal + tax + (selectedTip || 0);
 
     // Log ALL received data for debugging
     console.log('=====================================');
@@ -306,23 +315,23 @@ const PriceSummaryScreen = () => {
 
       console.log('Submitting booking:', bookingData);
 
-      // Check if this is a scheduled booking
+      // Check if this is a scheduled booking (serviceTime is 'schedule_later' AND we have date/time)
       const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
 
       if (isScheduledBooking) {
-        // For scheduled bookings, make API request and go to home
+        // For scheduled bookings, make mock API request and go to home on success
         const success = await submitBooking();
 
         if (success) {
           Alert.alert(
-            'Booking Saved!',
+            'Booking Confirmed!',
             'Your service has been scheduled successfully. You will receive a confirmation shortly.',
             [
               {
                 text: 'OK',
                 onPress: () => {
                   // Navigate to home screen (main app)
-                  router.push('/(customer)/home'); // Adjust this path based on your routing structure
+                  router.push('/(customer)/Home'); // Adjust this path based on your routing structure
                 }
               }
             ]
@@ -452,13 +461,13 @@ const PriceSummaryScreen = () => {
     }
   };
 
-  // Check if this is a scheduled booking
+  // Check if this is a scheduled booking (serviceTime is 'schedule_later' AND we have date/time)
   const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
 
   // Get button text based on booking type
   const getButtonText = () => {
     if (isScheduledBooking) {
-      return 'Save Booking';
+      return 'Confirm Booking';
     } else {
       return 'Continue to Confirm';
     }
@@ -926,6 +935,5 @@ const PriceSummaryScreen = () => {
     </View>
   );
 };
-
 
 export default PriceSummaryScreen;

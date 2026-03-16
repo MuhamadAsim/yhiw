@@ -153,79 +153,90 @@ const ScheduleServiceScreen = () => {
   const handleBack = () => {
     router.back();
   };
-
-  const handleContinue = () => {
-    // Validate for Car Rental
-    if (isCarRental) {
-      if (!selectedDate) {
-        Alert.alert('Required', 'Please select a date for your rental');
-        return;
-      }
-      if (!selectedTimeSlot) {
-        Alert.alert('Required', 'Please select a time slot');
-        return;
-      }
+const handleContinue = () => {
+  // Validate for Car Rental
+  if (isCarRental) {
+    if (!selectedDate) {
+      Alert.alert('Required', 'Please select a date for your rental');
+      return;
     }
+    if (!selectedTimeSlot) {
+      Alert.alert('Required', 'Please select a time slot');
+      return;
+    }
+  }
 
-    // Navigate to price summary screen with ALL collected data
-    router.push({
-      pathname: '/(customer)/PriceSummary',
-      params: {
-        // Location data
-        pickupAddress,
-        pickupLat,
-        pickupLng,
-        dropoffAddress,
-        dropoffLat,
-        dropoffLng,
-        
-        // Service data
-        serviceId,
-        serviceName,
-        servicePrice,
-        serviceCategory,
-        
-        // Vehicle data
-        vehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-        selectedVehicle,
-        
-        // Contact data
-        fullName,
-        phoneNumber,
-        email,
-        emergencyContact,
-        saveVehicle: String(saveVehicle),
-        
-        // NEW FIELDS from VehicleContactInfo
-        licenseFront,
-        licenseBack,
-        fuelType,
-        partDescription,
-        
-        // Additional details
-        urgency,
-        issues: JSON.stringify(issues),
-        description,
-        photos: JSON.stringify(photos),
-        hasInsurance: String(hasInsurance),
-        needSpecificTruck: String(needSpecificTruck),
-        hasModifications: String(hasModifications),
-        needMultilingual: String(needMultilingual),
-        
-        // Location skipped flag
-        locationSkipped: String(locationSkipped),
-        
-        // Schedule data
-        serviceTime: selectedTime,
-        scheduledDate: isCarRental ? selectedDate.toISOString() : '',
-        scheduledTimeSlot: isCarRental ? selectedTimeSlot : '',
-      }
-    });
-  };
+  // For regular services with Schedule Later, validate date and time are selected
+  if (selectedTime === 'schedule_later' && !isCarRental) {
+    if (!selectedDate) {
+      Alert.alert('Required', 'Please select a date for your scheduled service');
+      return;
+    }
+    if (!selectedTimeSlot) {
+      Alert.alert('Required', 'Please select a time slot');
+      return;
+    }
+  }
+
+  // Navigate to price summary screen with ALL collected data
+  router.push({
+    pathname: '/(customer)/PriceSummary',
+    params: {
+      // Location data
+      pickupAddress,
+      pickupLat,
+      pickupLng,
+      dropoffAddress,
+      dropoffLat,
+      dropoffLng,
+      
+      // Service data
+      serviceId,
+      serviceName,
+      servicePrice,
+      serviceCategory,
+      
+      // Vehicle data
+      vehicleType,
+      makeModel,
+      year,
+      color,
+      licensePlate,
+      selectedVehicle,
+      
+      // Contact data
+      fullName,
+      phoneNumber,
+      email,
+      emergencyContact,
+      saveVehicle: String(saveVehicle),
+      
+      // NEW FIELDS from VehicleContactInfo
+      licenseFront,
+      licenseBack,
+      fuelType,
+      partDescription,
+      
+      // Additional details
+      urgency,
+      issues: JSON.stringify(issues),
+      description,
+      photos: JSON.stringify(photos),
+      hasInsurance: String(hasInsurance),
+      needSpecificTruck: String(needSpecificTruck),
+      hasModifications: String(hasModifications),
+      needMultilingual: String(needMultilingual),
+      
+      // Location skipped flag
+      locationSkipped: String(locationSkipped),
+      
+      // Schedule data - PASS FOR BOTH CAR RENTAL AND REGULAR SCHEDULED SERVICES
+      serviceTime: selectedTime,
+      scheduledDate: (selectedTime === 'schedule_later' && selectedDate) ? selectedDate.toISOString() : '',
+      scheduledTimeSlot: (selectedTime === 'schedule_later' && selectedTimeSlot) ? selectedTimeSlot : '',
+    }
+  });
+};
 
   const handleSelectTime = (timeId: string) => {
     // For Car Rental, prevent selecting "Right Now"

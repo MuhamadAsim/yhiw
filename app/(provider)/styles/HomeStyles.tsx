@@ -1,4 +1,4 @@
-import {StyleSheet , Platform} from 'react-native';
+import { StyleSheet, Platform } from 'react-native';
 
 
 export const styles = StyleSheet.create({
@@ -604,5 +604,26 @@ export const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#000',
+  },
+  // Add these styles to your HomeStyles.ts
+
+  locationCardUpdating: {
+    backgroundColor: '#f0f9ff',
+    borderColor: '#68bdee',
+    borderWidth: 1,
+  },
+
+  locationTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+
+  locationOptionDisabled: {
+    opacity: 0.5,
+  },
+
+  updateLocationTextDisabled: {
+    color: '#9CA3AF',
   },
 });

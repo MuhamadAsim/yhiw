@@ -60,7 +60,7 @@ const SignUpScreen = () => {
   const [otpSent, setOtpSent] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [otpCooldown, setOtpCooldown] = useState<number>(0);
-  
+
   // Store the generated OTP for verification
   const [generatedOtp, setGeneratedOtp] = useState<string>('');
 
@@ -100,7 +100,6 @@ const SignUpScreen = () => {
   const validatePassword = (password: string): boolean => {
     return password.length >= 6;
   };
-
   const sendUserDataToBackend = async (firebaseUserId: string): Promise<BackendResponse['data'] | null> => {
     try {
       const userData: UserData = {
@@ -108,13 +107,12 @@ const SignUpScreen = () => {
         fullName,
         email,
         phoneNumber: formatPhoneNumber(phoneNumber),
-        // Role not sent - backend defaults to 'customer'
       };
 
       const backendUrl = 'https://yhiw-backend.onrender.com';
-      
-      console.log('Sending user data to backend:', userData);
-      
+
+      console.log('📤 Sending user data to backend:', userData);
+
       const response = await fetch(`${backendUrl}/api/users`, {
         method: 'POST',
         headers: {
@@ -123,29 +121,30 @@ const SignUpScreen = () => {
         body: JSON.stringify(userData),
       });
 
+      console.log('📥 Response status:', response.status);
       const data: BackendResponse = await response.json();
+      console.log('📦 Response data:', JSON.stringify(data, null, 2));
 
       if (response.ok && data.success && data.data) {
         // Save the JWT token from response
         if (data.data.token) {
+          console.log('🔑 Token received from backend:', data.data.token.substring(0, 20) + '...');
           await AsyncStorage.setItem('userToken', data.data.token);
           await AsyncStorage.setItem('userData', JSON.stringify(data.data));
-          console.log('User data and token saved to storage:', {
-            id: data.data.id,
-            role: data.data.role,
-            email: data.data.email
-          });
+
+          // VERIFY the token was saved
+          const savedToken = await AsyncStorage.getItem('userToken');
+          console.log('✅ Token saved to AsyncStorage:', savedToken ? 'Yes' : 'No');
+
           return data.data;
+        } else {
+          console.log('⚠️ No token in response data');
         }
       } else {
-        console.warn('Backend save failed:', data.message);
-        // Log the actual error for debugging
-        if (response.status === 409) {
-          Alert.alert('Account Exists', data.message || 'User already exists');
-        }
+        console.warn('❌ Backend save failed:', data.message);
       }
     } catch (error: any) {
-      console.warn('Backend error:', error.message);
+      console.warn('❌ Backend error:', error.message);
     }
     return null;
   };
@@ -211,7 +210,7 @@ const SignUpScreen = () => {
       // Generate OTP
       const otp = generateOTP();
       setGeneratedOtp(otp);
-      
+
       // TODO: Send OTP to backend to send SMS
       // For now, just show it in console and alert (for testing)
       console.log('Generated OTP:', otp);
@@ -233,7 +232,7 @@ const SignUpScreen = () => {
 
       // Show OTP in alert (FOR TESTING ONLY - remove in production)
       Alert.alert(
-        'OTP Sent', 
+        'OTP Sent',
         `Your verification code is: ${otp}\n\nSent to: ${formattedPhone}\n\n(This is for testing. In production, you'll receive it via SMS)`,
         [{ text: 'OK' }]
       );
@@ -262,8 +261,8 @@ const SignUpScreen = () => {
     try {
       // Create email/password account
       const userCredential = await createUserWithEmailAndPassword(
-        auth, 
-        email, 
+        auth,
+        email,
         password
       );
       const user = userCredential.user;
@@ -276,30 +275,30 @@ const SignUpScreen = () => {
       if (userData) {
         // Success - user data and token saved by sendUserDataToBackend
         Alert.alert(
-          'Success', 
+          'Success',
           'Your account has been created successfully!',
-          [{ 
-            text: 'Continue', 
-            onPress: () => router.replace('/(customer)/Home' as any) 
+          [{
+            text: 'Continue',
+            onPress: () => router.replace('/(customer)/Home' as any)
           }]
         );
       } else {
         // Handle case where backend save failed but Firebase account was created
         Alert.alert(
-          'Partial Success', 
+          'Partial Success',
           'Account created!',
-          [{ 
-            text: 'Continue', 
-            onPress: () => router.replace('/(customer)/Home' as any) 
+          [{
+            text: 'Continue',
+            onPress: () => router.replace('/(customer)/Home' as any)
           }]
         );
       }
     } catch (error: any) {
       console.error('Account creation error:', error);
-      
+
       let message = 'Unable to create account. Please try again.';
       let showSignInOption = false;
-      
+
       if (error.code === 'auth/email-already-in-use') {
         message = 'This email is already registered. Please sign in instead.';
         showSignInOption = true;
@@ -313,12 +312,12 @@ const SignUpScreen = () => {
 
       if (showSignInOption) {
         Alert.alert(
-          'Account Exists', 
+          'Account Exists',
           message,
           [
             { text: 'Cancel', style: 'cancel' },
-            { 
-              text: 'Sign In', 
+            {
+              text: 'Sign In',
               onPress: () => router.push('/customer_signin')
             }
           ]
@@ -498,8 +497,8 @@ const SignUpScreen = () => {
             </View>
             <View style={styles.resendContainer}>
               <Text style={styles.resendHint}>
-                {otpCooldown > 0 
-                  ? `Resend in ${otpCooldown}s` 
+                {otpCooldown > 0
+                  ? `Resend in ${otpCooldown}s`
                   : 'Enter the code sent to your phone'}
               </Text>
               <TouchableOpacity

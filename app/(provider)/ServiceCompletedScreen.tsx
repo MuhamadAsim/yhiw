@@ -123,7 +123,6 @@ export default function ServiceCompleteScreen() {
       setIsLoading(false);
     }
   };
-
   const fetchTodayStats = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -132,7 +131,7 @@ export default function ServiceCompleteScreen() {
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
       if (!firebaseUserId) return;
 
-      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/performance`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/info`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -141,17 +140,21 @@ export default function ServiceCompleteScreen() {
       const data = await response.json();
 
       if (data.success && data.data) {
-        setTodayEarnings(parseFloat(data.data.earnings) || 0);
-        setJobsCompleted(data.data.jobs || 0);
+        // ✅ CORRECT: Access data.data.performance
+        setTodayEarnings(parseFloat(data.data.performance?.earnings) || 0);
+        setJobsCompleted(data.data.performance?.jobs || 0);
       }
     } catch (error) {
       addDebug('Error fetching stats:', error);
     }
   };
-
   const handleViewAll = () => {
     Alert.alert('Photos', 'Photo gallery coming soon');
   };
+
+
+
+  // In your ServiceCompleteScreen.tsx
 
   const handleConfirm = async () => {
     if (!paymentChecked) {
@@ -163,47 +166,95 @@ export default function ServiceCompleteScreen() {
 
     try {
       const token = await AsyncStorage.getItem('userToken');
-      if (!token) {
-        Alert.alert('Error', 'Authentication failed');
+      const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
+
+      if (!token || !firebaseUserId) {
+        Alert.alert('Error', 'Authentication failed. Please login again.');
         setIsSubmitting(false);
         return;
       }
 
       addDebug('📡 Completing service for booking:', bookingId);
 
-      // Call API to mark job as completed
+      // Prepare checklist items
+      const checklistItems = [];
+      if (paymentChecked) checklistItems.push('payment_received');
+      if (ratingChecked) checklistItems.push('customer_confirmed');
+
+      // Prepare any issues found (example - you can expand this)
+      const issues = [];
+      if (notes.toLowerCase().includes('issue') || notes.toLowerCase().includes('problem')) {
+        issues.push({
+          type: 'service-issue',
+          description: notes.substring(0, 100), // First 100 chars
+          severity: 'medium'
+        });
+      }
+
+      // Prepare photos (if you have any - example structure)
+      // const photos = []; // Add actual photos if you have them
+      // photos.push({
+      //   type: 'post-service',
+      //   url: 'https://your-storage.com/photo.jpg',
+      //   description: 'Service completion photo'
+      // });
+
+      // Match backend expected structure based on Job model
+      const requestBody = {
+        completionNotes: notes,
+        checklistCompleted: checklistItems,
+        issuesFound: issues,
+        timeTracking: {
+          totalSeconds: durationSeconds,
+          isPaused: false
+        },
+        // photos: photos,
+        paymentReceived: paymentChecked,
+        customerConfirmed: ratingChecked,
+        durationSeconds: durationSeconds
+      };
+
+      addDebug('📦 Request body:', requestBody);
+
       const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          status: 'completed',
-          completionDetails: {
-            notes,
-            paymentReceived: paymentChecked,
-            customerConfirmed: ratingChecked,
-            completedAt: new Date().toISOString(),
-            duration: durationSeconds,
-          }
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const data = await response.json();
-      addDebug('📡 Complete response:', { status: response.status, data });
+      addDebug('📡 Complete response:', {
+        status: response.status,
+        statusText: response.statusText,
+        data
+      });
 
       if (!response.ok) {
-        throw new Error(data.message || 'Failed to complete service');
+        // Show specific error message from backend
+        const errorMessage = data.error || data.message || data.details || 'Failed to complete service';
+        throw new Error(errorMessage);
       }
 
       // ✅ IMPORTANT: Clean up booking from storage BEFORE showing success
       await cleanupBooking();
 
-      // Show success message
+      // Update today's stats with the new data from response
+      if (data.data?.providerStats) {
+        setTodayEarnings(data.data.providerStats.todayEarnings);
+        setJobsCompleted(data.data.providerStats.todayJobs);
+      }
+
+      // Show success message with earnings breakdown
       Alert.alert(
-        'Success!',
-        'Service completed successfully. Thank you for your hard work!',
+        '✅ Success!',
+        `Service completed successfully!\n\n` +
+        `Total: ${data.data?.earnings?.totalAmount?.toFixed(2) || earnings} BHD\n` +
+        `Platform Fee: ${data.data?.earnings?.platformFee?.toFixed(2) || '0.00'} BHD\n` +
+        `Your Earnings: ${data.data?.earnings?.providerEarnings?.toFixed(2) || providerEarnings.toFixed(2)} BHD\n\n` +
+        `Thank you for your hard work!`,
         [
           {
             text: 'OK',
@@ -214,16 +265,28 @@ export default function ServiceCompleteScreen() {
 
     } catch (error) {
       addDebug('❌ Complete service error:', error);
+
+      // Show user-friendly error message
       Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
+        'Failed to Complete Service',
+        error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.',
+        [
+          { text: 'Try Again', style: 'cancel' },
+          {
+            text: 'Go to Home',
+            onPress: async () => {
+              await cleanupBooking();
+              router.replace('/(provider)/Home');
+            }
+          }
+        ]
       );
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Handle manual back to home with cleanup
+  // Update the back to home handler as well
   const handleBackToHome = async () => {
     Alert.alert(
       'Exit Completion',
@@ -231,7 +294,7 @@ export default function ServiceCompleteScreen() {
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Yes, Go Home',
+          text: 'Yes, Complete & Go Home',
           onPress: async () => {
             setIsSubmitting(true);
 
@@ -245,31 +308,30 @@ export default function ServiceCompleteScreen() {
 
               addDebug('📡 Completing service via back to home for booking:', bookingId);
 
-              // Call API to mark job as completed (same as handleConfirm)
+              // Prepare minimal completion data
+              const requestBody = {
+                completionNotes: notes || 'Completed via back to home',
+                checklistCompleted: paymentChecked ? ['payment_received'] : [],
+                issuesFound: [],
+                paymentReceived: paymentChecked,
+                customerConfirmed: ratingChecked,
+                durationSeconds: durationSeconds
+              };
+
               const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                  status: 'completed',
-                  completionDetails: {
-                    notes: notes || 'Completed via back to home', // Use existing notes or default
-                    paymentReceived: paymentChecked, // Use current payment state
-                    customerConfirmed: ratingChecked, // Use current rating state
-                    completedAt: new Date().toISOString(),
-                    duration: durationSeconds,
-                    completedVia: 'back_to_home' // Add flag to track how it was completed
-                  }
-                }),
+                body: JSON.stringify(requestBody),
               });
 
               const data = await response.json();
               addDebug('📡 Complete response (back to home):', { status: response.status, data });
 
               if (!response.ok) {
-                throw new Error(data.message || 'Failed to complete service');
+                throw new Error(data.error || data.message || 'Failed to complete service');
               }
 
               // Clean up booking from storage

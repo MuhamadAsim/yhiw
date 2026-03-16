@@ -223,4 +223,23 @@ export const styles = StyleSheet.create({
     opacity: 0.3,
     resizeMode: "contain",
   },
+  // Add these to your styles/NewRequestNotificationScreenStyles.js file
+
+queueIndicator: {
+  position: 'absolute',
+  top: 60,
+  right: 20,
+  backgroundColor: '#87CEFA',
+  paddingHorizontal: 12,
+  paddingVertical: 6,
+  borderRadius: 20,
+  zIndex: 10,
+},
+
+queueIndicatorText: {
+  color: '#FFFFFF',
+  fontSize: 12,
+  fontWeight: '600',
+},
+
 });
