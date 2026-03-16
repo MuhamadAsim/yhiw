@@ -40,7 +40,7 @@ interface UpdateEvent {
 }
 
 interface JobStatusResponse {
-  status: 'accepted' | 'started' | 'completed' | 'cancelled' | 'completed_confirmed';
+  status: 'accepted' | 'started' | 'completed' | 'cancelled' | 'completed_confirmed' | 'in_progress';
   eta?: string;
   distance?: string;
   provider?: {
@@ -460,6 +460,9 @@ const TrackProviderScreen = () => {
     }
   };
 
+
+
+
   // Fetch job status - polls every 10 seconds
   const fetchJobStatus = async () => {
     if (!bookingId || navigationInProgress.current) return;
@@ -489,7 +492,7 @@ const TrackProviderScreen = () => {
       if (data.distance) setDistance(data.distance);
 
       // ===== AUTO-NAVIGATE WHEN SERVICE STARTS =====
-      if (data.status === 'started') {
+      if (data.status === 'started' || data.status === 'in_progress') {
         addDebug('✅✅✅ SERVICE HAS STARTED - Auto-navigating to ServiceInProgress');
 
         if (!updates.some(u => u.type === 'started')) {
@@ -527,6 +530,56 @@ const TrackProviderScreen = () => {
                   pickupLat: pickupLat.toString(),
                   pickupLng: pickupLng.toString(),
                   totalAmount,
+                }
+              });
+            }
+          }, 500);
+        }
+      }
+
+      // ===== AUTO-NAVIGATE WHEN SERVICE IS COMPLETED =====
+      else if (data.status === 'completed' || data.status === 'completed_confirmed') {
+        addDebug('✅✅✅ SERVICE COMPLETED - Auto-navigating to ServiceCompleted');
+
+        if (!updates.some(u => u.type === 'completed' || u.type === 'completed_confirmed')) {
+          const newUpdate: UpdateEvent = {
+            id: Date.now().toString(),
+            type: data.status,
+            message: data.status === 'completed' ? 'Service completed' : 'Service completion confirmed',
+            timestamp: new Date(),
+          };
+          setUpdates(prev => [newUpdate, ...prev]);
+        }
+
+        if (!navigationInProgress.current) {
+          navigationInProgress.current = true;
+
+          // Stop polling
+          if (pollingTimer.current) {
+            clearTimeout(pollingTimer.current);
+            pollingTimer.current = null;
+          }
+
+          // Navigate to ServiceCompleted
+          setTimeout(() => {
+            if (isMounted.current) {
+              router.push({
+                pathname: '/(customer)/ServiceCompleted',
+                params: {
+                  bookingId,
+                  providerName,
+                  providerId,
+                  providerPhone,
+                  serviceType,
+                  vehicleType,
+                  pickupLocation: pickupAddress,
+                  pickupLat: pickupLat.toString(),
+                  pickupLng: pickupLng.toString(),
+                  totalAmount,
+                  completedAt: new Date().toISOString(),
+                  // You might want to add duration here if available
+                  // duration: '00:00', 
+                  // durationSeconds: '0',
                 }
               });
             }
