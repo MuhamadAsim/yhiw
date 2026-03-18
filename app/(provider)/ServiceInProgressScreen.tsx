@@ -25,21 +25,32 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
   const [seconds, setSeconds] = useState<number>(initialSeconds);
   const [paused, setPaused] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isLoaded, setIsLoaded] = useState<boolean>(false);
 
   const addDebug = (message: string, data?: any) => {
     console.log(`🔍 [Timer] ${message}`, data || '');
   };
 
-  // Timer increment effect - NO SAVE HERE (only local)
+  // Timer increment effect - only runs when NOT paused AND loaded
   useEffect(() => {
-    if (paused) return;
+    if (!isLoaded) {
+      addDebug('⏳ Waiting for timer data to load...');
+      return;
+    }
+
+    if (paused) {
+      addDebug('⏸️ Timer paused');
+      return;
+    }
+
+    addDebug('▶️ Timer started/running');
 
     const interval = setInterval(() => {
       setSeconds(s => s + 1);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [paused]);
+  }, [paused, isLoaded]);
 
   // Save timer to database - only called on pause/resume or navigation
   const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete' | 'add_time', additionalData?: any): Promise<boolean> => {
@@ -132,12 +143,29 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
           setSeconds(data.timer.durationSeconds || 0);
           setPaused(data.timer.isPaused || false);
           addDebug(`✅ Timer loaded: ${data.timer.durationSeconds}s, paused: ${data.timer.isPaused}`);
+        } else {
+          // No existing timer found - start fresh with timer RUNNING
+          addDebug('ℹ️ No existing timer found - starting fresh');
+          setSeconds(0);
+          setPaused(false); // IMPORTANT: Start running
+          
+          // Save initial state to database
+          await saveTimerToDatabase('resume');
         }
       } else {
         addDebug(`⚠️ Failed to load timer: ${response.status}`, data);
+        // Start fresh if can't load
+        setSeconds(0);
+        setPaused(false);
       }
     } catch (error) {
       addDebug('❌ Error loading timer:', error);
+      // Start fresh on error
+      setSeconds(0);
+      setPaused(false);
+    } finally {
+      // Mark as loaded so timer can start
+      setIsLoaded(true);
     }
   };
 
@@ -485,7 +513,7 @@ export default function ServiceInProgressScreen() {
     addDebug('📦 ServiceInProgressScreen mounted with bookingId:', bookingId);
 
     const initializeScreen = async () => {
-      // Load timer from database
+      // Load timer from database - this will now start automatically
       await loadTimerFromDatabase();
 
       // Mark service as started
