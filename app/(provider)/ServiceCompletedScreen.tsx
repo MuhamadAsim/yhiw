@@ -57,7 +57,7 @@ export default function ServiceCompleteScreen() {
     minute: '2-digit'
   });
 
-  // FIXED: Calculate fees correctly
+  // Calculate fees correctly
   const totalAmount = parseFloat(earnings); // This is the total paid by customer
   const platformFee = totalAmount * 0.15; // 15% platform fee
   const providerEarnings = totalAmount - platformFee; // Provider gets 85%
@@ -123,39 +123,60 @@ export default function ServiceCompleteScreen() {
       setIsLoading(false);
     }
   };
+
+  // ✅ FIXED: fetchTodayStats with correct backend structure
   const fetchTodayStats = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
+      if (!token) {
+        addDebug('❌ No token found');
+        return;
+      }
 
       const firebaseUserId = await AsyncStorage.getItem('firebaseUserId');
-      if (!firebaseUserId) return;
+      if (!firebaseUserId) {
+        addDebug('❌ No firebaseUserId found');
+        return;
+      }
+
+      addDebug('📡 Fetching stats for provider:', firebaseUserId);
 
       const response = await fetch(`${API_BASE_URL}/provider/${firebaseUserId}/info`, {
         headers: {
           'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
       });
 
       const data = await response.json();
+      addDebug('📦 Stats response:', data);
 
       if (data.success && data.data) {
-        // ✅ CORRECT: Access data.data.performance
-        setTodayEarnings(parseFloat(data.data.performance?.earnings) || 0);
-        setJobsCompleted(data.data.performance?.jobs || 0);
+        // ✅ CORRECT: Access data.data.performance based on your controller
+        const performance = data.data.performance || {};
+        
+        setTodayEarnings(parseFloat(performance.earnings) || 0);
+        setJobsCompleted(performance.jobs || 0);
+
+        addDebug('✅ Stats updated:', { 
+          earnings: performance.earnings, 
+          jobs: performance.jobs,
+          hours: performance.hours,
+          rating: performance.rating 
+        });
+      } else {
+        addDebug('❌ Failed to fetch stats:', data.message);
       }
     } catch (error) {
-      addDebug('Error fetching stats:', error);
+      addDebug('❌ Error fetching stats:', error);
     }
   };
+
   const handleViewAll = () => {
     Alert.alert('Photos', 'Photo gallery coming soon');
   };
 
-
-
-  // In your ServiceCompleteScreen.tsx
-
+  // ✅ FIXED: handleConfirm with proper error handling
   const handleConfirm = async () => {
     if (!paymentChecked) {
       Alert.alert('Payment Required', 'Please confirm payment received to complete.');
@@ -181,25 +202,17 @@ export default function ServiceCompleteScreen() {
       if (paymentChecked) checklistItems.push('payment_received');
       if (ratingChecked) checklistItems.push('customer_confirmed');
 
-      // Prepare any issues found (example - you can expand this)
+      // Prepare any issues found
       const issues = [];
       if (notes.toLowerCase().includes('issue') || notes.toLowerCase().includes('problem')) {
         issues.push({
           type: 'service-issue',
-          description: notes.substring(0, 100), // First 100 chars
+          description: notes.substring(0, 100),
           severity: 'medium'
         });
       }
 
-      // Prepare photos (if you have any - example structure)
-      // const photos = []; // Add actual photos if you have them
-      // photos.push({
-      //   type: 'post-service',
-      //   url: 'https://your-storage.com/photo.jpg',
-      //   description: 'Service completion photo'
-      // });
-
-      // Match backend expected structure based on Job model
+      // Match backend expected structure
       const requestBody = {
         completionNotes: notes,
         checklistCompleted: checklistItems,
@@ -208,7 +221,6 @@ export default function ServiceCompleteScreen() {
           totalSeconds: durationSeconds,
           isPaused: false
         },
-        // photos: photos,
         paymentReceived: paymentChecked,
         customerConfirmed: ratingChecked,
         durationSeconds: durationSeconds
@@ -233,18 +245,17 @@ export default function ServiceCompleteScreen() {
       });
 
       if (!response.ok) {
-        // Show specific error message from backend
         const errorMessage = data.error || data.message || data.details || 'Failed to complete service';
         throw new Error(errorMessage);
       }
 
-      // ✅ IMPORTANT: Clean up booking from storage BEFORE showing success
+      // Clean up booking from storage
       await cleanupBooking();
 
-      // Update today's stats with the new data from response
+      // Update today's stats if available in response
       if (data.data?.providerStats) {
-        setTodayEarnings(data.data.providerStats.todayEarnings);
-        setJobsCompleted(data.data.providerStats.todayJobs);
+        setTodayEarnings(data.data.providerStats.todayEarnings || todayEarnings);
+        setJobsCompleted(data.data.providerStats.todayJobs || jobsCompleted);
       }
 
       // Show success message with earnings breakdown
@@ -252,7 +263,7 @@ export default function ServiceCompleteScreen() {
         '✅ Success!',
         `Service completed successfully!\n\n` +
         `Total: ${data.data?.earnings?.totalAmount?.toFixed(2) || earnings} BHD\n` +
-        `Platform Fee: ${data.data?.earnings?.platformFee?.toFixed(2) || '0.00'} BHD\n` +
+        `Platform Fee: ${data.data?.earnings?.platformFee?.toFixed(2) || platformFee.toFixed(2)} BHD\n` +
         `Your Earnings: ${data.data?.earnings?.providerEarnings?.toFixed(2) || providerEarnings.toFixed(2)} BHD\n\n` +
         `Thank you for your hard work!`,
         [
@@ -266,7 +277,6 @@ export default function ServiceCompleteScreen() {
     } catch (error) {
       addDebug('❌ Complete service error:', error);
 
-      // Show user-friendly error message
       Alert.alert(
         'Failed to Complete Service',
         error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.',
@@ -286,7 +296,7 @@ export default function ServiceCompleteScreen() {
     }
   };
 
-  // Update the back to home handler as well
+  // ✅ FIXED: handleBackToHome with proper error handling
   const handleBackToHome = async () => {
     Alert.alert(
       'Exit Completion',
@@ -308,7 +318,6 @@ export default function ServiceCompleteScreen() {
 
               addDebug('📡 Completing service via back to home for booking:', bookingId);
 
-              // Prepare minimal completion data
               const requestBody = {
                 completionNotes: notes || 'Completed via back to home',
                 checklistCompleted: paymentChecked ? ['payment_received'] : [],
@@ -338,7 +347,7 @@ export default function ServiceCompleteScreen() {
               await cleanupBooking();
 
               // Navigate to home
-              router.replace('/(provider)/HomePage');
+              router.replace('/(provider)/Home');
 
             } catch (error) {
               addDebug('❌ Complete service error (back to home):', error);
