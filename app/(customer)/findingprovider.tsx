@@ -23,8 +23,10 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com';
 type ConnectionStatus = 'creating' | 'searching' | 'found' | 'error' | 'no_providers' | 'timeout';
 
 interface StatusResponse {
-  status: 'searching' | 'accepted' | 'in_progress' | 'completed' | 'expired' | 'cancelled';
+  status: 'searching' | 'accepted' | 'in_progress' | 'completed' | 'completed_provider' | 'completed_confirmed' | 'expired' | 'cancelled';
   booking?: any;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 const FindingProviderScreen = () => {
@@ -225,9 +227,8 @@ const FindingProviderScreen = () => {
     if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
       console.log('📱 App came to foreground - IMMEDIATELY checking status');
       if (bookingId) {
-        // Clear any existing polling and restart immediately
         stopAllTimers();
-        startPolling(bookingId, true); // true = immediate check
+        startPolling(bookingId, true);
       }
     }
     appState.current = nextAppState;
@@ -250,25 +251,20 @@ const FindingProviderScreen = () => {
         },
       ]
     );
-    return true; // always intercept back
+    return true;
   };
 
   // ─── Cancel button ────────────────────────────────────────────────────────────
 
   const handleCancelPress = () => {
     console.log('🔙 Cancel Request button pressed');
-    console.log('🔙 connectionStatus:', connectionStatus);
-    console.log('🔙 isDone:', isDone.current);
-
     if (isDone.current) return;
 
     if (!bookingId) {
-      // Nothing was created yet, just go back
       if (markDone()) router.back();
       return;
     }
 
-    console.log('🔙 Showing cancel alert');
     Alert.alert(
       'Cancel Search',
       'Are you sure you want to cancel finding a provider?',
@@ -277,26 +273,16 @@ const FindingProviderScreen = () => {
         {
           text: 'Yes',
           style: 'destructive',
-          onPress: () => {
-            console.log('✅ User confirmed cancellation');
-            performCancel();
-          },
+          onPress: () => performCancel(),
         },
       ]
     );
   };
 
-  /**
-   * The single cancel path. Stops polling FIRST, then hits the API,
-   * then navigates back — never to NoProviderAvailable.
-   */
   const performCancel = async () => {
-    if (!markDone()) return; // already done
+    if (!markDone()) return;
 
     console.log('❌ ===== CANCELLING BOOKING =====');
-    console.log('❌ Booking ID:', bookingId);
-
-    // Stop polling before anything so a racing status check can't fire
     stopAllTimers();
 
     try {
@@ -441,23 +427,20 @@ const FindingProviderScreen = () => {
       
       await checkBookingStatus(id);
       
-      // Only schedule next poll if still active
       if (isMounted.current && !isDone.current && isPollingActive.current) {
-        pollingTimer.current = setTimeout(poll, 5000); // Poll every 5 seconds
+        pollingTimer.current = setTimeout(poll, 5000);
       }
     };
 
-    // If immediateCheck is true, run first check immediately
     if (immediateCheck) {
       console.log('⚡ Running immediate status check');
       poll();
     } else {
-      // Otherwise start after a short delay
       pollingTimer.current = setTimeout(poll, 1000);
     }
   };
 
-  // ✅ FIXED: Handle ALL possible statuses
+  // ✅ UPDATED: Handle ALL possible statuses including completed_provider and completed_confirmed
   const checkBookingStatus = async (id: string) => {
     if (isDone.current || !isPollingActive.current) return;
 
@@ -485,7 +468,6 @@ const FindingProviderScreen = () => {
       const data: StatusResponse = await response.json();
       console.log('📊 Status received:', data.status);
       
-      // Track status changes
       if (lastCheckedStatus.current !== data.status) {
         console.log('🔄 Status changed from', lastCheckedStatus.current, 'to', data.status);
         lastCheckedStatus.current = data.status;
@@ -504,8 +486,18 @@ const FindingProviderScreen = () => {
           break;
           
         case 'completed':
-          console.log('✅ Service COMPLETED - navigating to ServiceComplete');
-          handleServiceCompleted(id);
+          console.log('✅ Service COMPLETED (by provider) - navigating to ServiceInProgress for customer confirmation');
+          handleCompletedByProvider(id);
+          break;
+          
+        case 'completed_provider':
+          console.log('✅ Service COMPLETED BY PROVIDER - navigating to ServiceInProgress for customer confirmation');
+          handleCompletedByProvider(id);
+          break;
+          
+        case 'completed_confirmed':
+          console.log('✅✅ Service COMPLETED AND CONFIRMED BY CUSTOMER - navigating to ServiceCompleted');
+          handleCompletedConfirmed(id);
           break;
           
         case 'expired':
@@ -519,7 +511,6 @@ const FindingProviderScreen = () => {
           break;
           
         case 'searching':
-          // Still searching - update UI but keep polling
           setConnectionStatus('searching');
           setPollingAttempts(prev => prev + 1);
           break;
@@ -542,7 +533,6 @@ const FindingProviderScreen = () => {
     setConnectionStatus('found');
     AsyncStorage.setItem('currentBookingId', id).catch(console.error);
 
-    // Navigate to ProviderAssigned screen
     if (isMounted.current) {
       router.replace({
         pathname: '/(customer)/ProviderAssigned',
@@ -551,7 +541,6 @@ const FindingProviderScreen = () => {
     }
   };
 
-  // ✅ NEW: Handle in_progress status
   const handleServiceInProgress = (id: string) => {
     if (!markDone()) return;
 
@@ -566,22 +555,78 @@ const FindingProviderScreen = () => {
     }
   };
 
-  // ✅ NEW: Handle completed status
-  const handleServiceCompleted = (id: string) => {
+  // ✅ NEW: Handle completed_by_provider - Navigate to ServiceInProgress for customer confirmation
+  const handleCompletedByProvider = (id: string) => {
     if (!markDone()) return;
 
-    console.log('✅ SERVICE COMPLETED — navigating to ServiceComplete');
-    AsyncStorage.removeItem('currentBookingId').catch(console.error);
+    console.log('✅ PROVIDER COMPLETED SERVICE — navigating to ServiceInProgress (customer confirmation mode)');
+    AsyncStorage.setItem('currentBookingId', id).catch(console.error);
 
     if (isMounted.current) {
       router.replace({
-        pathname: '/(customer)/ServiceComplete',
-        params: { bookingId: id },
+        pathname: '/(customer)/ServiceInProgress',
+        params: { 
+          bookingId: id,
+          status: 'completed_provider' // Pass status so screen shows confirmation button
+        },
       });
     }
   };
 
-  // ✅ NEW: Handle cancelled status
+  // ✅ NEW: Handle completed_confirmed - Navigate to ServiceCompleted
+  const handleCompletedConfirmed = (id: string) => {
+    if (!markDone()) return;
+
+    console.log('✅✅ CUSTOMER CONFIRMED COMPLETION — navigating to ServiceCompleted');
+    
+    // Get additional data from storage
+    let providerName = 'Provider';
+    let serviceType = '';
+    let totalAmount = '0';
+    let duration = '';
+    let pickupLocation = '';
+    
+    const getBookingData = async () => {
+      try {
+        const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+        if (activeBookingsJson) {
+          const activeBookings = JSON.parse(activeBookingsJson);
+          const currentBooking = activeBookings.find((b: any) => b.bookingId === id);
+          if (currentBooking) {
+            providerName = currentBooking.providerName || 'Provider';
+            serviceType = currentBooking.serviceType || '';
+            totalAmount = currentBooking.totalAmount || '0';
+            duration = currentBooking.duration || '';
+            pickupLocation = currentBooking.pickupLocation || '';
+          }
+        }
+      } catch (e) {
+        console.error('Error fetching booking data:', e);
+      }
+      
+      // Clean up storage
+      await AsyncStorage.removeItem('currentBookingId').catch(console.error);
+      
+      if (isMounted.current) {
+        router.replace({
+          pathname: '/(customer)/ServiceCompleted',
+          params: {
+            bookingId: id,
+            providerName,
+            serviceType,
+            totalAmount,
+            duration,
+            pickupLocation,
+            completedAt: new Date().toISOString(),
+            status: 'completed_confirmed'
+          },
+        });
+      }
+    };
+    
+    getBookingData();
+  };
+
   const handleBookingCancelled = () => {
     if (!markDone()) return;
 

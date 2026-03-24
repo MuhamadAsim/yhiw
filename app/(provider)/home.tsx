@@ -376,6 +376,9 @@ const HomePage = () => {
     }
   }, [locationUpdateStatus]);
 
+
+
+  // Add this function to check for active job
   // Add this function to check for active job
   const checkActiveJob = async () => {
     try {
@@ -432,15 +435,38 @@ const HomePage = () => {
             // Navigate to ServiceInProgressScreen
             console.log('🔧 Job in progress - navigating to service');
             router.replace({
-              pathname: '/ServiceInProgressScreen',
+              pathname: '/(provider)/ServiceInProgressScreen',
               params: { bookingId: currentBookingId }
             });
             break;
 
+          // ✅ NEW: Handle completed_provider - navigate to completion screen
+          case 'completed_provider':
+            console.log('📝 Job completed by provider - navigating to completion screen');
+            router.replace({
+              pathname: '/(provider)/ServiceCompletedScreen',
+              params: { bookingId: currentBookingId }
+            });
+            break;
+
+          // ✅ NEW: Handle completed_confirmed - navigate to completion screen
+          case 'completed_confirmed':
+            console.log('✅ Job confirmed - navigating to completion screen');
+            router.replace({
+              pathname: '/(provider)/ServiceCompletedScreen',
+              params: { bookingId: currentBookingId }
+            });
+            break;
+
+          // ✅ UPDATED: Handle completed - means job is fully finished, just cleanup
           case 'completed':
+            console.log('✅ Job fully completed - cleaning up storage');
+            await cleanupStoredBooking(currentBookingId);
+            break;
+
           case 'cancelled':
             // Clean up storage
-            console.log(`✅ Job ${data.status} - cleaning up storage`);
+            console.log(`❌ Job cancelled - cleaning up storage`);
             await cleanupStoredBooking(currentBookingId);
             break;
 
@@ -454,6 +480,7 @@ const HomePage = () => {
     }
   };
 
+  
   // Add cleanup function
   const cleanupStoredBooking = async (bookingId: string) => {
     try {

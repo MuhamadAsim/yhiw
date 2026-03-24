@@ -32,7 +32,7 @@ interface Coordinates {
 
 interface JobDetails {
   bookingId: string;
-  status: 'searching' | 'accepted' | 'en-route' | 'arrived' | 'started' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed';
+  status: 'searching' | 'accepted' | 'en-route' | 'arrived' | 'started' | 'in_progress' | 'completed' | 'completed_provider' | 'completed_confirmed' | 'cancelled';
   serviceType: string;
   serviceName: string;
   vehicleType: string;
@@ -111,6 +111,7 @@ const ProviderAssignedScreen = () => {
   const [timeRemaining, setTimeRemaining] = useState<number>(0);
   const [pollingAttempts, setPollingAttempts] = useState<number>(0);
   const [hasShownArrivedAlert, setHasShownArrivedAlert] = useState(false);
+  const [hasShownProviderCompleteAlert, setHasShownProviderCompleteAlert] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [isFetchingRoute, setIsFetchingRoute] = useState(false);
@@ -133,22 +134,19 @@ const ProviderAssignedScreen = () => {
     try {
       addDebug('🧹 Cleaning up and navigating home');
       
-      // Clear any stored booking data
       await AsyncStorage.removeItem('currentBookingId');
       await AsyncStorage.removeItem('currentBookingStatus');
       
-      // Navigate to home
       router.replace('/(customer)/Home');
     } catch (error) {
       addDebug('❌ Error during cleanup:', error);
-      // Still try to navigate
       router.replace('/(customer)/Home');
     }
   };
 
   // Check if there are any messages
   const checkForAnyMessage = async () => {
-    if (!bookingId || chatVisible) return; // Don't check if chat is open
+    if (!bookingId || chatVisible) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -165,7 +163,6 @@ const ProviderAssignedScreen = () => {
       const data: HasMessageResponse = await response.json();
       
       if (data.success) {
-        // Set true if there's at least one message
         setHasNewMessage(data.hasAnyMessage || false);
         
         if (data.hasAnyMessage) {
@@ -177,29 +174,27 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  // Handle message button press - open chat popup
+  // Handle message button press
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
-    setHasNewMessage(false); // Reset indicator when opening
+    setHasNewMessage(false);
     setChatVisible(true);
   };
 
   // Handle chat close
   const handleChatClose = () => {
     setChatVisible(false);
-    // Small delay to ensure chat is fully closed before checking
     setTimeout(() => {
       checkForAnyMessage();
     }, 500);
   };
 
-  // Decode polyline from Google Maps format or simple pipe-separated format
+  // Decode polyline
   const decodePolyline = (encoded: string): any[] => {
     if (!encoded || typeof encoded !== 'string') {
       return [];
     }
 
-    // Check if it's a simple pipe-separated format (lat,lng|lat,lng) - fallback from backend
     if (encoded.includes('|')) {
       return encoded.split('|').map(point => {
         const [lat, lng] = point.split(',').map(Number);
@@ -215,7 +210,6 @@ const ProviderAssignedScreen = () => {
       );
     }
 
-    // Otherwise, assume it's Google's encoded polyline format
     const points: any[] = [];
     let index = 0;
     let lat = 0;
@@ -265,15 +259,9 @@ const ProviderAssignedScreen = () => {
 
     try {
       const token = await AsyncStorage.getItem('userToken');
-      if (!token) {
-        addDebug('❌ No token found');
-        return;
-      }
+      if (!token) return;
 
-      const url = `${API_BASE_URL}/api/customer/${bookingId}/route`;
-      addDebug(`🌐 Calling route API: ${url}`);
-
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/route`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -282,7 +270,6 @@ const ProviderAssignedScreen = () => {
       });
 
       const data = await response.json();
-      addDebug(`📦 Route API response:`, data);
 
       if (data.success && data.route) {
         setRouteData(data.route);
@@ -290,7 +277,6 @@ const ProviderAssignedScreen = () => {
         if (data.route.polyline) {
           const points = decodePolyline(data.route.polyline);
           setRouteCoordinates(points);
-          addDebug(`🗺️ Route has ${points.length} points`);
         }
 
         setEta(data.route.eta || 'Calculating...');
@@ -311,15 +297,192 @@ const ProviderAssignedScreen = () => {
             longitude: data.route.providerLocation.longitude,
           });
         }
-
-        addDebug(`✅ Route updated: ${data.route.distance}, ETA: ${data.route.eta}`);
-      } else {
-        addDebug(`⚠️ Route fetch failed:`, data.message);
       }
     } catch (error) {
       addDebug(`❌ Error fetching route: ${error}`);
     } finally {
       setIsFetchingRoute(false);
+    }
+  };
+
+  // Handle navigation based on status
+  const handleStatusNavigation = (status: string) => {
+    if (navigationInProgress.current) return;
+
+    // Handle ARRIVED
+    if (status === 'arrived' && !hasShownArrivedAlert) {
+      addDebug(`🚗 Provider has arrived!`);
+      setHasShownArrivedAlert(true);
+      Alert.alert(
+        'Provider Arrived',
+        `${jobDetails?.provider?.name || 'Your provider'} has arrived at your location.`,
+        [{ text: 'OK' }]
+      );
+    }
+
+    // Handle PROVIDER COMPLETE - Show alert and navigate to ServiceInProgress for confirmation
+    if (status === 'completed_provider' && !hasShownProviderCompleteAlert && !navigationInProgress.current) {
+      addDebug('✅✅ Provider has completed the service!');
+      setHasShownProviderCompleteAlert(true);
+      
+      Alert.alert(
+        'Service Completed by Provider',
+        'The provider has marked the service as complete. Please confirm completion.',
+        [{ text: 'OK' }]
+      );
+      
+      navigationInProgress.current = true;
+      
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+      
+      setTimeout(() => {
+        if (isMounted.current) {
+          router.push({
+            pathname: '/(customer)/ServiceInProgress',
+            params: {
+              bookingId,
+              providerName: jobDetails?.provider?.name || '',
+              providerId: jobDetails?.provider?.id || '',
+              providerPhone: jobDetails?.provider?.phone || '',
+              serviceType: jobDetails?.serviceName || '',
+              vehicleType: jobDetails?.vehicleType || '',
+              pickupLocation: jobDetails?.pickup?.address || '',
+              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
+              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
+              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+              status: 'completed_provider'
+            }
+          });
+        }
+      }, 500);
+    }
+
+    // Handle STARTED/IN_PROGRESS
+    if ((status === 'started' || status === 'in_progress') && !navigationInProgress.current) {
+      addDebug(`🔄 Service started/in_progress - navigating to ServiceInProgress`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      setTimeout(() => {
+        if (isMounted.current) {
+          router.push({
+            pathname: '/(customer)/ServiceInProgress',
+            params: {
+              bookingId,
+              providerName: jobDetails?.provider?.name || '',
+              providerId: jobDetails?.provider?.id || '',
+              providerPhone: jobDetails?.provider?.phone || '',
+              serviceType: jobDetails?.serviceName || '',
+              vehicleType: jobDetails?.vehicleType || '',
+              pickupLocation: jobDetails?.pickup?.address || '',
+              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
+              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
+              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+            }
+          });
+        }
+      }, 500);
+    }
+
+    // Handle COMPLETED - Navigate to ServiceCompleted
+    if (status === 'completed' && !navigationInProgress.current) {
+      addDebug(`✅✅ SERVICE COMPLETED - navigating to ServiceCompleted`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      setTimeout(() => {
+        if (isMounted.current) {
+          router.push({
+            pathname: '/(customer)/ServiceCompleted',
+            params: {
+              bookingId,
+              providerName: jobDetails?.provider?.name || '',
+              providerId: jobDetails?.provider?.id || '',
+              providerPhone: jobDetails?.provider?.phone || '',
+              serviceType: jobDetails?.serviceName || '',
+              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+              duration: formatTime(timeRemaining),
+              pickupLocation: jobDetails?.pickup?.address || '',
+              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
+              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
+              completedAt: new Date().toISOString(),
+              status: 'completed'
+            }
+          });
+        }
+      }, 500);
+    }
+
+    // Handle COMPLETED_CONFIRMED - Navigate to ServiceCompleted and clean up
+    if (status === 'completed_confirmed' && !navigationInProgress.current) {
+      addDebug(`✅✅✅ SERVICE COMPLETED AND CONFIRMED - navigating to ServiceCompleted`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      // Clean up storage
+      AsyncStorage.removeItem('currentBookingId').catch(console.error);
+      AsyncStorage.removeItem('currentBookingStatus').catch(console.error);
+
+      setTimeout(() => {
+        if (isMounted.current) {
+          router.push({
+            pathname: '/(customer)/ServiceCompleted',
+            params: {
+              bookingId,
+              providerName: jobDetails?.provider?.name || '',
+              providerId: jobDetails?.provider?.id || '',
+              providerPhone: jobDetails?.provider?.phone || '',
+              serviceType: jobDetails?.serviceName || '',
+              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
+              duration: formatTime(timeRemaining),
+              pickupLocation: jobDetails?.pickup?.address || '',
+              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
+              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
+              completedAt: new Date().toISOString(),
+              status: 'completed_confirmed'
+            }
+          });
+        }
+      }, 500);
+    }
+
+    // Handle CANCELLED
+    if (status === 'cancelled' && !navigationInProgress.current) {
+      addDebug(`❌ Job cancelled - navigating home`);
+      navigationInProgress.current = true;
+
+      if (pollingTimer.current) {
+        clearTimeout(pollingTimer.current);
+        pollingTimer.current = null;
+      }
+
+      Alert.alert(
+        'Job Cancelled',
+        'This service request has been cancelled.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              cleanupAndNavigateHome();
+            }
+          }
+        ]
+      );
     }
   };
 
@@ -336,9 +499,7 @@ const ProviderAssignedScreen = () => {
         [
           {
             text: 'OK',
-            onPress: () => {
-              cleanupAndNavigateHome();
-            }
+            onPress: () => cleanupAndNavigateHome()
           }
         ],
         { cancelable: false }
@@ -360,31 +521,21 @@ const ProviderAssignedScreen = () => {
           [
             {
               text: 'OK',
-              onPress: () => {
-                cleanupAndNavigateHome();
-              }
+              onPress: () => cleanupAndNavigateHome()
             }
           ]
         );
         return;
       }
 
-      const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
-      addDebug(`🌐 Calling API: ${url}`);
-
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
       });
 
-      addDebug(`📡 Response status: ${response.status}`);
-
-      // Handle 404 - Job not found
       if (response.status === 404) {
         addDebug('❌ Job not found (404)');
-        
-        // Clear invalid booking data
         await AsyncStorage.removeItem('currentBookingId');
         await AsyncStorage.removeItem('currentBookingStatus');
         
@@ -405,7 +556,6 @@ const ProviderAssignedScreen = () => {
         return;
       }
 
-      // Handle 401/403 - Auth errors
       if (response.status === 401 || response.status === 403) {
         addDebug('❌ Authentication error');
         Alert.alert(
@@ -414,9 +564,7 @@ const ProviderAssignedScreen = () => {
           [
             {
               text: 'OK',
-              onPress: () => {
-                cleanupAndNavigateHome();
-              }
+              onPress: () => cleanupAndNavigateHome()
             }
           ]
         );
@@ -450,7 +598,6 @@ const ProviderAssignedScreen = () => {
       }
 
       const data = await response.json();
-      addDebug(`📦 API Response:`, data);
 
       if (!data.success || !data.job) {
         addDebug(`❌ API returned success=false or no job data`);
@@ -472,30 +619,24 @@ const ProviderAssignedScreen = () => {
       addDebug(`✅ Job details fetched successfully`);
       addDebug(`   - Status: ${data.job.status}`);
       addDebug(`   - Provider: ${data.job.provider?.name || 'Not assigned'}`);
-      addDebug(`   - Pickup: ${data.job.pickup?.address || 'No address'}`);
 
       setJobDetails(data.job);
       setApiError(null);
 
-      // Set initial provider location if available
       if (data.job.providerLocation) {
-        addDebug(`📍 Provider location from API:`, data.job.providerLocation);
         setProviderLocation({
           latitude: data.job.providerLocation.latitude,
           longitude: data.job.providerLocation.longitude,
         });
       }
 
-      // Set initial ETA
       setEta(data.job.estimatedArrival || '15 min');
       const etaMinutes = parseInt(data.job.estimatedArrival || '15');
       if (!isNaN(etaMinutes)) {
         setTimeRemaining(etaMinutes * 60);
       }
 
-      // Center map on pickup if map is ready
       if (mapRef.current && data.job.pickup?.coordinates && mapReady) {
-        addDebug(`🗺️ Centering map on pickup location`);
         mapRef.current.animateToRegion({
           latitude: data.job.pickup.coordinates.lat,
           longitude: data.job.pickup.coordinates.lng,
@@ -504,7 +645,6 @@ const ProviderAssignedScreen = () => {
         }, 1000);
       }
 
-      // Check initial status and navigate if needed
       handleStatusNavigation(data.job.status);
       
     } catch (error) {
@@ -534,108 +674,6 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  // Handle navigation based on status
-  const handleStatusNavigation = (status: string) => {
-    if (navigationInProgress.current) return;
-
-    // Handle ARRIVED - Show alert but stay on screen
-    if (status === 'arrived' && !hasShownArrivedAlert) {
-      addDebug(`🚗 Provider has arrived!`);
-      setHasShownArrivedAlert(true);
-      Alert.alert(
-        'Provider Arrived',
-        `${jobDetails?.provider?.name || 'Your provider'} has arrived at your location.`,
-        [{ text: 'OK' }]
-      );
-    }
-
-    // Handle STARTED/IN_PROGRESS - Navigate to ServiceInProgress
-    if ((status === 'started' || status === 'in_progress') && !navigationInProgress.current) {
-      addDebug(`🔄 Service started/in_progress - navigating to ServiceInProgress`);
-      navigationInProgress.current = true;
-
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
-        pollingTimer.current = null;
-      }
-
-      setTimeout(() => {
-        if (isMounted.current) {
-          router.push({
-            pathname: '/(customer)/ServiceInProgress',
-            params: {
-              bookingId,
-              providerName: jobDetails?.provider?.name || '',
-              providerId: jobDetails?.provider?.id || '',
-              providerPhone: jobDetails?.provider?.phone || '',
-              serviceType: jobDetails?.serviceName || '',
-              vehicleType: jobDetails?.vehicleType || '',
-              pickupLocation: jobDetails?.pickup?.address || '',
-              pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
-              pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
-              totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
-            }
-          });
-        }
-      }, 500);
-    }
-
-    // Handle COMPLETED - Navigate immediately
-    if ((status === 'completed' || status === 'completed_confirmed') && !navigationInProgress.current) {
-      addDebug(`✅✅✅ JOB COMPLETED - navigating to ServiceCompleted`);
-      navigationInProgress.current = true;
-
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
-        pollingTimer.current = null;
-      }
-
-      // Navigate immediately
-      if (isMounted.current) {
-        router.push({
-          pathname: '/(customer)/ServiceCompleted',
-          params: {
-            bookingId,
-            providerName: jobDetails?.provider?.name || '',
-            providerId: jobDetails?.provider?.id || '',
-            providerPhone: jobDetails?.provider?.phone || '',
-            serviceType: jobDetails?.serviceName || '',
-            totalAmount: jobDetails?.payment?.totalAmount?.toString() || '0',
-            duration: formatTime(timeRemaining),
-            pickupLocation: jobDetails?.pickup?.address || '',
-            pickupLat: jobDetails?.pickup?.coordinates?.lat?.toString() || '',
-            pickupLng: jobDetails?.pickup?.coordinates?.lng?.toString() || '',
-            completedAt: new Date().toISOString(),
-          }
-        });
-      }
-    }
-
-    // Handle CANCELLED - Navigate home
-    if (status === 'cancelled' && !navigationInProgress.current) {
-      addDebug(`❌ Job cancelled - navigating home`);
-      navigationInProgress.current = true;
-
-      if (pollingTimer.current) {
-        clearTimeout(pollingTimer.current);
-        pollingTimer.current = null;
-      }
-
-      Alert.alert(
-        'Job Cancelled',
-        'This service request has been cancelled.',
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              cleanupAndNavigateHome();
-            }
-          }
-        ]
-      );
-    }
-  };
-
   // Fetch provider location
   const fetchProviderLocation = async () => {
     if (!bookingId) return;
@@ -644,8 +682,7 @@ const ProviderAssignedScreen = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const url = `${API_BASE_URL}/api/customer/${bookingId}/provider-location`;
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/provider-location`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -663,10 +700,8 @@ const ProviderAssignedScreen = () => {
           longitude: data.location.longitude,
         };
 
-        addDebug(`📍 Provider location update #${pollingAttempts + 1}:`, newLocation);
         setProviderLocation(newLocation);
 
-        // Fetch route after location update
         if (routeFetchTimer.current) {
           clearTimeout(routeFetchTimer.current);
         }
@@ -688,10 +723,7 @@ const ProviderAssignedScreen = () => {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      const url = `${API_BASE_URL}/api/customer/${bookingId}/details`;
-      addDebug(`📊 Polling #${pollingAttempts + 1} - Checking job details`);
-
-      const response = await fetch(url, {
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -723,10 +755,7 @@ const ProviderAssignedScreen = () => {
         const newStatus = data.job.status;
         addDebug(`📊 Job status update: ${newStatus}`);
 
-        // Update job details with any new data
         setJobDetails(prev => prev ? { ...prev, ...data.job } : data.job);
-
-        // Handle navigation based on new status
         handleStatusNavigation(newStatus);
       }
     } catch (error) {
@@ -744,7 +773,7 @@ const ProviderAssignedScreen = () => {
       await Promise.all([
         fetchProviderLocation(),
         fetchJobStatus(),
-        checkForAnyMessage() // Add message check
+        checkForAnyMessage()
       ]);
 
       if (isMounted.current && !navigationInProgress.current) {
@@ -767,9 +796,7 @@ const ProviderAssignedScreen = () => {
         [
           {
             text: 'OK',
-            onPress: () => {
-              cleanupAndNavigateHome();
-            }
+            onPress: () => cleanupAndNavigateHome()
           }
         ],
         { cancelable: false }
@@ -777,7 +804,6 @@ const ProviderAssignedScreen = () => {
       return;
     }
 
-    // Set a timeout to prevent infinite loading
     const timeoutId = setTimeout(() => {
       if (isLoading && isMounted.current) {
         addDebug('⚠️ Loading timeout - redirecting to home');
@@ -787,30 +813,24 @@ const ProviderAssignedScreen = () => {
           [
             {
               text: 'OK',
-              onPress: () => {
-                cleanupAndNavigateHome();
-              }
+              onPress: () => cleanupAndNavigateHome()
             }
           ],
           { cancelable: false }
         );
       }
-    }, 15000); // 15 second timeout
+    }, 15000);
 
-    // Fetch initial data
     fetchJobDetails()
       .then(() => {
         clearTimeout(timeoutId);
-        // Start polling after initial data loads
         startPolling();
       })
       .catch((error) => {
         addDebug('❌ Failed to load job details:', error);
         clearTimeout(timeoutId);
-        // Error is already handled in fetchJobDetails
       });
 
-    // Start ETA countdown
     const interval = setInterval(() => {
       setTimeRemaining(prev => prev > 1 ? prev - 1 : 0);
     }, 1000);
@@ -897,7 +917,7 @@ const ProviderAssignedScreen = () => {
             addDebug(`❌ Cancelling request: ${bookingId}`);
             try {
               const token = await AsyncStorage.getItem('userToken');
-              const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
+              await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -905,13 +925,6 @@ const ProviderAssignedScreen = () => {
                 },
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
-
-              if (response.ok) {
-                addDebug('✅ Cancel request successful');
-              } else {
-                addDebug('❌ Cancel request failed');
-              }
-
               await cleanupAndNavigateHome();
             } catch (error) {
               console.error('Cancel error:', error);
@@ -927,7 +940,7 @@ const ProviderAssignedScreen = () => {
     addDebug(`🔄 Manual refresh triggered`);
     setRefreshing(true);
     await fetchJobDetails();
-    await checkForAnyMessage(); // Check messages on refresh
+    await checkForAnyMessage();
   };
 
   const formatTime = (seconds: number): string => {
@@ -945,7 +958,6 @@ const ProviderAssignedScreen = () => {
         {apiError && (
           <Text style={styles.errorText}>Error: {apiError}</Text>
         )}
-  
       </View>
     );
   }
@@ -1190,7 +1202,6 @@ const ProviderAssignedScreen = () => {
                 <Text style={styles.callButtonText}>Call</Text>
               </TouchableOpacity>
 
-              {/* Updated Message Button with Red Dot */}
               <TouchableOpacity
                 style={styles.messageButton}
                 onPress={handleMessage}

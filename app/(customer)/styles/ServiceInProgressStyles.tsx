@@ -569,4 +569,46 @@ messageDot: {
   borderWidth: 1,
   borderColor: '#FFFFFF',
 },
+// Add these styles to your existing styles
+
+// Mark as Complete Button
+markCompleteButton: {
+  backgroundColor: '#68bdee',
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 12,
+  paddingHorizontal: 16,
+  borderRadius: 12,
+  marginBottom: 12,
+  gap: 8,
+},
+
+markCompleteButtonText: {
+  color: '#fff',
+  fontSize: 16,
+  fontWeight: '600',
+},
+
+buttonDisabled: {
+  opacity: 0.6,
+},
+
+// Provider Complete Indicator
+providerCompleteIndicator: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#E8F5E9',
+  padding: 12,
+  borderRadius: 8,
+  marginTop: 12,
+  gap: 8,
+},
+
+providerCompleteText: {
+  color: '#2E7D32',
+  fontSize: 13,
+  fontWeight: '500',
+  flex: 1,
+},
 });

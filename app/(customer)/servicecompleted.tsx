@@ -17,13 +17,44 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 
-
 const { height } = Dimensions.get('window');
 
 import { styles } from './styles/ServiceCompletedStyles';
 
 // API Base URL
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+interface TimerData {
+  durationSeconds: number;
+  isPaused: boolean;
+  pausedAt: string | null;
+  lastUpdated?: string | null;
+}
+
+interface JobDetailsResponse {
+  success: boolean;
+  job: {
+    bookingId: string;
+    serviceName?: string;
+    provider?: {
+      name: string;
+      id: string;
+    };
+    payment?: {
+      totalAmount: number;
+    };
+    pickup?: {
+      address: string;
+    };
+    timeline?: {
+      completedAt: string;
+    };
+    timeTracking?: {
+      totalSeconds: number;
+      isPaused: boolean;
+    };
+  };
+}
 
 const ServiceCompletedScreen = () => {
   const router = useRouter();
@@ -32,10 +63,12 @@ const ServiceCompletedScreen = () => {
   const [rating, setRating] = useState(0);
   const [selectedRating, setSelectedRating] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false); // NEW: Download loading state
+  const [isDownloading, setIsDownloading] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [jobDetails, setJobDetails] = useState<any>(null);
   const [hasExistingRating, setHasExistingRating] = useState(false);
+  const [timerData, setTimerData] = useState<TimerData | null>(null);
+  const [finalDuration, setFinalDuration] = useState<string>('');
 
   // Get data from params (as fallback)
   const bookingId = params.bookingId as string;
@@ -44,23 +77,40 @@ const ServiceCompletedScreen = () => {
   const serviceTypeParam = params.serviceType as string;
   const totalAmountParam = params.totalAmount as string;
   const durationParam = params.duration as string;
+  const durationSecondsParam = params.durationSeconds as string;
   const pickupLocationParam = params.pickupLocation as string;
   const completedAtParam = params.completedAt as string;
+  const timerLastSavedParam = params.timerLastSaved as string;
 
   // Generate booking reference
   const bookingRef = `#YHIW-${bookingId?.slice(-5) || '96931'}`;
 
   // Format duration from seconds
   const formatDuration = (totalSeconds: number): string => {
-    if (!totalSeconds || totalSeconds === 0) return '35 minutes';
+    if (!totalSeconds || totalSeconds === 0) return '0 minutes';
 
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
 
     if (hours > 0) {
-      return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''}`;
+      if (minutes > 0 && seconds > 0) {
+        return `${hours}h ${minutes}m ${seconds}s`;
+      } else if (minutes > 0) {
+        return `${hours}h ${minutes}m`;
+      } else if (seconds > 0) {
+        return `${hours}h ${seconds}s`;
+      }
+      return `${hours}h`;
     }
-    return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+    
+    if (minutes > 0 && seconds > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m`;
+    } else {
+      return `${seconds}s`;
+    }
   };
 
   // Format time from ISO string
@@ -91,14 +141,72 @@ const ServiceCompletedScreen = () => {
     });
   };
 
+  // Fetch timer data
+  const fetchTimerData = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return null;
+
+      console.log('⏱️ Fetching final timer data for booking:', bookingId);
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.timer) {
+          setTimerData(data.timer);
+          
+          let finalSeconds = data.timer.durationSeconds || 0;
+          
+          // If timer wasn't paused, calculate elapsed time since last sync
+          if (!data.timer.isPaused && data.timer.lastUpdated) {
+            const lastUpdated = new Date(data.timer.lastUpdated);
+            const now = new Date();
+            const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
+            
+            if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
+              finalSeconds = finalSeconds + elapsedSeconds;
+              console.log(`⏱️ Added ${elapsedSeconds}s elapsed time to final duration`);
+            }
+          }
+          
+          const formattedDuration = formatDuration(finalSeconds);
+          setFinalDuration(formattedDuration);
+          console.log(`✅ Final duration from timer: ${finalSeconds}s (${formattedDuration})`);
+          return { finalSeconds, formattedDuration };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('❌ Error fetching timer data:', error);
+      return null;
+    }
+  };
+
   // Fetch job details on mount
   useEffect(() => {
-    fetchJobDetails();
+    fetchAllData();
   }, []);
+
+  const fetchAllData = async () => {
+    try {
+      setIsLoading(true);
+      await fetchJobDetails();
+      await fetchTimerData();
+      await checkExistingRating();
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const fetchJobDetails = async () => {
     try {
-      setIsLoading(true);
       const token = await AsyncStorage.getItem('userToken');
       if (!token || !bookingId) return;
 
@@ -117,13 +225,8 @@ const ServiceCompletedScreen = () => {
           console.log('✅ Job details loaded');
         }
       }
-
-      await checkExistingRating();
-
     } catch (error) {
       console.error('❌ Error fetching job details:', error);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -236,7 +339,7 @@ const ServiceCompletedScreen = () => {
     }
   };
 
-  // NEW: Generate HTML for PDF receipt
+  // Generate HTML for PDF receipt with correct duration
   const generateReceiptHTML = () => {
     const currentDate = new Date().toLocaleDateString('en-US', {
       year: 'numeric',
@@ -249,6 +352,9 @@ const ServiceCompletedScreen = () => {
     const baseFee = parseFloat(totalAmount) * 0.75;
     const distanceFee = parseFloat(totalAmount) * 0.15;
     const serviceFee = parseFloat(totalAmount) * 0.10;
+    
+    // Use final duration from timer or fallback to params
+    const displayDuration = finalDuration || durationParam || '0 minutes';
 
     return `
       <!DOCTYPE html>
@@ -414,7 +520,7 @@ const ServiceCompletedScreen = () => {
               </div>
               <div class="info-row">
                 <span class="info-label">Duration:</span>
-                <span class="info-value">${duration}</span>
+                <span class="info-value">${displayDuration}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">Date:</span>
@@ -484,10 +590,6 @@ const ServiceCompletedScreen = () => {
     `;
   };
 
-
-
-
-
   const handleDownloadReceipt = async () => {
     try {
       setIsDownloading(true);
@@ -498,7 +600,6 @@ const ServiceCompletedScreen = () => {
         return;
       }
 
-      // Generate PDF
       const { uri } = await Print.printToFileAsync({
         html: generateReceiptHTML(),
         base64: false
@@ -506,7 +607,6 @@ const ServiceCompletedScreen = () => {
 
       console.log('📄 PDF generated at:', uri);
 
-      // ✅ Share directly — no need to move the file
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: 'Download Receipt',
@@ -523,9 +623,6 @@ const ServiceCompletedScreen = () => {
     }
   };
 
-
-
-  // Optional: Add screenshot hint
   const handleTakeScreenshot = () => {
     Alert.alert(
       'Take Screenshot',
@@ -548,11 +645,19 @@ const ServiceCompletedScreen = () => {
   const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
   const serviceType = jobDetails?.serviceName || serviceTypeParam || 'Quick Tow (Flatbed)';
   const totalAmount = jobDetails?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
-
-  const durationSeconds = jobDetails?.timeTracking?.totalSeconds || 0;
-  const duration = formatDuration(durationSeconds);
-
   const pickupLocation = jobDetails?.pickup?.address || pickupLocationParam || '23 Main Street, Manama';
+  
+  // Determine final duration to display - priority: timer data > params > calculate from seconds
+  let displayDuration = finalDuration;
+  if (!displayDuration) {
+    if (durationParam) {
+      displayDuration = durationParam;
+    } else if (durationSecondsParam) {
+      displayDuration = formatDuration(parseInt(durationSecondsParam));
+    } else {
+      displayDuration = '0 minutes';
+    }
+  }
 
   const completionTime = jobDetails?.timeline?.completedAt || completedAtParam
     ? formatTime(jobDetails?.timeline?.completedAt || completedAtParam)
@@ -613,7 +718,7 @@ const ServiceCompletedScreen = () => {
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Duration</Text>
-            <Text style={styles.summaryValue}>{duration}</Text>
+            <Text style={styles.summaryValue}>{displayDuration}</Text>
           </View>
 
           <View style={styles.summaryRow}>
@@ -744,7 +849,6 @@ const ServiceCompletedScreen = () => {
             <Text style={styles.receiptTotalValue}>{parseFloat(totalAmount).toFixed(2)} BHD</Text>
           </View>
 
-          {/* Updated Download Button with loading state */}
           <TouchableOpacity
             style={[styles.downloadButton, isDownloading && styles.downloadButtonDisabled]}
             onPress={handleDownloadReceipt}
@@ -761,7 +865,6 @@ const ServiceCompletedScreen = () => {
             )}
           </TouchableOpacity>
 
-          {/* Optional screenshot hint */}
           <TouchableOpacity
             style={styles.screenshotHint}
             onPress={handleTakeScreenshot}

@@ -2753,7 +2753,7 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
 
     } catch (error) {
       console.error('Error getting address:', error);
-      Alert.alert('Error', 'Failed to get address for selected location');
+      Alert.alert('Error', 'Failed to get address for selected location, Please Try Again');
     }
   };
 

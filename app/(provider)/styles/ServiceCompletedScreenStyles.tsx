@@ -368,4 +368,27 @@ export const styles = StyleSheet.create({
     color: '#555555',
     letterSpacing: 0.5,
   },
+   confirmInfoBoxConfirmed: {
+    backgroundColor: '#E8F5E9',
+    borderColor: '#00C853',
+  },
+  
+  waitingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#FFF9C4',
+    borderRadius: 8,
+  },
+  
+  waitingText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#F57C00',
+    fontWeight: '500',
+  },
+  
+  
 });

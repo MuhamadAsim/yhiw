@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,19 +13,21 @@ import {
   AppState,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import ChatPopup from './components/ChatPopup'; // Import ChatPopup
+import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/ServiceInProgressScreenStyles';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
-// ─── Timer Hook with Database Save ───────────────────────────────────────────
+// ─── Timer Hook with Continuous Sync (Every 10 seconds) ───────────────────
 const useTimer = (initialSeconds: number = 0, bookingId: string) => {
   const [seconds, setSeconds] = useState<number>(initialSeconds);
   const [paused, setPaused] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
+  const lastSyncTime = useRef<Date>(new Date());
+  const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const addDebug = (message: string, data?: any) => {
     console.log(`🔍 [Timer] ${message}`, data || '');
@@ -52,15 +54,45 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
     return () => clearInterval(interval);
   }, [paused, isLoaded]);
 
-  // Save timer to database - only called on pause/resume or navigation
-  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete' | 'add_time', additionalData?: any): Promise<boolean> => {
+  // Sync timer to backend every 10 seconds when running
+  useEffect(() => {
+    if (!isLoaded || paused || !bookingId) {
+      // Clear sync interval if paused or not loaded
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+      return;
+    }
+
+    addDebug('🔄 Starting 10-second sync interval');
+
+    // Sync immediately when timer starts running
+    saveTimerToDatabase('sync');
+
+    // Set up interval to sync every 10 seconds
+    syncIntervalRef.current = setInterval(() => {
+      saveTimerToDatabase('sync');
+      lastSyncTime.current = new Date();
+    }, 10000);
+
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+  }, [isLoaded, paused, bookingId]);
+
+  // Save timer to database
+  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete' | 'add_time' | 'sync', additionalData?: any): Promise<boolean> => {
     if (!bookingId) return false;
 
     try {
       setIsSaving(true);
       const token = await AsyncStorage.getItem('userToken');
 
-      addDebug(`📡 Saving timer: ${seconds}s, action: ${action}`);
+      addDebug(`📡 Syncing timer: ${seconds}s, action: ${action}, paused: ${paused}`);
 
       const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
         method: 'PATCH',
@@ -70,8 +102,9 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
         },
         body: JSON.stringify({
           durationSeconds: seconds,
-          paused: action === 'pause' ? true : (action === 'resume' ? false : paused),
+          paused: paused,
           action: action,
+          lastUpdated: new Date().toISOString(),
           ...additionalData
         }),
       });
@@ -79,21 +112,21 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
       const responseData = await response.json();
 
       if (response.ok) {
-        addDebug(`✅ Timer saved: ${seconds}s, action: ${action}`, responseData);
+        addDebug(`✅ Timer synced: ${seconds}s`);
         return true;
       } else {
-        addDebug(`⚠️ Failed to save timer: ${response.status}`, responseData);
+        addDebug(`⚠️ Failed to sync timer: ${response.status}`, responseData);
         return false;
       }
     } catch (error) {
-      addDebug('❌ Error saving timer:', error);
+      addDebug('❌ Error syncing timer:', error);
       return false;
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Enhanced pause/resume with save
+  // Pause/Resume handler
   const handlePauseResume = async () => {
     const newPausedState = !paused;
     const action = newPausedState ? 'pause' : 'resume';
@@ -101,19 +134,14 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
     // Update local state first for immediate UI response
     setPaused(newPausedState);
 
-    // Then save to database
+    // Save to database
     await saveTimerToDatabase(action);
   };
 
-  // Add time function - directly adds minutes to timer
+  // Add time function
   const addTime = async (minutes: number): Promise<boolean> => {
-    // Calculate new duration
     const newSeconds = seconds + (minutes * 60);
-    
-    // Update local state immediately
     setSeconds(newSeconds);
-    
-    // Save to database with the new duration
     return await saveTimerToDatabase('add_time', { addedMinutes: minutes });
   };
 
@@ -125,7 +153,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
     return `${h}:${m}:${sec}`;
   };
 
-  // Load initial timer from database
+  // Load timer from database and calculate elapsed time
   const loadTimerFromDatabase = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -138,33 +166,40 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
 
       const data = await response.json();
 
-      if (response.ok && data.success) {
-        if (data.timer) {
-          setSeconds(data.timer.durationSeconds || 0);
-          setPaused(data.timer.isPaused || false);
-          addDebug(`✅ Timer loaded: ${data.timer.durationSeconds}s, paused: ${data.timer.isPaused}`);
-        } else {
-          // No existing timer found - start fresh with timer RUNNING
-          addDebug('ℹ️ No existing timer found - starting fresh');
-          setSeconds(0);
-          setPaused(false); // IMPORTANT: Start running
+      if (response.ok && data.success && data.timer) {
+        let serverSeconds = data.timer.durationSeconds || 0;
+        const serverPaused = data.timer.isPaused || false;
+        const lastUpdated = data.timer.lastUpdated ? new Date(data.timer.lastUpdated) : null;
+
+        // If timer wasn't paused, calculate elapsed time since last update
+        if (!serverPaused && lastUpdated) {
+          const now = new Date();
+          const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
           
-          // Save initial state to database
-          await saveTimerToDatabase('resume');
+          // Only add elapsed time if it's positive and reasonable (less than 1 hour)
+          if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
+            serverSeconds = serverSeconds + elapsedSeconds;
+            addDebug(`⏱️ Timer was running - added ${elapsedSeconds}s elapsed time`);
+          }
         }
+
+        setSeconds(serverSeconds);
+        setPaused(serverPaused);
+        lastSyncTime.current = new Date();
+        
+        addDebug(`✅ Timer loaded: ${serverSeconds}s, paused: ${serverPaused}`);
       } else {
-        addDebug(`⚠️ Failed to load timer: ${response.status}`, data);
-        // Start fresh if can't load
+        addDebug('ℹ️ No existing timer found - starting fresh');
         setSeconds(0);
         setPaused(false);
+        // Save initial state
+        await saveTimerToDatabase('resume');
       }
     } catch (error) {
       addDebug('❌ Error loading timer:', error);
-      // Start fresh on error
       setSeconds(0);
       setPaused(false);
     } finally {
-      // Mark as loaded so timer can start
       setIsLoaded(true);
     }
   };
@@ -255,7 +290,7 @@ export default function ServiceInProgressScreen() {
 
   // Check if there are any messages
   const checkForAnyMessage = async () => {
-    if (!bookingId || chatVisible) return; // Don't check if chat is open
+    if (!bookingId || chatVisible) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -270,10 +305,9 @@ export default function ServiceInProgressScreen() {
       if (!response.ok) return;
 
       const data: HasMessageResponse = await response.json();
-      
+
       if (data.success) {
         setHasNewMessage(data.hasAnyMessage || false);
-        
         if (data.hasAnyMessage) {
           addDebug('📬 There is a message available');
         }
@@ -286,14 +320,13 @@ export default function ServiceInProgressScreen() {
   // Handle message button press
   const handleMessage = () => {
     addDebug('💬 Opening chat popup with customer');
-    setHasNewMessage(false); // Reset indicator when opening
+    setHasNewMessage(false);
     setChatVisible(true);
   };
 
   // Handle chat close
   const handleChatClose = () => {
     setChatVisible(false);
-    // Small delay to ensure chat is fully closed before checking
     setTimeout(() => {
       checkForAnyMessage();
     }, 500);
@@ -302,7 +335,6 @@ export default function ServiceInProgressScreen() {
   // Update local storage with current status
   const updateStorageStatus = async (status: string) => {
     try {
-      // Update in activeBookings array
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
         let activeBookings = JSON.parse(activeBookingsJson);
@@ -312,32 +344,28 @@ export default function ServiceInProgressScreen() {
           activeBookings[bookingIndex] = {
             ...activeBookings[bookingIndex],
             status,
-            screen: 'ServiceInProgress',
+            screen: status === 'completed_provider' ? 'ServiceCompletedScreen' : 'ServiceInProgress',
             timestamp: new Date().toISOString(),
           };
           await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
         }
       }
 
-      // Update current booking status
       await AsyncStorage.setItem('currentBookingStatus', status);
-
       addDebug(`✅ Storage updated with status: ${status}`);
     } catch (error) {
       addDebug('❌ Error updating storage:', error);
     }
   };
-
+  
   // Mark service as started when screen loads
   const markServiceStarted = async (): Promise<void> => {
     try {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) return;
 
-      // Update local storage first
       await updateStorageStatus('in_progress');
 
-      // Then update backend
       const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
         method: 'PATCH',
         headers: {
@@ -381,12 +409,10 @@ export default function ServiceInProgressScreen() {
       if (response.ok && data.success && isMounted.current) {
         addDebug(`📊 Job status: ${data.status}`);
 
-        // Check if job is cancelled
         if (data.status === 'cancelled' && !cancellationAcknowledged) {
           handleJobCancelled(data.cancellationReason || 'Customer cancelled the service');
         }
 
-        // Update job details if we have them
         if (data.job) {
           setJobData(prev => ({
             ...prev,
@@ -404,23 +430,18 @@ export default function ServiceInProgressScreen() {
 
   // Handle job cancellation
   const handleJobCancelled = (reason: string) => {
-    // Prevent multiple alerts
     if (cancellationAcknowledged) return;
-
     setCancellationAcknowledged(true);
 
-    // Stop timer if running
     if (!paused) {
       handlePauseResume();
     }
 
-    // Stop status checking
     if (statusCheckInterval.current) {
       clearInterval(statusCheckInterval.current);
       statusCheckInterval.current = null;
     }
 
-    // Show alert to provider
     Alert.alert(
       'Service Cancelled',
       `The customer has cancelled this service.\n\nReason: ${reason}`,
@@ -428,9 +449,7 @@ export default function ServiceInProgressScreen() {
         {
           text: 'OK',
           onPress: async () => {
-            // Clean up storage
             await cleanupBooking();
-            // Navigate to home
             router.replace('/(provider)/home');
           }
         }
@@ -442,7 +461,6 @@ export default function ServiceInProgressScreen() {
   // Clean up booking from storage
   const cleanupBooking = async () => {
     try {
-      // Remove from active bookings
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
         let activeBookings = JSON.parse(activeBookingsJson);
@@ -450,7 +468,6 @@ export default function ServiceInProgressScreen() {
         await AsyncStorage.setItem('activeBookings', JSON.stringify(activeBookings));
       }
 
-      // Clear current booking if it matches
       const currentId = await AsyncStorage.getItem('currentBookingId');
       if (currentId === bookingId) {
         await AsyncStorage.removeItem('currentBookingId');
@@ -500,6 +517,18 @@ export default function ServiceInProgressScreen() {
     }
   };
 
+  // Focus effect - reload timer when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (bookingId) {
+        addDebug('📱 Screen focused - reloading timer');
+        loadTimerFromDatabase();
+        checkJobStatus();
+        checkForAnyMessage();
+      }
+    }, [bookingId])
+  );
+
   // Initialize screen
   useEffect(() => {
     isMounted.current = true;
@@ -513,16 +542,9 @@ export default function ServiceInProgressScreen() {
     addDebug('📦 ServiceInProgressScreen mounted with bookingId:', bookingId);
 
     const initializeScreen = async () => {
-      // Load timer from database - this will now start automatically
       await loadTimerFromDatabase();
-
-      // Mark service as started
       await markServiceStarted();
-
-      // Fetch job details
       await fetchJobDetails();
-
-      // Check for messages
       await checkForAnyMessage();
     };
 
@@ -533,22 +555,20 @@ export default function ServiceInProgressScreen() {
       if (isMounted.current) {
         Promise.all([
           checkJobStatus(),
-          checkForAnyMessage() // Check messages in the same interval
+          checkForAnyMessage()
         ]);
       }
     }, 10000);
 
-    // Check status and messages immediately
     checkJobStatus();
     checkForAnyMessage();
 
     // Listen for app state changes
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to the foreground - check status and messages immediately
+        addDebug('📱 App came to foreground - reloading timer');
         checkJobStatus();
         checkForAnyMessage();
-        // Also reload timer in case it was updated elsewhere
         loadTimerFromDatabase();
       }
       appState.current = nextAppState;
@@ -562,7 +582,6 @@ export default function ServiceInProgressScreen() {
       }
       subscription.remove();
 
-      // Save timer when component unmounts (navigation away)
       if (bookingId) {
         saveTimerForCompletion();
       }
@@ -583,7 +602,6 @@ export default function ServiceInProgressScreen() {
     Alert.alert('Add Photo', 'Camera functionality will be implemented');
   };
 
-  // UPDATED: Handle Add Time - Directly adds time without approval
   const handleAddTime = (): void => {
     Alert.alert(
       'Add Time',
@@ -632,8 +650,6 @@ export default function ServiceInProgressScreen() {
         {
           text: 'Custom',
           onPress: () => {
-            // For custom time, you could implement a number input modal
-            // For now, just show a message
             Alert.alert(
               'Custom Time',
               'Enter custom minutes:',
@@ -721,13 +737,42 @@ export default function ServiceInProgressScreen() {
             setLoading(true);
 
             try {
-              // Save final timer state before navigating
               await saveTimerForCompletion();
 
-              // Update status in storage
-              await updateStorageStatus('completed');
+              const token = await AsyncStorage.getItem('userToken');
+              if (!token) {
+                throw new Error('Authentication failed');
+              }
 
-              // Navigate to next page with timer data
+              addDebug('📡 Marking service as completed_provider for booking:', bookingId);
+
+              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
+                method: 'PATCH',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  status: 'completed_provider',
+                  action: 'complete',
+                  durationSeconds: seconds,
+                  completedAt: new Date().toISOString()
+                }),
+              });
+
+              const data = await response.json();
+              addDebug('📡 Status update response:', {
+                status: response.status,
+                data
+              });
+
+              if (!response.ok) {
+                throw new Error(data.message || data.error || 'Failed to complete service');
+              }
+
+              await updateStorageStatus('completed_provider');
+              addDebug('✅ Service marked as completed_provider successfully');
+
               router.push({
                 pathname: '/(provider)/ServiceCompletedScreen',
                 params: {
@@ -745,8 +790,24 @@ export default function ServiceInProgressScreen() {
                   timerLastSaved: new Date().toISOString(),
                 }
               });
+
             } catch (error) {
-              Alert.alert('Error', 'Failed to complete service');
+              addDebug('❌ Error completing service:', error);
+              Alert.alert(
+                'Error',
+                error instanceof Error ? error.message : 'Failed to complete service. Please try again.',
+                [
+                  { text: 'Try Again', style: 'cancel' },
+                  {
+                    text: 'Go to Home',
+                    onPress: async () => {
+                      await cleanupBooking();
+                      router.replace('/(provider)/home');
+                    }
+                  }
+                ]
+              );
+            } finally {
               setLoading(false);
             }
           }
@@ -777,20 +838,15 @@ export default function ServiceInProgressScreen() {
                 body: JSON.stringify({ reason: 'provider_cancelled' }),
               });
 
-              const data = await response.json();
-
-              // Clean up storage
               await cleanupBooking();
 
               if (response.ok) {
-                Alert.alert('Success', data.message || 'Service cancelled');
+                Alert.alert('Success', 'Service cancelled');
               }
 
-              // Navigate to home
               router.replace('/(provider)/Home');
             } catch (error) {
               console.log('Cancel API call failed:', error);
-              // Still navigate home
               router.replace('/(provider)/Home');
             } finally {
               setLoading(false);
@@ -811,7 +867,6 @@ export default function ServiceInProgressScreen() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
-      {/* ── HEADER ── */}
       <View style={styles.header}>
         <View style={styles.headerLeft} />
         <View style={styles.headerCenter}>
@@ -826,22 +881,19 @@ export default function ServiceInProgressScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── SERVICE ACTIVE BADGE ── */}
         <View style={styles.activeBadge}>
           <View style={styles.activeDot} />
           <Text style={styles.activeBadgeText}>Service Active</Text>
         </View>
 
-        {/* ── TIMER CARD ── */}
         <View style={styles.timerCard}>
           <Text style={styles.timerLabel}>SERVICE DURATION</Text>
           <Text style={styles.timerDisplay}>{display}</Text>
 
-          {/* Timer saving indicator */}
           {timerSaving && (
             <View style={styles.timerSavingIndicator}>
               <ActivityIndicator size="small" color="#87cefa" />
-              <Text style={styles.timerSavingText}>Saving...</Text>
+              <Text style={styles.timerSavingText}>Syncing...</Text>
             </View>
           )}
 
@@ -870,7 +922,6 @@ export default function ServiceInProgressScreen() {
           </View>
         </View>
 
-        {/* ── SERVICE DETAILS ── */}
         <View style={styles.card}>
           <Text style={styles.cardSectionLabel}>SERVICE DETAILS</Text>
           <View style={styles.detailsDivider} />
@@ -887,7 +938,6 @@ export default function ServiceInProgressScreen() {
           ))}
         </View>
 
-        {/* ── CUSTOMER CONTACT ── */}
         <View style={styles.card}>
           <Text style={styles.cardSectionLabel}>CUSTOMER CONTACT</Text>
           <View style={styles.customerRow}>
@@ -905,9 +955,9 @@ export default function ServiceInProgressScreen() {
               <Text style={styles.contactBtnText}>Call</Text>
             </TouchableOpacity>
             <View style={styles.contactBtnSep} />
-            <TouchableOpacity 
-              style={styles.contactBtn} 
-              onPress={handleMessage} 
+            <TouchableOpacity
+              style={styles.contactBtn}
+              onPress={handleMessage}
               activeOpacity={0.7}
             >
               <View style={styles.messageIconContainer}>
@@ -919,7 +969,6 @@ export default function ServiceInProgressScreen() {
           </View>
         </View>
 
-        {/* ── PHOTO DOCUMENTATION ── */}
         <View style={styles.card}>
           <Text style={styles.cardSectionLabel}>PHOTO DOCUMENTATION</Text>
           <TouchableOpacity style={styles.photoAddBox} onPress={handleAddPhoto} activeOpacity={0.7}>
@@ -929,7 +978,6 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.photoHint}>Document before/after and any issues found</Text>
         </View>
 
-        {/* ── SERVICE CHECKLIST ── */}
         <View style={styles.card}>
           <Text style={styles.cardSectionLabel}>SERVICE CHECKLIST</Text>
           {CHECKLIST.map((item, i) => (
@@ -942,7 +990,6 @@ export default function ServiceInProgressScreen() {
           ))}
         </View>
 
-        {/* ── EARNINGS CARD ── */}
         <View style={styles.earningsCard}>
           <View style={styles.earningsRow}>
             <View>
@@ -958,7 +1005,6 @@ export default function ServiceInProgressScreen() {
           </View>
         </View>
 
-        {/* ── REPORT ISSUE ── */}
         <View style={styles.reportCard}>
           <View style={styles.reportHeader}>
             <Feather name="alert-triangle" size={18} color="#d08700" style={{ marginRight: 8 }} />
@@ -977,7 +1023,6 @@ export default function ServiceInProgressScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ── COMPLETE BUTTON ── */}
         <TouchableOpacity
           style={[styles.completeBtn, (loading || timerSaving) && styles.buttonDisabled]}
           onPress={handleComplete}
@@ -994,7 +1039,6 @@ export default function ServiceInProgressScreen() {
           )}
         </TouchableOpacity>
 
-        {/* ── CANCEL SERVICE LINK ── */}
         <TouchableOpacity
           style={styles.cancelLink}
           onPress={handleCancelService}
@@ -1009,7 +1053,6 @@ export default function ServiceInProgressScreen() {
         <View style={{ height: 16 }} />
       </ScrollView>
 
-      {/* Chat Popup */}
       <ChatPopup
         visible={chatVisible}
         onClose={handleChatClose}

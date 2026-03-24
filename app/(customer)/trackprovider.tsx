@@ -34,13 +34,13 @@ interface ProviderLocation extends Coordinates {
 
 interface UpdateEvent {
   id: string;
-  type: 'accepted' | 'started' | 'completed' | 'completed_confirmed';
+  type: 'accepted' | 'started' | 'completed' | 'completed_provider' | 'completed_confirmed';
   message: string;
   timestamp: Date;
 }
 
 interface JobStatusResponse {
-  status: 'accepted' | 'started' | 'completed' | 'cancelled' | 'completed_confirmed' | 'in_progress';
+  status: 'accepted' | 'started' | 'in_progress' | 'completed' | 'completed_provider' | 'completed_confirmed' | 'cancelled';
   eta?: string;
   distance?: string;
   provider?: {
@@ -48,6 +48,8 @@ interface JobStatusResponse {
     phone: string;
     rating: number;
   };
+  startedAt?: string;
+  completedAt?: string;
 }
 
 interface RouteResponse {
@@ -106,9 +108,8 @@ interface LiveTrackingResponse {
 
 interface HasMessageResponse {
   success: boolean;
-  hasAnyMessage: boolean; // Change from hasProviderMessage to hasAnyMessage
+  hasAnyMessage: boolean;
 }
-
 
 const TrackProviderScreen = () => {
   const router = useRouter();
@@ -143,6 +144,7 @@ const TrackProviderScreen = () => {
   const [pollingAttempts, setPollingAttempts] = useState<number>(0);
   const [currentStatus, setCurrentStatus] = useState<string>('accepted');
   const [apiError, setApiError] = useState<string | null>(null);
+  const [hasShownProviderCompleteAlert, setHasShownProviderCompleteAlert] = useState(false);
 
   const [region, setRegion] = useState<Region>({
     latitude: 26.2285,
@@ -177,8 +179,9 @@ const TrackProviderScreen = () => {
       console.log(logMessage);
     }
   };
+
   const checkForProviderMessage = async () => {
-    if (!bookingId || chatVisible) return; // Don't check if chat is open
+    if (!bookingId || chatVisible) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -195,9 +198,7 @@ const TrackProviderScreen = () => {
       const data: HasMessageResponse = await response.json();
 
       if (data.success) {
-        // Use hasAnyMessage (not hasProviderMessage)
         setHasNewMessage(data.hasAnyMessage || false);
-
         if (data.hasAnyMessage) {
           addDebug(`📬 Provider has sent a message`);
         }
@@ -207,17 +208,14 @@ const TrackProviderScreen = () => {
     }
   };
 
-  // Handle opening chat
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
-    setHasNewMessage(false); // Reset indicator when opening
+    setHasNewMessage(false);
     setChatVisible(true);
   };
 
-  // Handle chat close
   const handleChatClose = () => {
     setChatVisible(false);
-    // Small delay to ensure chat is fully closed before checking
     setTimeout(() => {
       checkForProviderMessage();
     }, 500);
@@ -226,13 +224,11 @@ const TrackProviderScreen = () => {
   useEffect(() => {
     addDebug(`🚀 Component mounted with bookingId: ${bookingId}`);
 
-    // Set provider info from params
     if (providerNameParam) setProviderName(providerNameParam);
     if (providerIdParam) setProviderId(providerIdParam);
     if (providerPhoneParam) setProviderPhone(providerPhoneParam);
     if (pickupAddressParam) setPickupAddress(pickupAddressParam);
 
-    // Set initial locations from params (as fallback)
     if (!isNaN(providerLat) && !isNaN(providerLng)) {
       addDebug(`📍 Initial provider location from params: ${providerLat}, ${providerLng}`);
       setProviderLocation({
@@ -247,7 +243,6 @@ const TrackProviderScreen = () => {
       setPickupLocation({ latitude: pickupLat, longitude: pickupLng });
     }
 
-    // Handle dropoff location - only set if both coordinates are valid
     if (!isNaN(dropoffLat) && !isNaN(dropoffLng) && dropoffLat !== 0 && dropoffLng !== 0) {
       addDebug(`📍 Dropoff location from params: ${dropoffLat}, ${dropoffLng}`);
       setDropoffLocation({ latitude: dropoffLat, longitude: dropoffLng });
@@ -257,7 +252,6 @@ const TrackProviderScreen = () => {
       setEta(estimatedArrival);
     }
 
-    // Add initial updates
     const initialUpdates: UpdateEvent[] = [
       {
         id: '1',
@@ -268,10 +262,8 @@ const TrackProviderScreen = () => {
     ];
     setUpdates(initialUpdates);
 
-    // Get current user location
     getUserLocation();
 
-    // Start polling for provider location and job status
     if (bookingId) {
       startPolling();
     }
@@ -290,7 +282,6 @@ const TrackProviderScreen = () => {
     };
   }, []);
 
-  // Fetch route data from backend (includes polyline and addresses)
   const fetchRouteData = async () => {
     if (!bookingId || initialRouteFetched.current) return;
 
@@ -303,7 +294,6 @@ const TrackProviderScreen = () => {
         return;
       }
 
-      // SIMPLE GET request - backend knows all locations
       const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/route`, {
         method: 'GET',
         headers: {
@@ -323,7 +313,6 @@ const TrackProviderScreen = () => {
       if (data.success && data.route) {
         initialRouteFetched.current = true;
 
-        // Update locations with real data from backend
         if (data.route.providerLocation) {
           setProviderLocation({
             latitude: data.route.providerLocation.latitude,
@@ -342,7 +331,6 @@ const TrackProviderScreen = () => {
           setPickupAddress(data.route.pickupLocation.address);
         }
 
-        // Handle dropoff location - only if it exists with valid coordinates
         if (data.route.dropoffLocation &&
           data.route.dropoffLocation.latitude &&
           data.route.dropoffLocation.longitude) {
@@ -355,22 +343,18 @@ const TrackProviderScreen = () => {
           setDropoffLocation(null);
         }
 
-        // Update ETA and distance
         if (data.route.eta) setEta(data.route.eta);
         if (data.route.distance) setDistance(data.route.distance);
 
-        // Decode and set route polyline
         if (data.route.polyline) {
           const points = decodePolyline(data.route.polyline);
           setRouteCoordinates(points);
           addDebug(`🗺️ Decoded ${points.length} polyline points`);
         }
 
-        // Update provider info
         if (data.route.providerName) setProviderName(data.route.providerName);
         if (data.route.providerPhone) setProviderPhone(data.route.providerPhone);
 
-        // Fit map to show both locations
         if (data.route.providerLocation && data.route.pickupLocation) {
           fitMapToCoordinates(
             {
@@ -393,7 +377,6 @@ const TrackProviderScreen = () => {
     }
   };
 
-  // Fetch live tracking data (lightweight polling)
   const fetchLiveTracking = async () => {
     if (!bookingId) return;
 
@@ -417,7 +400,6 @@ const TrackProviderScreen = () => {
       if (data.success) {
         setPollingAttempts(prev => prev + 1);
 
-        // Update provider location
         if (data.location) {
           const newLocation = {
             latitude: data.location.latitude,
@@ -429,7 +411,6 @@ const TrackProviderScreen = () => {
 
           setProviderLocation(newLocation);
 
-          // Refresh route when provider location changes significantly
           if (providerLocation &&
             (Math.abs(newLocation.latitude - providerLocation.latitude) > 0.001 ||
               Math.abs(newLocation.longitude - providerLocation.longitude) > 0.001)) {
@@ -439,17 +420,15 @@ const TrackProviderScreen = () => {
             }
 
             routeFetchTimer.current = setTimeout(() => {
-              fetchRouteData(); // Refresh route with new provider location
-            }, 5000); // Wait 5 seconds after significant movement
+              fetchRouteData();
+            }, 5000);
           }
         }
 
-        // Update status
         if (data.status) {
           setCurrentStatus(data.status);
         }
 
-        // Update ETA if provided
         if (data.eta) setEta(data.eta);
         if (data.distance) setDistance(data.distance);
         if (data.providerName) setProviderName(data.providerName);
@@ -460,10 +439,6 @@ const TrackProviderScreen = () => {
     }
   };
 
-
-
-
-  // Fetch job status - polls every 10 seconds
   const fetchJobStatus = async () => {
     if (!bookingId || navigationInProgress.current) return;
 
@@ -487,11 +462,22 @@ const TrackProviderScreen = () => {
 
       setCurrentStatus(data.status);
 
-      // Update ETA if provided
       if (data.eta) setEta(data.eta);
       if (data.distance) setDistance(data.distance);
 
-      // ===== AUTO-NAVIGATE WHEN SERVICE STARTS =====
+      // Show alert when provider completes service
+      if (data.status === 'completed_provider' && !hasShownProviderCompleteAlert && !navigationInProgress.current) {
+        addDebug('✅✅ Provider has completed the service!');
+        setHasShownProviderCompleteAlert(true);
+
+        Alert.alert(
+          'Service Completed by Provider',
+          'The provider has marked the service as complete. Please review and confirm completion.',
+          [{ text: 'OK' }]
+        );
+      }
+
+      // Auto-navigate when service starts
       if (data.status === 'started' || data.status === 'in_progress') {
         addDebug('✅✅✅ SERVICE HAS STARTED - Auto-navigating to ServiceInProgress');
 
@@ -508,13 +494,11 @@ const TrackProviderScreen = () => {
         if (!navigationInProgress.current) {
           navigationInProgress.current = true;
 
-          // Stop polling
           if (pollingTimer.current) {
             clearTimeout(pollingTimer.current);
             pollingTimer.current = null;
           }
 
-          // Navigate to ServiceInProgress
           setTimeout(() => {
             if (isMounted.current) {
               router.push({
@@ -537,15 +521,15 @@ const TrackProviderScreen = () => {
         }
       }
 
-      // ===== AUTO-NAVIGATE WHEN SERVICE IS COMPLETED =====
-      else if (data.status === 'completed' || data.status === 'completed_confirmed') {
-        addDebug('✅✅✅ SERVICE COMPLETED - Auto-navigating to ServiceCompleted');
+      // Handle completed by provider - Navigate to ServiceInProgress with confirmation button
+      else if (data.status === 'completed_provider' && !navigationInProgress.current) {
+        addDebug('✅✅ PROVIDER COMPLETED SERVICE - Auto-navigating to ServiceInProgress for confirmation');
 
-        if (!updates.some(u => u.type === 'completed' || u.type === 'completed_confirmed')) {
+        if (!updates.some(u => u.type === 'completed_provider')) {
           const newUpdate: UpdateEvent = {
             id: Date.now().toString(),
-            type: data.status,
-            message: data.status === 'completed' ? 'Service completed' : 'Service completion confirmed',
+            type: 'completed_provider',
+            message: 'Provider has completed the service. Please confirm completion.',
             timestamp: new Date(),
           };
           setUpdates(prev => [newUpdate, ...prev]);
@@ -554,13 +538,56 @@ const TrackProviderScreen = () => {
         if (!navigationInProgress.current) {
           navigationInProgress.current = true;
 
-          // Stop polling
           if (pollingTimer.current) {
             clearTimeout(pollingTimer.current);
             pollingTimer.current = null;
           }
 
-          // Navigate to ServiceCompleted
+          setTimeout(() => {
+            if (isMounted.current) {
+              router.push({
+                pathname: '/(customer)/ServiceInProgress',
+                params: {
+                  bookingId,
+                  providerName,
+                  providerId,
+                  providerPhone,
+                  serviceType,
+                  vehicleType,
+                  pickupLocation: pickupAddress,
+                  pickupLat: pickupLat.toString(),
+                  pickupLng: pickupLng.toString(),
+                  totalAmount,
+                  status: 'completed_provider'
+                }
+              });
+            }
+          }, 500);
+        }
+      }
+
+      // Handle completed - Navigate to ServiceCompleted
+      else if (data.status === 'completed' && !navigationInProgress.current) {
+        addDebug('✅✅ SERVICE COMPLETED - Auto-navigating to ServiceCompleted');
+
+        if (!updates.some(u => u.type === 'completed')) {
+          const newUpdate: UpdateEvent = {
+            id: Date.now().toString(),
+            type: 'completed',
+            message: 'Service completed',
+            timestamp: new Date(),
+          };
+          setUpdates(prev => [newUpdate, ...prev]);
+        }
+
+        if (!navigationInProgress.current) {
+          navigationInProgress.current = true;
+
+          if (pollingTimer.current) {
+            clearTimeout(pollingTimer.current);
+            pollingTimer.current = null;
+          }
+
           setTimeout(() => {
             if (isMounted.current) {
               router.push({
@@ -576,15 +603,87 @@ const TrackProviderScreen = () => {
                   pickupLat: pickupLat.toString(),
                   pickupLng: pickupLng.toString(),
                   totalAmount,
-                  completedAt: new Date().toISOString(),
-                  // You might want to add duration here if available
-                  // duration: '00:00', 
-                  // durationSeconds: '0',
+                  completedAt: data.completedAt || new Date().toISOString(),
+                  status: 'completed'
                 }
               });
             }
           }, 500);
         }
+      }
+
+      // Handle completed_confirmed - Navigate to ServiceCompleted and clean up
+      else if (data.status === 'completed_confirmed' && !navigationInProgress.current) {
+        addDebug('✅✅✅ SERVICE COMPLETED AND CONFIRMED - Auto-navigating to ServiceCompleted');
+
+        if (!updates.some(u => u.type === 'completed_confirmed')) {
+          const newUpdate: UpdateEvent = {
+            id: Date.now().toString(),
+            type: 'completed_confirmed',
+            message: 'Service completion confirmed',
+            timestamp: new Date(),
+          };
+          setUpdates(prev => [newUpdate, ...prev]);
+        }
+
+        if (!navigationInProgress.current) {
+          navigationInProgress.current = true;
+
+          if (pollingTimer.current) {
+            clearTimeout(pollingTimer.current);
+            pollingTimer.current = null;
+          }
+
+          // Clean up storage
+          AsyncStorage.removeItem('currentBookingId').catch(console.error);
+
+          setTimeout(() => {
+            if (isMounted.current) {
+              router.push({
+                pathname: '/(customer)/ServiceCompleted',
+                params: {
+                  bookingId,
+                  providerName,
+                  providerId,
+                  providerPhone,
+                  serviceType,
+                  vehicleType,
+                  pickupLocation: pickupAddress,
+                  pickupLat: pickupLat.toString(),
+                  pickupLng: pickupLng.toString(),
+                  totalAmount,
+                  completedAt: data.completedAt || new Date().toISOString(),
+                  status: 'completed_confirmed'
+                }
+              });
+            }
+          }, 500);
+        }
+      }
+
+      // Handle cancelled
+      else if (data.status === 'cancelled' && !navigationInProgress.current) {
+        addDebug('❌ SERVICE CANCELLED - Showing alert');
+
+        if (pollingTimer.current) {
+          clearTimeout(pollingTimer.current);
+          pollingTimer.current = null;
+        }
+
+        Alert.alert(
+          'Service Cancelled',
+          'The service has been cancelled.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                if (isMounted.current) {
+                  router.replace('/(customer)/Home');
+                }
+              }
+            }
+          ]
+        );
       }
 
     } catch (error) {
@@ -595,7 +694,6 @@ const TrackProviderScreen = () => {
   const startPolling = () => {
     addDebug('🔄 Starting polling (every 10 seconds)');
 
-    // Fetch route data first (only once)
     fetchRouteData();
 
     const poll = async () => {
@@ -604,7 +702,7 @@ const TrackProviderScreen = () => {
       await Promise.all([
         fetchLiveTracking(),
         fetchJobStatus(),
-        checkForProviderMessage() // Check for provider messages
+        checkForProviderMessage()
       ]);
 
       if (isMounted.current && !navigationInProgress.current) {
@@ -612,7 +710,6 @@ const TrackProviderScreen = () => {
       }
     };
 
-    // Start first poll after 2 seconds
     setTimeout(poll, 2000);
   };
 
@@ -633,7 +730,6 @@ const TrackProviderScreen = () => {
   const decodePolyline = (encoded: string): Coordinates[] => {
     if (!encoded) return [];
 
-    // Check if it's a simple pipe-separated format (lat,lng|lat,lng)
     if (encoded.includes('|')) {
       return encoded.split('|').map(point => {
         const [lat, lng] = point.split(',').map(Number);
@@ -649,7 +745,6 @@ const TrackProviderScreen = () => {
       );
     }
 
-    // Google's encoded polyline format
     const points: Coordinates[] = [];
     let index = 0;
     let lat = 0;
@@ -689,7 +784,6 @@ const TrackProviderScreen = () => {
 
     return points;
   };
-
 
   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
     if (!mapRef.current || !coord1 || !coord2) return;
@@ -769,7 +863,7 @@ const TrackProviderScreen = () => {
     addDebug('🔄 Manually refreshing');
     fetchLiveTracking();
     fetchJobStatus();
-    fetchRouteData(); // Always refresh route on manual refresh
+    fetchRouteData();
   };
 
   const formatTime = (date: Date) => {
@@ -802,7 +896,6 @@ const TrackProviderScreen = () => {
           </View>
         )}
 
-        {/* Refresh Button */}
         <TouchableOpacity
           style={styles.refreshButton}
           onPress={forceRefresh}
@@ -821,7 +914,6 @@ const TrackProviderScreen = () => {
           showsCompass={true}
           onMapReady={() => addDebug('🗺️ Map is ready')}
         >
-          {/* Provider Marker */}
           {providerLocation && (
             <Marker
               coordinate={{
@@ -837,7 +929,6 @@ const TrackProviderScreen = () => {
             </Marker>
           )}
 
-          {/* Pickup Marker */}
           {pickupLocation && (
             <Marker
               coordinate={{
@@ -853,7 +944,6 @@ const TrackProviderScreen = () => {
             </Marker>
           )}
 
-          {/* Dropoff Marker */}
           {dropoffLocation && dropoffLocation.latitude && dropoffLocation.longitude && (
             <Marker
               coordinate={{
@@ -869,7 +959,6 @@ const TrackProviderScreen = () => {
             </Marker>
           )}
 
-          {/* Route Polyline */}
           {routeCoordinates.length > 0 && (
             <Polyline
               coordinates={routeCoordinates}
@@ -886,18 +975,6 @@ const TrackProviderScreen = () => {
             <Text style={styles.arrivingLabel}>Arriving in</Text>
             <Text style={styles.arrivingTime}>{eta}</Text>
           </View>
-        </View>
-
-        {/* Status Badge */}
-        <View style={[
-          styles.statusBadge,
-          currentStatus === 'started' ? styles.statusBadgeGreen : styles.statusBadgeBlue
-        ]}>
-          <Text style={styles.statusText}>
-            {currentStatus === 'started' ? 'SERVICE STARTED' :
-              currentStatus === 'accepted' ? 'ON THE WAY' :
-                currentStatus?.toUpperCase() || 'EN ROUTE'}
-          </Text>
         </View>
 
         {/* Map Controls */}
@@ -934,11 +1011,15 @@ const TrackProviderScreen = () => {
             <View style={styles.providerTextContainer}>
               <Text style={styles.providerName}>{providerName}</Text>
               <Text style={styles.providerStatus}>
-                {currentStatus === 'started'
-                  ? 'Service has started'
-                  : providerLocation
-                    ? 'Moving towards your location'
-                    : 'Waiting for location...'}
+                {currentStatus === 'started' || currentStatus === 'in_progress'
+                  ? 'Service in progress'
+                  : currentStatus === 'completed_provider'
+                    ? 'Provider has completed the service. Please confirm.'
+                    : currentStatus === 'completed_confirmed'
+                      ? 'Service completed and confirmed'
+                      : providerLocation
+                        ? 'Moving towards your location'
+                        : 'Waiting for location...'}
               </Text>
               {providerLocation?.lastUpdate && (
                 <Text style={styles.lastUpdate}>
@@ -962,7 +1043,6 @@ const TrackProviderScreen = () => {
               <Text style={styles.callButtonText}>Call</Text>
             </TouchableOpacity>
 
-            {/* Updated Message Button with Red Dot */}
             <TouchableOpacity
               style={styles.messageButton}
               onPress={handleMessage}
@@ -1030,7 +1110,7 @@ const TrackProviderScreen = () => {
               <View key={update.id} style={styles.updateItem}>
                 <View style={[
                   styles.updateDot,
-                  update.type === 'accepted' || update.type === 'started'
+                  (update.type === 'accepted' || update.type === 'started')
                     ? styles.updateDotGreen
                     : styles.updateDotGray
                 ]} />

@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -33,22 +33,60 @@ export default function ServiceCompleteScreen() {
   const vehicleType = params.vehicleType as string || 'Sedan';
   const licensePlate = params.licensePlate as string || 'ABC 1234';
   const vehicleModel = params.vehicleModel as string || 'Toyota Camry 2020';
-  const duration = params.duration as string || '00:35:00';
-  const durationSeconds = parseInt(params.durationSeconds as string) || 2100;
+  const durationParam = params.duration as string || '00:35:00';
+  const durationSecondsParam = parseInt(params.durationSeconds as string) || 2100;
+  const timerPausedParam = params.timerPaused === 'true';
+  const timerLastSavedParam = params.timerLastSaved as string;
 
   // Local state
   const [notes, setNotes] = useState('');
   const [paymentChecked, setPaymentChecked] = useState(false);
   const [ratingChecked, setRatingChecked] = useState(false);
+  const [customerConfirmed, setCustomerConfirmed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [jobsCompleted, setJobsCompleted] = useState(0);
   const [jobData, setJobData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [jobStatus, setJobStatus] = useState<string>('completed_provider');
+  const [finalDuration, setFinalDuration] = useState<string>(durationParam);
+  const [finalDurationSeconds, setFinalDurationSeconds] = useState<number>(durationSecondsParam);
+
+  // Polling interval ref
+  const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
+  const isMounted = useRef(true);
 
   // Debug logger
   const addDebug = (message: string, data?: any) => {
     console.log(`🔍 [ServiceComplete] ${message}`, data || '');
+  };
+
+  // Format duration from seconds
+  const formatDuration = (totalSeconds: number): string => {
+    if (!totalSeconds || totalSeconds === 0) return '0 minutes';
+
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      if (minutes > 0 && seconds > 0) {
+        return `${hours}h ${minutes}m ${seconds}s`;
+      } else if (minutes > 0) {
+        return `${hours}h ${minutes}m`;
+      } else if (seconds > 0) {
+        return `${hours}h ${seconds}s`;
+      }
+      return `${hours}h`;
+    }
+    
+    if (minutes > 0 && seconds > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m`;
+    } else {
+      return `${seconds}s`;
+    }
   };
 
   // Format completion time
@@ -58,16 +96,60 @@ export default function ServiceCompleteScreen() {
   });
 
   // Calculate fees correctly
-  const totalAmount = parseFloat(earnings); // This is the total paid by customer
-  const platformFee = totalAmount * 0.15; // 15% platform fee
-  const providerEarnings = totalAmount - platformFee; // Provider gets 85%
+  const totalAmount = parseFloat(earnings);
+  const platformFee = totalAmount * 0.15;
+  const providerEarnings = totalAmount - platformFee;
+
+  // Check if both conditions are met for completion
+  const canComplete = paymentChecked && customerConfirmed;
+
+  // Fetch final timer data from backend
+  const fetchFinalTimerData = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) return;
+
+      addDebug('⏱️ Fetching final timer data for booking:', bookingId);
+
+      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.timer) {
+          let finalSeconds = data.timer.durationSeconds || 0;
+          
+          // If timer wasn't paused, calculate elapsed time since last sync
+          if (!data.timer.isPaused && data.timer.lastUpdated) {
+            const lastUpdated = new Date(data.timer.lastUpdated);
+            const now = new Date();
+            const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
+            
+            if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
+              finalSeconds = finalSeconds + elapsedSeconds;
+              addDebug(`⏱️ Added ${elapsedSeconds}s elapsed time to final duration`);
+            }
+          }
+          
+          const formattedDuration = formatDuration(finalSeconds);
+          setFinalDuration(formattedDuration);
+          setFinalDurationSeconds(finalSeconds);
+          addDebug(`✅ Final duration from timer: ${finalSeconds}s (${formattedDuration})`);
+        }
+      }
+    } catch (error) {
+      addDebug('❌ Error fetching timer data:', error);
+    }
+  };
 
   // Clean up booking from AsyncStorage
   const cleanupBooking = async () => {
     try {
       addDebug('🧹 Cleaning up booking from storage:', bookingId);
 
-      // Remove from activeBookings array
       const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
       if (activeBookingsJson) {
         let activeBookings = JSON.parse(activeBookingsJson);
@@ -76,7 +158,6 @@ export default function ServiceCompleteScreen() {
         addDebug('✅ Removed from activeBookings');
       }
 
-      // Clear current booking if it matches
       const currentId = await AsyncStorage.getItem('currentBookingId');
       if (currentId === bookingId) {
         await AsyncStorage.removeItem('currentBookingId');
@@ -84,7 +165,6 @@ export default function ServiceCompleteScreen() {
         addDebug('✅ Cleared current booking');
       }
 
-      // Also clear any other booking-related data
       await AsyncStorage.removeItem(`job_${bookingId}`);
 
     } catch (error) {
@@ -92,10 +172,73 @@ export default function ServiceCompleteScreen() {
     }
   };
 
+  // Check job status from backend (polling)
+  const checkJobStatus = async () => {
+    if (!bookingId || !isMounted.current) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      addDebug('📡 Checking job status for customer confirmation...');
+
+      const response = await fetch(`${API_BASE_URL}/provider/job/${bookingId}/status`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success && isMounted.current) {
+        addDebug(`📊 Job status: ${data.status}`);
+        setJobStatus(data.status);
+
+        if (data.status === 'completed_confirmed' && !customerConfirmed) {
+          addDebug('✅ Customer has confirmed service completion!');
+          setCustomerConfirmed(true);
+          setRatingChecked(true);
+
+          Alert.alert(
+            'Customer Confirmed!',
+            'The customer has confirmed service completion. You can now finalize the service.',
+            [{ text: 'OK' }]
+          );
+        }
+      }
+    } catch (error) {
+      addDebug('❌ Error checking job status:', error);
+    }
+  };
+
   // Fetch provider's today's stats and job details on mount
   useEffect(() => {
-    fetchTodayStats();
-    fetchJobDetails();
+    isMounted.current = true;
+
+    const initializeData = async () => {
+      await fetchFinalTimerData();
+      await fetchTodayStats();
+      await fetchJobDetails();
+    };
+
+    initializeData();
+
+    // Start polling for customer confirmation (every 5 seconds)
+    statusCheckInterval.current = setInterval(() => {
+      if (isMounted.current && !customerConfirmed) {
+        checkJobStatus();
+      }
+    }, 5000);
+
+    checkJobStatus();
+
+    return () => {
+      isMounted.current = false;
+      if (statusCheckInterval.current) {
+        clearInterval(statusCheckInterval.current);
+        statusCheckInterval.current = null;
+      }
+    };
   }, []);
 
   const fetchJobDetails = async () => {
@@ -124,7 +267,7 @@ export default function ServiceCompleteScreen() {
     }
   };
 
-  // ✅ FIXED: fetchTodayStats with correct backend structure
+  // Fetch provider stats
   const fetchTodayStats = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -152,20 +295,17 @@ export default function ServiceCompleteScreen() {
       addDebug('📦 Stats response:', data);
 
       if (data.success && data.data) {
-        // ✅ CORRECT: Access data.data.performance based on your controller
         const performance = data.data.performance || {};
-        
+
         setTodayEarnings(parseFloat(performance.earnings) || 0);
         setJobsCompleted(performance.jobs || 0);
 
-        addDebug('✅ Stats updated:', { 
-          earnings: performance.earnings, 
+        addDebug('✅ Stats updated:', {
+          earnings: performance.earnings,
           jobs: performance.jobs,
           hours: performance.hours,
-          rating: performance.rating 
+          rating: performance.rating
         });
-      } else {
-        addDebug('❌ Failed to fetch stats:', data.message);
       }
     } catch (error) {
       addDebug('❌ Error fetching stats:', error);
@@ -176,10 +316,15 @@ export default function ServiceCompleteScreen() {
     Alert.alert('Photos', 'Photo gallery coming soon');
   };
 
-  // ✅ FIXED: handleConfirm with proper error handling
+  // Handle final confirmation and completion
   const handleConfirm = async () => {
     if (!paymentChecked) {
       Alert.alert('Payment Required', 'Please confirm payment received to complete.');
+      return;
+    }
+
+    if (!customerConfirmed) {
+      Alert.alert('Waiting for Customer', 'Please wait for the customer to confirm service completion.');
       return;
     }
 
@@ -197,12 +342,10 @@ export default function ServiceCompleteScreen() {
 
       addDebug('📡 Completing service for booking:', bookingId);
 
-      // Prepare checklist items
       const checklistItems = [];
       if (paymentChecked) checklistItems.push('payment_received');
       if (ratingChecked) checklistItems.push('customer_confirmed');
 
-      // Prepare any issues found
       const issues = [];
       if (notes.toLowerCase().includes('issue') || notes.toLowerCase().includes('problem')) {
         issues.push({
@@ -212,23 +355,26 @@ export default function ServiceCompleteScreen() {
         });
       }
 
-      // Match backend expected structure
       const requestBody = {
         completionNotes: notes,
         checklistCompleted: checklistItems,
         issuesFound: issues,
         timeTracking: {
-          totalSeconds: durationSeconds,
+          totalSeconds: finalDurationSeconds,
           isPaused: false
         },
         paymentReceived: paymentChecked,
-        customerConfirmed: ratingChecked,
-        durationSeconds: durationSeconds
+        customerConfirmed: customerConfirmed,
+        durationSeconds: finalDurationSeconds,
+        status: 'completed'
       };
 
-      addDebug('📦 Request body:', requestBody);
+      addDebug('📦 Request body with correct duration:', {
+        durationSeconds: finalDurationSeconds,
+        durationFormatted: finalDuration
+      });
 
-      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/finalize`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -238,9 +384,8 @@ export default function ServiceCompleteScreen() {
       });
 
       const data = await response.json();
-      addDebug('📡 Complete response:', {
+      addDebug('📡 Finalize response:', {
         status: response.status,
-        statusText: response.statusText,
         data
       });
 
@@ -249,22 +394,15 @@ export default function ServiceCompleteScreen() {
         throw new Error(errorMessage);
       }
 
-      // Clean up booking from storage
       await cleanupBooking();
 
-      // Update today's stats if available in response
-      if (data.data?.providerStats) {
-        setTodayEarnings(data.data.providerStats.todayEarnings || todayEarnings);
-        setJobsCompleted(data.data.providerStats.todayJobs || jobsCompleted);
-      }
-
-      // Show success message with earnings breakdown
       Alert.alert(
         '✅ Success!',
         `Service completed successfully!\n\n` +
         `Total: ${data.data?.earnings?.totalAmount?.toFixed(2) || earnings} BHD\n` +
         `Platform Fee: ${data.data?.earnings?.platformFee?.toFixed(2) || platformFee.toFixed(2)} BHD\n` +
-        `Your Earnings: ${data.data?.earnings?.providerEarnings?.toFixed(2) || providerEarnings.toFixed(2)} BHD\n\n` +
+        `Your Earnings: ${data.data?.earnings?.providerEarnings?.toFixed(2) || providerEarnings.toFixed(2)} BHD\n` +
+        `Duration: ${finalDuration}\n\n` +
         `Thank you for your hard work!`,
         [
           {
@@ -296,68 +434,18 @@ export default function ServiceCompleteScreen() {
     }
   };
 
-  // ✅ FIXED: handleBackToHome with proper error handling
+  // Handle back to home
   const handleBackToHome = async () => {
     Alert.alert(
       'Exit Completion',
-      'Are you sure you want to go back to home? The service will be marked as completed.',
+      'Are you sure you want to go back to home? The service will still need customer confirmation.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Yes, Complete & Go Home',
+          text: 'Yes, Go Home',
           onPress: async () => {
-            setIsSubmitting(true);
-
-            try {
-              const token = await AsyncStorage.getItem('userToken');
-              if (!token) {
-                Alert.alert('Error', 'Authentication failed');
-                setIsSubmitting(false);
-                return;
-              }
-
-              addDebug('📡 Completing service via back to home for booking:', bookingId);
-
-              const requestBody = {
-                completionNotes: notes || 'Completed via back to home',
-                checklistCompleted: paymentChecked ? ['payment_received'] : [],
-                issuesFound: [],
-                paymentReceived: paymentChecked,
-                customerConfirmed: ratingChecked,
-                durationSeconds: durationSeconds
-              };
-
-              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestBody),
-              });
-
-              const data = await response.json();
-              addDebug('📡 Complete response (back to home):', { status: response.status, data });
-
-              if (!response.ok) {
-                throw new Error(data.error || data.message || 'Failed to complete service');
-              }
-
-              // Clean up booking from storage
-              await cleanupBooking();
-
-              // Navigate to home
-              router.replace('/(provider)/Home');
-
-            } catch (error) {
-              addDebug('❌ Complete service error (back to home):', error);
-              Alert.alert(
-                'Error',
-                error instanceof Error ? error.message : 'Failed to complete service. Please try again.'
-              );
-            } finally {
-              setIsSubmitting(false);
-            }
+            await cleanupBooking();
+            router.replace('/(provider)/Home');
           }
         }
       ]
@@ -390,7 +478,7 @@ export default function ServiceCompleteScreen() {
             <Feather name="check-circle" size={48} color="#00C853" />
           </View>
           <Text style={styles.heroTitle}>Service Completed!</Text>
-          <Text style={styles.heroSub}>Finalize the details below</Text>
+          <Text style={styles.heroSub}>Waiting for customer confirmation...</Text>
         </View>
 
         {/* ── SERVICE SUMMARY ── */}
@@ -402,7 +490,7 @@ export default function ServiceCompleteScreen() {
             { label: 'Service Type:', value: serviceType, bold: false },
             { label: 'Customer:', value: customerName, bold: false },
             { label: 'Vehicle:', value: `${vehicleType} - ${licensePlate}`, bold: false },
-            { label: 'Duration:', value: duration, bold: false },
+            { label: 'Duration:', value: finalDuration, bold: false },
             { label: 'Completed:', value: completionTime, bold: false },
           ].map((row, i) => (
             <View key={i} style={styles.detailRow}>
@@ -455,18 +543,30 @@ export default function ServiceCompleteScreen() {
         {/* ── CUSTOMER CONFIRMATION ── */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>CUSTOMER CONFIRMATION</Text>
-          <View style={styles.confirmInfoBox}>
-            <View style={[styles.checkbox, styles.checkboxChecked]}>
-              <Feather name="check" size={12} color="#fff" />
+          <View style={[styles.confirmInfoBox, customerConfirmed && styles.confirmInfoBoxConfirmed]}>
+            <View style={[styles.checkbox, customerConfirmed && styles.checkboxChecked]}>
+              {customerConfirmed && <Feather name="check" size={12} color="#fff" />}
             </View>
             <View style={styles.checkboxTextBlock}>
-              <Text style={styles.checkboxTitle}>Customer Approved Service</Text>
-              <Text style={styles.checkboxSub}>Customer has confirmed service completion</Text>
+              <Text style={styles.checkboxTitle}>
+                {customerConfirmed ? 'Customer Approved Service ✓' : 'Waiting for Customer Approval...'}
+              </Text>
+              <Text style={styles.checkboxSub}>
+                {customerConfirmed
+                  ? 'Customer has confirmed service completion'
+                  : 'Please wait for the customer to confirm the service is complete'}
+              </Text>
             </View>
           </View>
+          {!customerConfirmed && (
+            <View style={styles.waitingIndicator}>
+              <ActivityIndicator size="small" color="#5B9BD5" />
+              <Text style={styles.waitingText}>Waiting for customer confirmation...</Text>
+            </View>
+          )}
         </View>
 
-        {/* ── SERVICE PHOTOS (Frontend only for now) ── */}
+        {/* ── SERVICE PHOTOS ── */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>SERVICE PHOTOS</Text>
           <View style={styles.photosHeader}>
@@ -518,12 +618,16 @@ export default function ServiceCompleteScreen() {
             style={styles.ratingCheckRow}
             onPress={() => setRatingChecked(p => !p)}
             activeOpacity={0.8}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !customerConfirmed}
           >
             <View style={[styles.squareCheckbox, ratingChecked && styles.squareCheckboxChecked]}>
               {ratingChecked && <Feather name="check" size={11} color="#fff" />}
             </View>
-            <Text style={styles.ratingCheckLabel}>Send rating notification to customer</Text>
+            <Text style={styles.ratingCheckLabel}>
+              {customerConfirmed
+                ? 'Send rating notification to customer'
+                : 'Waiting for customer confirmation before sending rating'}
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -546,17 +650,26 @@ export default function ServiceCompleteScreen() {
 
         {/* ── CONFIRM BUTTON ── */}
         <TouchableOpacity
-          style={[styles.confirmBtn, isSubmitting && styles.buttonDisabled]}
+          style={[
+            styles.confirmBtn,
+            (isSubmitting || !canComplete) && styles.buttonDisabled
+          ]}
           onPress={handleConfirm}
           activeOpacity={0.85}
-          disabled={isSubmitting}
+          disabled={isSubmitting || !canComplete}
         >
           {isSubmitting ? (
             <ActivityIndicator color="#fff" />
           ) : (
             <>
               <Feather name="check-circle" size={17} color="#fff" style={{ marginRight: 8 }} />
-              <Text style={styles.confirmBtnText}>Confirm & Complete</Text>
+              <Text style={styles.confirmBtnText}>
+                {!paymentChecked
+                  ? 'Confirm Payment First'
+                  : !customerConfirmed
+                    ? 'Waiting for Customer...'
+                    : 'Confirm & Complete'}
+              </Text>
             </>
           )}
         </TouchableOpacity>

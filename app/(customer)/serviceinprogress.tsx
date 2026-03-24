@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -9,9 +9,10 @@ import {
   ScrollView,
   Text,
   TouchableOpacity,
-  View
+  View,
+  AppState
 } from 'react-native';
-import ChatPopup from './components/ChatPopup'; // Import ChatPopup
+import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/ServiceInProgressStyles';
 const { height } = Dimensions.get('window');
 
@@ -21,7 +22,7 @@ interface JobDetailsResponse {
   success: boolean;
   data: {
     bookingId: string;
-    status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed';
+    status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed' | 'completed_provider';
     timeline: {
       acceptedAt: string;
       startedAt: string | null;
@@ -89,11 +90,12 @@ interface TimerResponse {
     durationSeconds: number;
     isPaused: boolean;
     pausedAt: string | null;
+    lastUpdated?: string | null;
   };
 }
 
 interface JobStatusResponse {
-  status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed';
+  status: 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'completed_confirmed' | 'completed_provider';
   startedAt?: string;
   completedAt?: string;
   cancelledAt?: string;
@@ -113,12 +115,14 @@ interface HasMessageResponse {
 const ServiceInProgressScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  // Add with your other state variables
+  
+  // State variables
   const [hasNavigatedToCompleted, setHasNavigatedToCompleted] = useState(false);
-
-  // Chat state
   const [chatVisible, setChatVisible] = useState(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
+  const [hasShownProviderCompleteAlert, setHasShownProviderCompleteAlert] = useState(false);
+  const [isMarkingComplete, setIsMarkingComplete] = useState(false);
+  const appState = useRef(AppState.currentState);
 
   // Timer state
   const [duration, setDuration] = useState('00:00');
@@ -126,6 +130,7 @@ const ServiceInProgressScreen = () => {
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Data state
   const [isLoading, setIsLoading] = useState(true);
@@ -137,6 +142,7 @@ const ServiceInProgressScreen = () => {
   const [jobStatus, setJobStatus] = useState('in_progress');
   const [isPolling, setIsPolling] = useState(true);
   const [hasShownCancelledAlert, setHasShownCancelledAlert] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
 
   // Get data from params (as fallback)
   const bookingId = params.bookingId as string;
@@ -150,9 +156,12 @@ const ServiceInProgressScreen = () => {
   const pickupLng = params.pickupLng as string;
   const totalAmountParam = params.totalAmount as string;
 
+  // Check if provider has completed the service
+  const isProviderComplete = jobStatus === 'completed_provider';
+
   // Debug logger
   const addDebug = (message: string, data?: any) => {
-    const logMessage = `🔍 [ServiceInProgress] ${message}`;
+    const logMessage = `🔍 [CustomerServiceInProgress] ${message}`;
     if (data) {
       console.log(logMessage, data);
     } else {
@@ -160,9 +169,123 @@ const ServiceInProgressScreen = () => {
     }
   };
 
+  // ===== FORMAT DURATION FROM SECONDS =====
+  const formatDurationFromSeconds = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    } else {
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+  };
+
+  // ===== START LIVE TIMER =====
+  const startLiveTimer = (initialSeconds: number, paused: boolean) => {
+    addDebug(`⏱️ Starting live timer with ${initialSeconds}s, paused: ${paused}`);
+
+    setDurationSeconds(initialSeconds);
+    setDuration(formatDurationFromSeconds(initialSeconds));
+    setIsPaused(paused);
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+
+    if (paused) {
+      addDebug('⏸️ Timer is paused, not starting interval');
+      return;
+    }
+
+    timerRef.current = setInterval(() => {
+      setDurationSeconds(prev => {
+        const newSeconds = prev + 1;
+        setDuration(formatDurationFromSeconds(newSeconds));
+        return newSeconds;
+      });
+    }, 1000);
+
+    addDebug('▶️ Timer interval started');
+  };
+
+  // ===== FETCH TIMER FROM API =====
+  const fetchTimerData = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token || !bookingId) {
+        addDebug('❌ No token or bookingId for timer fetch');
+        return null;
+      }
+
+      addDebug(`⏱️ Fetching timer for booking: ${bookingId}`);
+
+      const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/timer`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        addDebug(`❌ Timer fetch failed: ${response.status}`);
+        return null;
+      }
+
+      const data: TimerResponse = await response.json();
+      addDebug('✅ Timer data fetched:', data);
+
+      if (data.success && data.timer) {
+        return data.timer;
+      }
+      return null;
+    } catch (error) {
+      addDebug('❌ Error fetching timer:', error);
+      return null;
+    }
+  };
+
+  // ===== LOAD TIMER WITH ELAPSED TIME CALCULATION =====
+  const loadTimerWithElapsedTime = async () => {
+    try {
+      const timerData = await fetchTimerData();
+      
+      if (timerData) {
+        let serverSeconds = timerData.durationSeconds || 0;
+        const serverPaused = timerData.isPaused || false;
+        const lastUpdated = timerData.lastUpdated ? new Date(timerData.lastUpdated) : null;
+
+        // If timer wasn't paused, calculate elapsed time since last sync
+        if (!serverPaused && lastUpdated) {
+          const now = new Date();
+          const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
+          
+          // Only add if reasonable (less than 1 hour)
+          if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
+            serverSeconds = serverSeconds + elapsedSeconds;
+            addDebug(`⏱️ Timer was running - added ${elapsedSeconds}s elapsed time`);
+          }
+        }
+
+        startLiveTimer(serverSeconds, serverPaused);
+        setLastSyncTime(new Date());
+        addDebug(`✅ Timer loaded: ${serverSeconds}s, paused: ${serverPaused}`);
+      } else {
+        // No timer data, start fresh if service started
+        if (startTime) {
+          const now = new Date();
+          const elapsedSeconds = Math.floor((now.getTime() - startTime.getTime()) / 1000);
+          startLiveTimer(elapsedSeconds, false);
+        }
+      }
+    } catch (error) {
+      addDebug('❌ Error loading timer:', error);
+    }
+  };
+
   // Check if there are any messages
   const checkForAnyMessage = async () => {
-    if (!bookingId || chatVisible) return; // Don't check if chat is open
+    if (!bookingId || chatVisible) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -190,99 +313,100 @@ const ServiceInProgressScreen = () => {
     }
   };
 
-  // Handle message button press - open chat popup
+  // Handle message button press
   const handleMessage = () => {
     addDebug(`💬 Opening chat popup with provider`);
-    setHasNewMessage(false); // Reset indicator when opening
+    setHasNewMessage(false);
     setChatVisible(true);
   };
 
   // Handle chat close
   const handleChatClose = () => {
     setChatVisible(false);
-    // Small delay to ensure chat is fully closed before checking
     setTimeout(() => {
       checkForAnyMessage();
     }, 500);
   };
 
-  // ===== FETCH TIMER FROM API =====
-  const fetchTimerData = async () => {
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token || !bookingId) {
-        console.log('❌ No token or bookingId for timer fetch');
-        return null;
-      }
-
-      console.log(`⏱️ Fetching timer for booking: ${bookingId}`);
-
-      const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/timer`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        console.log(`❌ Timer fetch failed: ${response.status}`);
-        return null;
-      }
-
-      const data: TimerResponse = await response.json();
-      console.log('✅ Timer data fetched:', data);
-
-      if (data.success && data.timer) {
-        return data.timer;
-      }
-      return null;
-    } catch (error) {
-      console.log('❌ Error fetching timer:', error);
-      return null;
-    }
-  };
-
-  // ===== FORMAT DURATION FROM SECONDS =====
-  const formatDurationFromSeconds = (totalSeconds: number) => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-
-    if (hours > 0) {
-      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    } else {
-      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-  };
-
-  // ===== START LIVE TIMER =====
-  const startLiveTimer = (initialSeconds: number, paused: boolean) => {
-    console.log(`⏱️ Starting live timer with ${initialSeconds}s, paused: ${paused}`);
-
-    setDurationSeconds(initialSeconds);
-    setDuration(formatDurationFromSeconds(initialSeconds));
-    setIsPaused(paused);
-
-    // Clear any existing timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-
-    // Don't start interval if paused
-    if (paused) {
-      console.log('⏸️ Timer is paused, not starting interval');
+  // Handle customer marking service as complete
+  const handleMarkComplete = async () => {
+    if (!isProviderComplete) {
+      Alert.alert(
+        'Not Ready',
+        'Please wait for the provider to complete the service before marking it as complete.'
+      );
       return;
     }
 
-    // Start new timer
-    timerRef.current = setInterval(() => {
-      setDurationSeconds(prev => {
-        const newSeconds = prev + 1;
-        setDuration(formatDurationFromSeconds(newSeconds));
-        return newSeconds;
-      });
-    }, 1000);
+    Alert.alert(
+      'Confirm Completion',
+      'Are you sure the service has been completed to your satisfaction?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Complete',
+          onPress: async () => {
+            setIsMarkingComplete(true);
 
-    console.log('▶️ Timer interval started');
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              if (!token) {
+                throw new Error('Authentication failed');
+              }
+
+              addDebug(`📡 Marking service as completed_confirmed for booking:`, bookingId);
+
+              const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/status`, {
+                method: 'PATCH',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  status: 'completed_confirmed',
+                  action: 'customer_confirm',
+                  confirmedAt: new Date().toISOString()
+                }),
+              });
+
+              const data = await response.json();
+              addDebug('📡 Status update response:', {
+                status: response.status,
+                data
+              });
+
+              if (!response.ok) {
+                throw new Error(data.message || data.error || 'Failed to confirm completion');
+              }
+
+              addDebug('✅ Service marked as completed_confirmed successfully');
+
+              Alert.alert(
+                'Success!',
+                'Thank you for confirming service completion. You will be redirected shortly.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      checkJobStatus();
+                    }
+                  }
+                ]
+              );
+
+            } catch (error) {
+              addDebug('❌ Error marking service as complete:', error);
+              Alert.alert(
+                'Error',
+                error instanceof Error ? error.message : 'Failed to confirm completion. Please try again.'
+              );
+            } finally {
+              setIsMarkingComplete(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   // Fetch job details on mount
@@ -291,7 +415,7 @@ const ServiceInProgressScreen = () => {
       fetchJobDetails();
     }
     setHasNavigatedToCompleted(false);
-
+    setHasShownProviderCompleteAlert(false);
   }, [bookingId]);
 
   // Cleanup timer on unmount
@@ -299,117 +423,78 @@ const ServiceInProgressScreen = () => {
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
-        console.log('🧹 Timer cleaned up');
+        addDebug('🧹 Timer cleaned up');
+      }
+      if (pollingTimerRef.current) {
+        clearInterval(pollingTimerRef.current);
+        addDebug('🧹 Polling timer cleaned up');
       }
     };
   }, []);
 
+  // Focus effect - reload timer when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (bookingId) {
+        addDebug('📱 Screen focused - reloading timer');
+        loadTimerWithElapsedTime();
+        checkJobStatus();
+        checkForAnyMessage();
+      }
+    }, [bookingId])
+  );
+
   // Polling effect - check job status every 5 seconds
   useEffect(() => {
     if (!bookingId || !isPolling) {
-      console.log('❌ No bookingId or polling stopped');
       return;
     }
 
-    console.log('🔄 Starting polling for job status (every 5 seconds)');
+    addDebug('🔄 Starting polling for job status (every 5 seconds)');
 
     const pollInterval = setInterval(async () => {
       await Promise.all([
         checkJobStatus(),
-        checkForAnyMessage() // Check messages in polling
+        checkForAnyMessage(),
+        loadTimerWithElapsedTime() // Also refresh timer every 5 seconds
       ]);
       setPollingAttempts(prev => prev + 1);
     }, 5000);
 
+    pollingTimerRef.current = pollInterval;
+
     return () => {
-      console.log('🧹 Stopping polling');
+      addDebug('🧹 Stopping polling');
       clearInterval(pollInterval);
     };
   }, [bookingId, isPolling]);
 
-  // Fetch complete job details
-  const fetchJobDetails = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) {
-        console.log('❌ No token found');
-        setError('Authentication required');
-        return;
+  // App state change listener
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        addDebug('📱 App came to foreground - reloading timer');
+        loadTimerWithElapsedTime();
+        checkJobStatus();
+        checkForAnyMessage();
       }
+      appState.current = nextAppState;
+    });
 
-      console.log(`🔍 Fetching job details for bookingId: ${bookingId}`);
+    return () => subscription.remove();
+  }, []);
 
-      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details_inprogress`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch job details: ${response.status}`);
-      }
-
-      const data: JobDetailsResponse = await response.json();
-      console.log('✅ Job details fetched successfully');
-
-      if (data.success) {
-        setJobDetails(data.data);
-
-        // Set start time from backend if available
-        if (data.data.timeline.startedAt) {
-          setStartTime(new Date(data.data.timeline.startedAt));
-        }
-
-        // Update job status
-        setJobStatus(data.data.status);
-
-        // ===== FETCH TIMER DATA =====
-        const timerData = await fetchTimerData();
-        if (timerData) {
-          // Start live timer with fetched data
-          startLiveTimer(timerData.durationSeconds, timerData.isPaused);
-        } else if (data.data.timeline.startedAt) {
-          // Fallback: calculate from startedAt
-          const startedAt = new Date(data.data.timeline.startedAt);
-          const now = new Date();
-          const elapsedSeconds = Math.floor((now.getTime() - startedAt.getTime()) / 1000);
-          startLiveTimer(elapsedSeconds, false);
-        } else {
-          // Final fallback: start from 0
-          startLiveTimer(0, false);
-        }
-
-        // Check for messages after loading job details
-        await checkForAnyMessage();
-      }
-    } catch (error) {
-      console.log('❌ Error fetching job details:', error);
-      setError('Failed to load job details');
-
-      // Fallback to params if API fails
-      if (providerNameParam) {
-        setStartTime(new Date());
-        // Start timer from 0 as fallback
-        startLiveTimer(0, false);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
+  // Check job status from backend
   const checkJobStatus = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
       if (!token) {
-        console.log('❌ No token found');
+        addDebug('❌ No token found');
         return;
       }
 
       const url = `${API_BASE_URL}/api/jobs/${bookingId}/status`;
-      console.log(`📊 Polling #${pollingAttempts + 1} - Checking job status`);
+      addDebug(`📊 Polling #${pollingAttempts + 1} - Checking job status`);
 
       const response = await fetch(url, {
         headers: {
@@ -418,37 +503,48 @@ const ServiceInProgressScreen = () => {
       });
 
       if (!response.ok) {
-        console.log(`❌ Status check failed: ${response.status}`);
+        addDebug(`❌ Status check failed: ${response.status}`);
         return;
       }
 
       const data: JobStatusResponse = await response.json();
-      console.log(`📊 Job status: ${data.status}`);
+      addDebug(`📊 Job status: ${data.status}`);
 
       setJobStatus(data.status);
 
-      // ===== HANDLE JOB COMPLETED - Check for ALL possible completed statuses =====
+      // ===== SHOW ALERT WHEN PROVIDER COMPLETES SERVICE =====
+      if (data.status === 'completed_provider' && !hasShownProviderCompleteAlert && !hasNavigatedToCompleted) {
+        addDebug('✅✅ Provider has completed the service!');
+        setHasShownProviderCompleteAlert(true);
+        
+        Alert.alert(
+          'Service Completed by Provider',
+          'The provider has marked the service as complete. Please review and confirm completion to finish.',
+          [{ text: 'OK' }]
+        );
+      }
+
+      // ===== HANDLE JOB COMPLETED =====
       const completedStatuses = ['completed', 'completed_confirmed', 'completed_by_provider'];
       const isJobCompleted = completedStatuses.includes(data.status);
 
       if (isJobCompleted && !hasNavigatedToCompleted) {
-        console.log('✅✅✅ JOB COMPLETED - Navigating to ServiceCompleted');
+        addDebug('✅✅✅ JOB COMPLETED - Navigating to ServiceCompleted');
 
-        // Set flag to prevent multiple navigations
         setHasNavigatedToCompleted(true);
-
-        // Stop polling and timer
         setIsPolling(false);
         if (timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
         }
+        if (pollingTimerRef.current) {
+          clearInterval(pollingTimerRef.current);
+          pollingTimerRef.current = null;
+        }
 
-        // Get the final duration
-        const finalDuration = duration; // This is already formatted
+        const finalDuration = duration;
         const finalDurationSeconds = durationSeconds;
 
-        // Navigate to ServiceCompleted screen
         setTimeout(() => {
           router.push({
             pathname: '/(customer)/ServiceCompleted',
@@ -471,21 +567,21 @@ const ServiceInProgressScreen = () => {
 
       // ===== HANDLE JOB CANCELLED =====
       if (data.status === 'cancelled' && !hasShownCancelledAlert && !hasNavigatedToCompleted) {
-        console.log('❌❌❌ JOB CANCELLED - Returning to home');
+        addDebug('❌❌❌ JOB CANCELLED - Returning to home');
 
         setHasShownCancelledAlert(true);
-
-        // Stop polling and timer
         setIsPolling(false);
         if (timerRef.current) {
           clearInterval(timerRef.current);
           timerRef.current = null;
         }
+        if (pollingTimerRef.current) {
+          clearInterval(pollingTimerRef.current);
+          pollingTimerRef.current = null;
+        }
 
-        // Remove bookingId from storage
         await AsyncStorage.removeItem('currentBookingId');
 
-        // Show alert
         Alert.alert(
           'Service Cancelled',
           data.cancellationReason || 'The service has been cancelled by the provider.',
@@ -493,21 +589,77 @@ const ServiceInProgressScreen = () => {
             {
               text: 'OK',
               onPress: () => {
-                router.push('/(customer)/home');
+                router.push('/(customer)/Home');
               }
             }
           ]
         );
       }
 
-      // ===== HANDLE JOB STARTED (Optional - update UI when service starts) =====
+      // ===== HANDLE JOB STARTED =====
       if (data.status === 'in_progress' && !startTime) {
-        console.log('▶️ Service has started');
+        addDebug('▶️ Service has started');
         setStartTime(data.startedAt ? new Date(data.startedAt) : new Date());
       }
 
     } catch (error) {
-      console.log('❌ Error checking job status:', error);
+      addDebug('❌ Error checking job status:', error);
+    }
+  };
+
+  // Fetch complete job details
+  const fetchJobDetails = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        addDebug('❌ No token found');
+        setError('Authentication required');
+        return;
+      }
+
+      addDebug(`🔍 Fetching job details for bookingId: ${bookingId}`);
+
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details_inprogress`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch job details: ${response.status}`);
+      }
+
+      const data: JobDetailsResponse = await response.json();
+      addDebug('✅ Job details fetched successfully');
+
+      if (data.success) {
+        setJobDetails(data.data);
+
+        if (data.data.timeline.startedAt) {
+          setStartTime(new Date(data.data.timeline.startedAt));
+        }
+
+        setJobStatus(data.data.status);
+
+        // Load timer with elapsed time calculation
+        await loadTimerWithElapsedTime();
+
+        await checkForAnyMessage();
+      }
+    } catch (error) {
+      addDebug('❌ Error fetching job details:', error);
+      setError('Failed to load job details');
+
+      // Fallback to params
+      if (providerNameParam) {
+        setStartTime(new Date());
+        startLiveTimer(0, false);
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -526,10 +678,8 @@ const ServiceInProgressScreen = () => {
     Alert.alert('Report Issue', 'Opening report form...');
   };
 
-  // Fixed formatTime function
   const formatTime = (date: Date) => {
     if (!date) return '';
-
     const hours = date.getHours().toString().padStart(2, '0');
     const minutes = date.getMinutes().toString().padStart(2, '0');
     return `${hours}:${minutes}`;
@@ -559,7 +709,7 @@ const ServiceInProgressScreen = () => {
     );
   }
 
-  // Use real data from API or fallback to params with null checks
+  // Use real data from API or fallback to params
   const providerName = jobDetails?.provider?.name || providerNameParam || 'Ahmed Al-Khalifa';
   const providerPhone = jobDetails?.provider?.phone || providerPhoneParam;
   const providerRating = jobDetails?.provider?.rating || 4.5;
@@ -572,11 +722,7 @@ const ServiceInProgressScreen = () => {
   const totalAmount = jobDetails?.bookingData?.payment?.totalAmount?.toString() || totalAmountParam || '99.75';
   const selectedTip = jobDetails?.bookingData?.payment?.selectedTip;
   const description = jobDetails?.bookingData?.description;
-
-  // Format the started time
   const startedAtTime = startTime ? formatTime(startTime) : 'Just now';
-
-  // Show pause indicator if timer is paused
   const showPaused = isPaused;
 
   return (
@@ -637,7 +783,7 @@ const ServiceInProgressScreen = () => {
             </View>
           </View>
 
-          {/* Action Buttons with Red Dot */}
+          {/* Action Buttons */}
           <View style={styles.actionButtons}>
             <TouchableOpacity
               style={styles.callButton}
@@ -730,11 +876,13 @@ const ServiceInProgressScreen = () => {
 
           {/* Progress Item 3 - Service Complete */}
           <View style={styles.progressItem}>
-            <View style={styles.progressIconInactive}>
-              <View style={styles.progressDotInactive} />
+            <View style={[styles.progressIconInactive, isProviderComplete && styles.progressIconCompleted]}>
+              <View style={[styles.progressDotInactive, isProviderComplete && styles.progressDotCompleted]} />
             </View>
             <View style={styles.progressTextContainer}>
-              <Text style={styles.progressTextInactive}>Service Complete</Text>
+              <Text style={[styles.progressTextInactive, isProviderComplete && styles.progressTextCompleted]}>
+                {isProviderComplete ? 'Service Complete (Waiting for Your Confirmation)' : 'Service Complete'}
+              </Text>
             </View>
           </View>
         </View>
@@ -749,6 +897,16 @@ const ServiceInProgressScreen = () => {
             {description ||
               `The provider is currently working on your ${serviceType.toLowerCase()}. You'll be notified when the service is complete.`}
           </Text>
+
+          {/* Provider Completion Status Indicator */}
+          {isProviderComplete && (
+            <View style={styles.providerCompleteIndicator}>
+              <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
+              <Text style={styles.providerCompleteText}>
+                Provider has completed the service. Please confirm completion.
+              </Text>
+            </View>
+          )}
 
           {/* Polling status indicator */}
           <View style={styles.pollingIndicator}>
@@ -788,6 +946,25 @@ const ServiceInProgressScreen = () => {
 
       {/* Bottom Buttons Footer */}
       <View style={styles.bottomContainer}>
+        {/* Mark as Complete Button - Only shows when provider has completed */}
+        {isProviderComplete && !hasNavigatedToCompleted && (
+          <TouchableOpacity
+            style={[styles.markCompleteButton, isMarkingComplete && styles.buttonDisabled]}
+            onPress={handleMarkComplete}
+            activeOpacity={0.7}
+            disabled={isMarkingComplete}
+          >
+            {isMarkingComplete ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
+                <Text style={styles.markCompleteButtonText}>Mark as Complete</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={styles.reportButton}
           onPress={handleReportIssue}
