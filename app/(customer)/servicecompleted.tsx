@@ -634,10 +634,10 @@ const ServiceCompletedScreen = () => {
   const handleBackToHome = async () => {
     try {
       await AsyncStorage.removeItem('currentBookingId');
-      router.push('/(customer)/Home');
+      router.replace('/(customer)/Home');
     } catch (error) {
       console.error('Error removing bookingId:', error);
-      router.push('/(customer)/Home');
+      router.replace('/(customer)/Home');
     }
   };
 

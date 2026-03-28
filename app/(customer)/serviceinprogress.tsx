@@ -356,8 +356,8 @@ const ServiceInProgressScreen = () => {
 
               addDebug(`📡 Marking service as completed_confirmed for booking:`, bookingId);
 
-              const response = await fetch(`${API_BASE_URL}/api/jobs/${bookingId}/status`, {
-                method: 'PATCH',
+              const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/status`, {
+                method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
@@ -456,7 +456,7 @@ const ServiceInProgressScreen = () => {
       await Promise.all([
         checkJobStatus(),
         checkForAnyMessage(),
-        loadTimerWithElapsedTime() // Also refresh timer every 5 seconds
+        loadTimerWithElapsedTime() 
       ]);
       setPollingAttempts(prev => prev + 1);
     }, 5000);
@@ -514,14 +514,14 @@ const ServiceInProgressScreen = () => {
 
       // ===== SHOW ALERT WHEN PROVIDER COMPLETES SERVICE =====
       if (data.status === 'completed_provider' && !hasShownProviderCompleteAlert && !hasNavigatedToCompleted) {
-        addDebug('✅✅ Provider has completed the service!');
+        // addDebug('✅✅ Provider has completed the service!');
         setHasShownProviderCompleteAlert(true);
         
-        Alert.alert(
-          'Service Completed by Provider',
-          'The provider has marked the service as complete. Please review and confirm completion to finish.',
-          [{ text: 'OK' }]
-        );
+        // Alert.alert(
+        //   'Service Completed by Provider',
+        //   'The provider has marked the service as complete. Please review and confirm completion to finish.',
+        //   [{ text: 'OK' }]
+        // );
       }
 
       // ===== HANDLE JOB COMPLETED =====
@@ -546,7 +546,7 @@ const ServiceInProgressScreen = () => {
         const finalDurationSeconds = durationSeconds;
 
         setTimeout(() => {
-          router.push({
+          router.replace({
             pathname: '/(customer)/ServiceCompleted',
             params: {
               bookingId,
@@ -589,7 +589,7 @@ const ServiceInProgressScreen = () => {
             {
               text: 'OK',
               onPress: () => {
-                router.push('/(customer)/Home');
+                router.replace('/(customer)/Home');
               }
             }
           ]
@@ -754,7 +754,7 @@ const ServiceInProgressScreen = () => {
         <View style={styles.durationCard}>
           <Text style={styles.durationLabel}>DURATION</Text>
           <Text style={styles.durationTime}>{duration}</Text>
-          <Text style={styles.startedTime}>Started at {startedAtTime}</Text>
+          {/* <Text style={styles.startedTime}>Started at {startedAtTime}</Text> */}
 
           {/* Live/Paused Indicator */}
           <View style={[styles.liveIndicator, showPaused && styles.pausedIndicator]}>
@@ -899,17 +899,17 @@ const ServiceInProgressScreen = () => {
           </Text>
 
           {/* Provider Completion Status Indicator */}
-          {isProviderComplete && (
+          {/* {isProviderComplete && (
             <View style={styles.providerCompleteIndicator}>
               <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
               <Text style={styles.providerCompleteText}>
                 Provider has completed the service. Please confirm completion.
               </Text>
             </View>
-          )}
+          )} */}
 
           {/* Polling status indicator */}
-          <View style={styles.pollingIndicator}>
+          {/* <View style={styles.pollingIndicator}>
             <Ionicons
               name={showPaused ? "pause-circle-outline" : "sync-outline"}
               size={14}
@@ -921,7 +921,7 @@ const ServiceInProgressScreen = () => {
             ]}>
               {showPaused ? 'Timer paused by provider' : 'Checking for updates every 5 seconds'}
             </Text>
-          </View>
+          </View> */}
         </View>
 
         {/* Estimated Cost Card */}

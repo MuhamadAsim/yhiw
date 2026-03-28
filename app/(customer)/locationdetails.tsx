@@ -1,1902 +1,3 @@
-// import { Ionicons } from '@expo/vector-icons';
-// import AsyncStorage from '@react-native-async-storage/async-storage';
-// import * as Location from 'expo-location';
-// import { useLocalSearchParams, useRouter } from 'expo-router';
-// import React, { useEffect, useRef, useState } from 'react';
-// import {
-//   ActivityIndicator,
-//   Alert,
-//   Dimensions,
-//   Image,
-//   KeyboardAvoidingView,
-//   Modal,
-//   Platform,
-//   ScrollView,
-//   StyleSheet,
-//   Text,
-//   TextInput,
-//   TouchableOpacity,
-//   View,
-// } from 'react-native';
-// import MapView, { Marker, Polyline, Region } from 'react-native-maps';
-// import { styles } from './styles/LocationDetailsStyles';
-// const { width, height } = Dimensions.get('window');
-
-// // API Base URL
-// const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
-
-// // Types
-// interface LocationSuggestion {
-//   id: string;
-//   title: string;
-//   address: string;
-//   latitude: number;
-//   longitude: number;
-//   placeId?: string;
-// }
-
-// interface SavedLocation {
-//   id: string;
-//   title: string;
-//   address: string;
-//   latitude: number;
-//   longitude: number;
-//   type: 'home' | 'work' | 'other';
-// }
-
-// interface Coordinates {
-//   latitude: number;
-//   longitude: number;
-// }
-
-// // New type for waypoints (stops between pickup and dropoff)
-// interface Waypoint {
-//   id: string;
-//   address: string;
-//   coordinates: Coordinates;
-//   title?: string;
-// }
-
-// // Services that only need pickup location (no destination needed)
-// const LOCATION_ONLY_SERVICES = [
-//   '2',  // Roadside Assistance
-//   '3',  // Fuel Delivery
-//   '4',  // Battery Replacement
-//   '5',  // AC Gas Refill
-//   '6',  // Tire Replacement
-//   '7',  // Oil Change
-//   '8',  // Inspection
-//   '9',  // Car Wash
-//   '10', // Car Detailing
-// ];
-
-// const LocationDetailsScreen = () => {
-//   const router = useRouter();
-//   const params = useLocalSearchParams();
-//   const mapRef = useRef<MapView>(null);
-
-//   const [pickupLocation, setPickupLocation] = useState<string>('');
-//   const [dropoffLocation, setDropoffLocation] = useState<string>('');
-//   const [pickupCoordinates, setPickupCoordinates] = useState<Coordinates | null>(null);
-//   const [dropoffCoordinates, setDropoffCoordinates] = useState<Coordinates | null>(null);
-
-//   // New state for waypoints (intermediate stops)
-//   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-//   const [activeWaypointIndex, setActiveWaypointIndex] = useState<number | null>(null);
-
-//   const [pickupSuggestions, setPickupSuggestions] = useState<LocationSuggestion[]>([]);
-//   const [dropoffSuggestions, setDropoffSuggestions] = useState<LocationSuggestion[]>([]);
-//   const [waypointSuggestions, setWaypointSuggestions] = useState<LocationSuggestion[]>([]);
-
-//   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
-//   const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
-//   const [showWaypointSuggestions, setShowWaypointSuggestions] = useState(false);
-
-//   const [isLoading, setIsLoading] = useState(false);
-//   const [isGettingLocation, setIsGettingLocation] = useState(true);
-//   const [isSearching, setIsSearching] = useState(false);
-//   const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | 'waypoint' | null>(null);
-//   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
-//   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
-//   const [userToken, setUserToken] = useState<string | null>(null);
-//   const [firebaseUserId, setFirebaseUserId] = useState<string | null>(null);
-
-//   // State for showing all saved locations
-//   const [showAllSavedLocations, setShowAllSavedLocations] = useState(false);
-
-//   // Save location modal states
-//   const [showSaveModal, setShowSaveModal] = useState(false);
-//   const [selectedLocationForSave, setSelectedLocationForSave] = useState<{
-//     address: string;
-//     latitude: number;
-//     longitude: number;
-//     type: 'pickup' | 'dropoff' | 'waypoint';
-//   } | null>(null);
-//   const [saveLocationTitle, setSaveLocationTitle] = useState('');
-//   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
-//   const [isSavingLocation, setIsSavingLocation] = useState(false);
-
-//   // UPDATED: Track which location to update when tapping the map
-//   const [pendingLocationUpdate, setPendingLocationUpdate] = useState<{
-//     type: 'pickup' | 'dropoff' | 'waypoint';
-//     index?: number;
-//   } | null>(null);
-
-//   // Update initial region to Faisalabad, Pakistan (your actual location area)
-//   const [region, setRegion] = useState<Region>({
-//     latitude: 31.4504,  // Faisalabad latitude
-//     longitude: 73.1350, // Faisalabad longitude
-//     latitudeDelta: 0.05,
-//     longitudeDelta: 0.05,
-//   });
-
-//   // Helper function to safely get string from params
-//   const getStringParam = (param: string | string[] | undefined): string => {
-//     if (!param) return '';
-//     return Array.isArray(param) ? param[0] : param;
-//   };
-
-//   // Get all service info from params
-//   const serviceId = getStringParam(params.serviceId);
-//   const needsDestination = !LOCATION_ONLY_SERVICES.includes(serviceId);
-//   const serviceName = getStringParam(params.serviceName);
-//   const servicePrice = getStringParam(params.servicePrice);
-//   const serviceCategory = getStringParam(params.serviceCategory);
-
-//   // Get service-specific requirements
-//   const requiresDestination = getStringParam(params.requiresDestination);
-//   const requiresFuelType = getStringParam(params.requiresFuelType);
-//   const requiresLicense = getStringParam(params.requiresLicense);
-//   const hasBooking = getStringParam(params.hasBooking);
-//   const requiresTextDescription = getStringParam(params.requiresTextDescription);
-
-//   // Helper function to safely parse boolean
-//   const getBooleanParam = (param: string | string[] | undefined): boolean => {
-//     const value = getStringParam(param);
-//     return value === 'true' || value === 'True' || value === '1';
-//   };
-
-//   // Helper function to safely parse number
-//   const getNumberParam = (param: string | string[] | undefined): number => {
-//     const value = getStringParam(param);
-//     const parsed = parseFloat(value);
-//     return isNaN(parsed) ? 0 : parsed;
-//   };
-
-//   // Helper function to get error message
-//   const getErrorMessage = (error: unknown): string => {
-//     if (error instanceof Error) return error.message;
-//     if (typeof error === 'string') return error;
-//     if (error && typeof error === 'object' && 'message' in error) {
-//       return String(error.message);
-//     }
-//     return 'Unknown error occurred';
-//   };
-
-//   // Debug function to log params on mount
-//   const logParams = (params: any) => {
-//     console.log('📱 LocationDetailsScreen mounted');
-//     console.log('📦 All params received:', JSON.stringify(params, null, 2));
-//     console.log('📍 Service ID:', serviceId);
-//     console.log('🎯 Needs destination:', needsDestination);
-
-//     // Check for critical params
-//     const requiredParams = ['serviceId', 'serviceName', 'servicePrice'];
-//     requiredParams.forEach(param => {
-//       if (!params[param]) {
-//         console.warn(`⚠️ Warning: Missing ${param} param!`);
-//       }
-//     });
-//   };
-
-//   // Load user token and saved locations on mount
-//   useEffect(() => {
-//     logParams(params);
-//     loadUserData();
-//     getCurrentLocationAndSetDefault();
-//   }, []);
-
-//   // Update map when waypoints change (only if destination is needed)
-//   useEffect(() => {
-//     if (needsDestination) {
-//       if (pickupCoordinates && dropoffCoordinates && waypoints.length > 0) {
-//         fitMapToAllPoints();
-//       } else if (pickupCoordinates && dropoffCoordinates) {
-//         fitMapToCoordinates(pickupCoordinates, dropoffCoordinates);
-//       } else if (pickupCoordinates) {
-//         fitMapToSinglePoint(pickupCoordinates);
-//       } else if (dropoffCoordinates) {
-//         fitMapToSinglePoint(dropoffCoordinates);
-//       }
-//     } else {
-//       // For location-only services, just focus on pickup
-//       if (pickupCoordinates) {
-//         fitMapToSinglePoint(pickupCoordinates);
-//       }
-//     }
-//   }, [waypoints.length, pickupCoordinates, dropoffCoordinates, needsDestination]);
-
-//   const loadUserData = async () => {
-//     try {
-//       // Get user token from AsyncStorage
-//       const token = await AsyncStorage.getItem('userToken');
-//       const userDataStr = await AsyncStorage.getItem('userData');
-
-//       if (token && userDataStr) {
-//         setUserToken(token);
-
-//         const userData = JSON.parse(userDataStr);
-//         console.log('User data loaded:', {
-//           firebaseUserId: userData.firebaseUserId,
-//           email: userData.email,
-//           role: userData.role
-//         });
-
-//         // Store the firebaseUserId for API calls
-//         if (userData.firebaseUserId) {
-//           setFirebaseUserId(userData.firebaseUserId);
-//           // Load saved locations after getting firebaseUserId
-//           await fetchSavedLocations(token, userData.firebaseUserId);
-//         } else {
-//           console.log('No firebaseUserId found in user data');
-//         }
-//       } else {
-//         console.log('No user token or data found - continuing without saved locations');
-//       }
-//     } catch (error) {
-//       console.error('Error loading user data:', error);
-//     } finally {
-//       setIsLoadingSavedLocations(false);
-//     }
-//   };
-
-//   const fetchSavedLocations = async (token: string, uid: string) => {
-//     try {
-//       console.log('Fetching saved locations for firebaseUserId:', uid);
-//       const url = `${API_BASE_URL}/customer/${uid}/saved-locations`;
-//       console.log('Fetching from URL:', url);
-
-//       const response = await fetch(url, {
-//         method: 'GET',
-//         headers: {
-//           'Authorization': `Bearer ${token}`,
-//           'Content-Type': 'application/json',
-//         },
-//       });
-
-//       console.log('Response status:', response.status);
-
-//       if (!response.ok) {
-//         // If 404, the endpoint might not be implemented yet
-//         if (response.status === 404) {
-//           console.log('Saved locations endpoint not found - feature not implemented yet');
-//         } else {
-//           console.log('Could not fetch saved locations, continuing with empty list');
-//         }
-//         setSavedLocations([]);
-//         return;
-//       }
-
-//       const data = await response.json();
-//       console.log('Response data:', data);
-
-//       if (data.success && data.data) {
-//         // Transform the data to match our SavedLocation interface
-//         const transformedLocations = data.data.map((loc: any) => ({
-//           id: loc._id || loc.id,
-//           title: loc.title,
-//           address: loc.address,
-//           latitude: loc.latitude,
-//           longitude: loc.longitude,
-//           type: loc.type || 'other',
-//         }));
-//         setSavedLocations(transformedLocations);
-//       } else {
-//         setSavedLocations([]);
-//       }
-//     } catch (error) {
-//       console.error('Error fetching saved locations:', error);
-//       setSavedLocations([]);
-//     }
-//   };
-
-//   const getCurrentLocationAndSetDefault = async () => {
-//     setIsGettingLocation(true);
-//     try {
-//       const { status } = await Location.requestForegroundPermissionsAsync();
-//       if (status !== 'granted') {
-//         Alert.alert(
-//           'Permission denied',
-//           'Please enable location services to automatically set your current location. You can manually enter a location or tap on the map instead.'
-//         );
-//         setIsGettingLocation(false);
-//         return;
-//       }
-
-//       const location = await Location.getCurrentPositionAsync({
-//         accuracy: Location.Accuracy.High,
-//       });
-
-//       // Get address from coordinates (reverse geocoding)
-//       const [address] = await Location.reverseGeocodeAsync({
-//         latitude: location.coords.latitude,
-//         longitude: location.coords.longitude,
-//       });
-
-//       // Format the address
-//       const formattedAddress = address ?
-//         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-//         : 'Current Location';
-
-//       // Set pickup location to current location
-//       setPickupLocation(formattedAddress || 'Current Location');
-//       setPickupCoordinates({
-//         latitude: location.coords.latitude,
-//         longitude: location.coords.longitude,
-//       });
-
-//       // Update map region
-//       const newRegion = {
-//         latitude: location.coords.latitude,
-//         longitude: location.coords.longitude,
-//         latitudeDelta: 0.02,
-//         longitudeDelta: 0.02,
-//       };
-//       setRegion(newRegion);
-//       mapRef.current?.animateToRegion(newRegion, 1000);
-
-//     } catch (error) {
-//       console.error('Error getting location:', error);
-//       Alert.alert(
-//         'Error',
-//         'Failed to get your current location. Please enter your pickup location manually or tap on the map.'
-//       );
-//     } finally {
-//       setIsGettingLocation(false);
-//     }
-//   };
-
-//   const getCurrentLocation = async () => {
-//     setIsGettingLocation(true);
-//     try {
-//       const { status } = await Location.requestForegroundPermissionsAsync();
-//       if (status !== 'granted') {
-//         Alert.alert('Permission denied', 'Please enable location services to use this feature.');
-//         setIsGettingLocation(false);
-//         return;
-//       }
-
-//       const location = await Location.getCurrentPositionAsync({});
-
-//       // Get address from coordinates
-//       const [address] = await Location.reverseGeocodeAsync({
-//         latitude: location.coords.latitude,
-//         longitude: location.coords.longitude,
-//       });
-
-//       const formattedAddress = address ?
-//         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-//         : 'Current Location';
-
-//       // Update pickup location if it's empty, otherwise just update the map
-//       if (!pickupCoordinates) {
-//         setPickupLocation(formattedAddress || 'Current Location');
-//         setPickupCoordinates({
-//           latitude: location.coords.latitude,
-//           longitude: location.coords.longitude,
-//         });
-//       }
-
-//       const newRegion = {
-//         latitude: location.coords.latitude,
-//         longitude: location.coords.longitude,
-//         latitudeDelta: 0.02,
-//         longitudeDelta: 0.02,
-//       };
-//       setRegion(newRegion);
-//       mapRef.current?.animateToRegion(newRegion, 1000);
-
-//     } catch (error) {
-//       console.error('Error getting location:', error);
-//       Alert.alert('Error', 'Failed to get your current location. Please try again.');
-//     } finally {
-//       setIsGettingLocation(false);
-//     }
-//   };
-
-//   const searchLocation = async (query: string, type: 'pickup' | 'dropoff' | 'waypoint') => {
-//     if (query.length < 3) {
-//       if (type === 'pickup') {
-//         setPickupSuggestions([]);
-//         setShowPickupSuggestions(false);
-//       } else if (type === 'dropoff') {
-//         setDropoffSuggestions([]);
-//         setShowDropoffSuggestions(false);
-//       } else {
-//         setWaypointSuggestions([]);
-//         setShowWaypointSuggestions(false);
-//       }
-//       return;
-//     }
-
-//     setIsSearching(true);
-
-//     try {
-//       // Use device geocoding for search
-//       const geocodeResults = await Location.geocodeAsync(query);
-
-//       if (geocodeResults.length > 0) {
-//         const suggestions: LocationSuggestion[] = [];
-
-//         // Get addresses for first 5 results
-//         for (let i = 0; i < Math.min(geocodeResults.length, 5); i++) {
-//           const result = geocodeResults[i];
-//           try {
-//             const [address] = await Location.reverseGeocodeAsync({
-//               latitude: result.latitude,
-//               longitude: result.longitude,
-//             });
-
-//             const formattedAddress = address ?
-//               `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-//               : `${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}`;
-
-//             suggestions.push({
-//               id: `geo-${i}-${Date.now()}`,
-//               title: address?.street || address?.name || query,
-//               address: formattedAddress,
-//               latitude: result.latitude,
-//               longitude: result.longitude,
-//             });
-//           } catch (reverseError) {
-//             // If reverse geocoding fails, just use coordinates
-//             suggestions.push({
-//               id: `geo-${i}-${Date.now()}`,
-//               title: query,
-//               address: `${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}`,
-//               latitude: result.latitude,
-//               longitude: result.longitude,
-//             });
-//           }
-//         }
-
-//         if (type === 'pickup') {
-//           setPickupSuggestions(suggestions);
-//           setShowPickupSuggestions(suggestions.length > 0);
-//         } else if (type === 'dropoff') {
-//           setDropoffSuggestions(suggestions);
-//           setShowDropoffSuggestions(suggestions.length > 0);
-//         } else {
-//           setWaypointSuggestions(suggestions);
-//           setShowWaypointSuggestions(suggestions.length > 0);
-//         }
-//       } else {
-//         // No results found
-//         if (type === 'pickup') {
-//           setPickupSuggestions([]);
-//           setShowPickupSuggestions(false);
-//         } else if (type === 'dropoff') {
-//           setDropoffSuggestions([]);
-//           setShowDropoffSuggestions(false);
-//         } else {
-//           setWaypointSuggestions([]);
-//           setShowWaypointSuggestions(false);
-//         }
-//       }
-//     } catch (error) {
-//       console.error('Error searching locations:', error);
-//       // Clear suggestions on error
-//       if (type === 'pickup') {
-//         setPickupSuggestions([]);
-//         setShowPickupSuggestions(false);
-//       } else if (type === 'dropoff') {
-//         setDropoffSuggestions([]);
-//         setShowDropoffSuggestions(false);
-//       } else {
-//         setWaypointSuggestions([]);
-//         setShowWaypointSuggestions(false);
-//       }
-//     } finally {
-//       setIsSearching(false);
-//     }
-//   };
-
-//   // UPDATED: Handle map press - always enabled, intelligently update based on context
-//   const handleMapPress = async (event: any) => {
-//     const { coordinate } = event.nativeEvent;
-
-//     try {
-//       // Determine which location to update
-//       let locationType: 'pickup' | 'dropoff' | 'waypoint' = 'pickup';
-//       let waypointIndex: number | undefined = undefined;
-
-//       if (pendingLocationUpdate) {
-//         // Use the pending update from a specific button click
-//         locationType = pendingLocationUpdate.type;
-//         waypointIndex = pendingLocationUpdate.index;
-//         setPendingLocationUpdate(null);
-//       } else {
-//         // Smart selection based on context
-//         if (!pickupCoordinates) {
-//           // No pickup yet, default to pickup
-//           locationType = 'pickup';
-//         } else if (needsDestination && !dropoffCoordinates && waypoints.length === 0) {
-//           // No dropoff and no waypoints, default to dropoff
-//           locationType = 'dropoff';
-//         } else if (needsDestination && waypoints.length > 0 && activeWaypointIndex !== null) {
-//           // Active waypoint being edited
-//           locationType = 'waypoint';
-//           waypointIndex = activeWaypointIndex;
-//         } else if (needsDestination && waypoints.length < 5) {
-//           // Add as a new waypoint
-//           locationType = 'waypoint';
-//           const newWaypoint: Waypoint = {
-//             id: `waypoint-${Date.now()}`,
-//             address: '',
-//             coordinates: {
-//               latitude: 0,
-//               longitude: 0,
-//             },
-//           };
-//           setWaypoints([...waypoints, newWaypoint]);
-//           waypointIndex = waypoints.length;
-//         } else if (needsDestination && !dropoffCoordinates) {
-//           // Default to dropoff
-//           locationType = 'dropoff';
-//         } else {
-//           // Default to pickup (replace)
-//           locationType = 'pickup';
-//         }
-//       }
-
-//       // Reverse geocode to get address
-//       const [address] = await Location.reverseGeocodeAsync({
-//         latitude: coordinate.latitude,
-//         longitude: coordinate.longitude,
-//       });
-
-//       const formattedAddress = address ?
-//         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
-//         : `${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`;
-
-//       // Create location object
-//       const location: LocationSuggestion = {
-//         id: `map-${Date.now()}`,
-//         title: address?.street || address?.name || 'Selected Location',
-//         address: formattedAddress,
-//         latitude: coordinate.latitude,
-//         longitude: coordinate.longitude,
-//       };
-
-//       // Handle based on determined type
-//       if (locationType === 'pickup') {
-//         setPickupLocation(formattedAddress);
-//         setPickupCoordinates({
-//           latitude: coordinate.latitude,
-//           longitude: coordinate.longitude,
-//         });
-//         fitMapToSinglePoint({
-//           latitude: coordinate.latitude,
-//           longitude: coordinate.longitude,
-//         });
-//       } else if (locationType === 'dropoff' && needsDestination) {
-//         setDropoffLocation(formattedAddress);
-//         setDropoffCoordinates({
-//           latitude: coordinate.latitude,
-//           longitude: coordinate.longitude,
-//         });
-//         if (pickupCoordinates) {
-//           fitMapToAllPoints();
-//         } else {
-//           fitMapToSinglePoint({
-//             latitude: coordinate.latitude,
-//             longitude: coordinate.longitude,
-//           });
-//         }
-//       } else if (locationType === 'waypoint' && needsDestination && waypointIndex !== undefined) {
-//         const updatedWaypoints = [...waypoints];
-//         if (updatedWaypoints[waypointIndex]) {
-//           updatedWaypoints[waypointIndex] = {
-//             ...updatedWaypoints[waypointIndex],
-//             address: formattedAddress,
-//             coordinates: {
-//               latitude: coordinate.latitude,
-//               longitude: coordinate.longitude,
-//             },
-//             title: location.title,
-//           };
-//         } else {
-//           // If waypoint doesn't exist at this index, create it
-//           updatedWaypoints[waypointIndex] = {
-//             id: `waypoint-${Date.now()}-${waypointIndex}`,
-//             address: formattedAddress,
-//             coordinates: {
-//               latitude: coordinate.latitude,
-//               longitude: coordinate.longitude,
-//             },
-//             title: location.title,
-//           };
-//         }
-//         setWaypoints(updatedWaypoints);
-//         setActiveWaypointIndex(null);
-//         fitMapToAllPoints();
-//       }
-
-//       // Show save option if user is signed in
-//       if (userToken && firebaseUserId) {
-//         setTimeout(() => {
-//           Alert.alert(
-//             'Save Location',
-//             'Would you like to save this location for future use?',
-//             [
-//               { text: 'Not Now', style: 'cancel' },
-//               { text: 'Save', onPress: () => openSaveLocationModal(location, locationType) }
-//             ]
-//           );
-//         }, 500);
-//       }
-
-//     } catch (error) {
-//       console.error('Error getting address:', error);
-//       Alert.alert('Error', 'Failed to get address for selected location');
-//     }
-//   };
-
-//   // UPDATED: Set pending update for pickup
-//   const setPickupPendingUpdate = () => {
-//     setPendingLocationUpdate({ type: 'pickup' });
-//     Alert.alert(
-//       'Select Pickup Location',
-//       'Tap on the map to select your pickup location',
-//       [{ text: 'OK' }]
-//     );
-//   };
-
-//   // UPDATED: Set pending update for dropoff
-//   const setDropoffPendingUpdate = () => {
-//     if (!needsDestination) return;
-//     setPendingLocationUpdate({ type: 'dropoff' });
-//     Alert.alert(
-//       'Select Drop-off Location',
-//       'Tap on the map to select your drop-off location',
-//       [{ text: 'OK' }]
-//     );
-//   };
-
-//   // UPDATED: Set pending update for waypoint
-//   const setWaypointPendingUpdate = (index: number) => {
-//     if (!needsDestination) return;
-//     setPendingLocationUpdate({ type: 'waypoint', index });
-//     Alert.alert(
-//       `Select Stop ${index + 1}`,
-//       'Tap on the map to select this stop location',
-//       [{ text: 'OK' }]
-//     );
-//   };
-
-//   const handlePickupChange = (text: string) => {
-//     setPickupLocation(text);
-//     searchLocation(text, 'pickup');
-//   };
-
-//   const handleDropoffChange = (text: string) => {
-//     setDropoffLocation(text);
-//     searchLocation(text, 'dropoff');
-//   };
-
-//   const handleWaypointChange = (text: string, index: number) => {
-//     const updatedWaypoints = [...waypoints];
-//     updatedWaypoints[index] = { ...updatedWaypoints[index], address: text };
-//     setWaypoints(updatedWaypoints);
-//     setActiveWaypointIndex(index);
-//     searchLocation(text, 'waypoint');
-//   };
-
-//   const handleSelectLocation = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint', waypointIndex?: number) => {
-//     if (type === 'pickup') {
-//       setPickupLocation(location.address);
-//       setPickupCoordinates({
-//         latitude: location.latitude,
-//         longitude: location.longitude,
-//       });
-//       setPickupSuggestions([]);
-//       setShowPickupSuggestions(false);
-//       setFocusedInput(null);
-
-//       fitMapToSinglePoint({
-//         latitude: location.latitude,
-//         longitude: location.longitude,
-//       });
-
-//       // Show save location option only if user is signed in
-//       if (userToken && firebaseUserId) {
-//         setTimeout(() => {
-//           Alert.alert(
-//             'Save Location',
-//             'Would you like to save this location for future use?',
-//             [
-//               { text: 'Not Now', style: 'cancel' },
-//               { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
-//             ]
-//           );
-//         }, 500);
-//       }
-//     } else if (type === 'dropoff' && needsDestination) {
-//       setDropoffLocation(location.address);
-//       setDropoffCoordinates({
-//         latitude: location.latitude,
-//         longitude: location.longitude,
-//       });
-//       setDropoffSuggestions([]);
-//       setShowDropoffSuggestions(false);
-//       setFocusedInput(null);
-
-//       if (pickupCoordinates) {
-//         fitMapToAllPoints();
-//       } else {
-//         fitMapToSinglePoint({
-//           latitude: location.latitude,
-//           longitude: location.longitude,
-//         });
-//       }
-
-//       // Show save location option only if user is signed in
-//       if (userToken && firebaseUserId) {
-//         setTimeout(() => {
-//           Alert.alert(
-//             'Save Location',
-//             'Would you like to save this location for future use?',
-//             [
-//               { text: 'Not Now', style: 'cancel' },
-//               { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
-//             ]
-//           );
-//         }, 500);
-//       }
-//     } else if (type === 'waypoint' && waypointIndex !== undefined && needsDestination) {
-//       const updatedWaypoints = [...waypoints];
-//       updatedWaypoints[waypointIndex] = {
-//         id: `waypoint-${Date.now()}-${waypointIndex}`,
-//         address: location.address,
-//         coordinates: {
-//           latitude: location.latitude,
-//           longitude: location.longitude,
-//         },
-//         title: location.title,
-//       };
-//       setWaypoints(updatedWaypoints);
-//       setWaypointSuggestions([]);
-//       setShowWaypointSuggestions(false);
-//       setActiveWaypointIndex(null);
-//       setFocusedInput(null);
-
-//       fitMapToAllPoints();
-//     }
-
-//     // Try to save to recent locations (silently fail if it doesn't work)
-//     if (userToken && firebaseUserId) {
-//       saveRecentLocation(location).catch(() => { });
-//     }
-//   };
-
-//   const openSaveLocationModal = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint') => {
-//     setSelectedLocationForSave({
-//       address: location.address,
-//       latitude: location.latitude,
-//       longitude: location.longitude,
-//       type: type,
-//     });
-//     setSaveLocationTitle(location.title || 'My Location');
-//     setSaveLocationType('home');
-//     setShowSaveModal(true);
-//   };
-
-//   const saveLocationToBackend = async () => {
-//     if (!selectedLocationForSave || !userToken || !firebaseUserId) {
-//       Alert.alert('Error', 'You need to be signed in to save locations');
-//       setShowSaveModal(false);
-//       return;
-//     }
-
-//     if (!saveLocationTitle.trim()) {
-//       Alert.alert('Error', 'Please enter a name for this location');
-//       return;
-//     }
-
-//     setIsSavingLocation(true);
-
-//     try {
-//       const url = `${API_BASE_URL}/customer/${firebaseUserId}/saved-locations`;
-//       console.log('Saving to URL:', url);
-
-//       const requestBody = {
-//         title: saveLocationTitle,
-//         address: selectedLocationForSave.address,
-//         latitude: selectedLocationForSave.latitude,
-//         longitude: selectedLocationForSave.longitude,
-//         type: saveLocationType,
-//       };
-//       console.log('Request body:', requestBody);
-
-//       const response = await fetch(url, {
-//         method: 'POST',
-//         headers: {
-//           'Authorization': `Bearer ${userToken}`,
-//           'Content-Type': 'application/json',
-//         },
-//         body: JSON.stringify(requestBody),
-//       });
-
-//       console.log('Save response status:', response.status);
-
-//       if (!response.ok) {
-//         // If 404, the feature is not implemented yet
-//         if (response.status === 404) {
-//           Alert.alert(
-//             'Coming Soon',
-//             'The ability to save locations will be available soon! Your location has been selected for this booking.',
-//             [{ text: 'OK' }]
-//           );
-//           setShowSaveModal(false);
-//           return;
-//         }
-//         throw new Error(`Failed to save location: ${response.status}`);
-//       }
-
-//       const data = await response.json();
-//       console.log('Save response data:', data);
-
-//       if (data.success && data.data) {
-//         // Add the new location to saved locations list
-//         const newLocation = {
-//           id: data.data._id || data.data.id,
-//           title: data.data.title,
-//           address: data.data.address,
-//           latitude: data.data.latitude,
-//           longitude: data.data.longitude,
-//           type: data.data.type || saveLocationType,
-//         };
-
-//         setSavedLocations(prev => [newLocation, ...prev]);
-
-//         Alert.alert('Success', 'Location saved successfully!');
-//         setShowSaveModal(false);
-//       } else {
-//         Alert.alert('Notice', 'Location selected successfully!');
-//         setShowSaveModal(false);
-//       }
-//     } catch (error) {
-//       console.error('Error saving location:', error);
-//       // Don't show error to user, just close modal - location is still selected
-//       Alert.alert(
-//         'Notice',
-//         'Your location has been selected for this booking.',
-//         [{ text: 'OK' }]
-//       );
-//       setShowSaveModal(false);
-//     } finally {
-//       setIsSavingLocation(false);
-//     }
-//   };
-
-//   const saveRecentLocation = async (location: LocationSuggestion) => {
-//     if (!userToken || !firebaseUserId) return;
-
-//     try {
-//       const url = `${API_BASE_URL}/customer/${firebaseUserId}/recent-locations`;
-
-//       await fetch(url, {
-//         method: 'POST',
-//         headers: {
-//           'Authorization': `Bearer ${userToken}`,
-//           'Content-Type': 'application/json',
-//         },
-//         body: JSON.stringify({
-//           title: location.title,
-//           address: location.address,
-//           latitude: location.latitude,
-//           longitude: location.longitude,
-//           placeId: location.placeId,
-//         }),
-//       });
-//     } catch (error) {
-//       // Silently fail - don't show error to user
-//       console.log('Failed to save recent location');
-//     }
-//   };
-
-//   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
-//     const latitudes = [coord1.latitude, coord2.latitude];
-//     const longitudes = [coord1.longitude, coord2.longitude];
-
-//     const minLat = Math.min(...latitudes);
-//     const maxLat = Math.max(...latitudes);
-//     const minLng = Math.min(...longitudes);
-//     const maxLng = Math.max(...longitudes);
-
-//     const latDelta = (maxLat - minLat) * 1.5;
-//     const lngDelta = (maxLng - minLng) * 1.5;
-
-//     const newRegion = {
-//       latitude: (minLat + maxLat) / 2,
-//       longitude: (minLng + maxLng) / 2,
-//       latitudeDelta: Math.max(latDelta, 0.02),
-//       longitudeDelta: Math.max(lngDelta, 0.02),
-//     };
-
-//     setRegion(newRegion);
-//     mapRef.current?.animateToRegion(newRegion, 1000);
-//   };
-
-//   const fitMapToSinglePoint = (coord: Coordinates) => {
-//     const newRegion = {
-//       latitude: coord.latitude,
-//       longitude: coord.longitude,
-//       latitudeDelta: 0.02,
-//       longitudeDelta: 0.02,
-//     };
-//     setRegion(newRegion);
-//     mapRef.current?.animateToRegion(newRegion, 1000);
-//   };
-
-//   const fitMapToAllPoints = () => {
-//     const allPoints: Coordinates[] = [];
-
-//     if (pickupCoordinates) allPoints.push(pickupCoordinates);
-//     waypoints.forEach(wp => allPoints.push(wp.coordinates));
-//     if (dropoffCoordinates) allPoints.push(dropoffCoordinates);
-
-//     if (allPoints.length === 0) return;
-
-//     if (allPoints.length === 1) {
-//       fitMapToSinglePoint(allPoints[0]);
-//       return;
-//     }
-
-//     const latitudes = allPoints.map(p => p.latitude);
-//     const longitudes = allPoints.map(p => p.longitude);
-
-//     const minLat = Math.min(...latitudes);
-//     const maxLat = Math.max(...latitudes);
-//     const minLng = Math.min(...longitudes);
-//     const maxLng = Math.max(...longitudes);
-
-//     const latDelta = (maxLat - minLat) * 1.5;
-//     const lngDelta = (maxLng - minLng) * 1.5;
-
-//     const newRegion = {
-//       latitude: (minLat + maxLat) / 2,
-//       longitude: (minLng + maxLng) / 2,
-//       latitudeDelta: Math.max(latDelta, 0.02),
-//       longitudeDelta: Math.max(lngDelta, 0.02),
-//     };
-
-//     setRegion(newRegion);
-//     mapRef.current?.animateToRegion(newRegion, 1000);
-//   };
-
-//   const handleAddSavedLocation = (location: SavedLocation) => {
-//     if (!pickupCoordinates) {
-//       setPickupLocation(location.address);
-//       setPickupCoordinates({
-//         latitude: location.latitude,
-//         longitude: location.longitude,
-//       });
-
-//       fitMapToSinglePoint({
-//         latitude: location.latitude,
-//         longitude: location.longitude,
-//       });
-//     } else {
-//       // If pickup is set and service needs destination, add as a waypoint
-//       if (needsDestination) {
-//         addWaypoint({
-//           id: `saved-${Date.now()}`,
-//           address: location.address,
-//           coordinates: {
-//             latitude: location.latitude,
-//             longitude: location.longitude,
-//           },
-//           title: location.title,
-//         });
-//       } else {
-//         // For location-only services, just replace pickup (or show message)
-//         Alert.alert(
-//           'Location Only Service',
-//           'This service only requires your current location. Would you like to update your pickup location?',
-//           [
-//             { text: 'Cancel', style: 'cancel' },
-//             { 
-//               text: 'Update', 
-//               onPress: () => {
-//                 setPickupLocation(location.address);
-//                 setPickupCoordinates({
-//                   latitude: location.latitude,
-//                   longitude: location.longitude,
-//                 });
-//                 fitMapToSinglePoint({
-//                   latitude: location.latitude,
-//                   longitude: location.longitude,
-//                 });
-//               }
-//             }
-//           ]
-//         );
-//       }
-//     }
-//   };
-
-//   const handleLocationPress = () => {
-//     getCurrentLocation();
-//   };
-
-//   const addWaypoint = (waypoint?: Waypoint) => {
-//     if (needsDestination && waypoint) {
-//       setWaypoints([...waypoints, waypoint]);
-//     } else if (needsDestination) {
-//       // Add empty waypoint
-//       const newWaypoint: Waypoint = {
-//         id: `waypoint-${Date.now()}`,
-//         address: '',
-//         coordinates: {
-//           latitude: 0,
-//           longitude: 0,
-//         },
-//       };
-//       setWaypoints([...waypoints, newWaypoint]);
-//       setActiveWaypointIndex(waypoints.length);
-//       setFocusedInput('waypoint');
-//     }
-//   };
-
-//   const removeWaypoint = (index: number) => {
-//     const updatedWaypoints = waypoints.filter((_, i) => i !== index);
-//     setWaypoints(updatedWaypoints);
-
-//     if (updatedWaypoints.length === 0) {
-//       setActiveWaypointIndex(null);
-//     }
-
-//     // Update map after removal
-//     if (pickupCoordinates && dropoffCoordinates) {
-//       fitMapToAllPoints();
-//     } else if (pickupCoordinates) {
-//       fitMapToSinglePoint(pickupCoordinates);
-//     }
-//   };
-
-//   const moveWaypointUp = (index: number) => {
-//     if (index === 0) return;
-//     const updatedWaypoints = [...waypoints];
-//     [updatedWaypoints[index - 1], updatedWaypoints[index]] = [updatedWaypoints[index], updatedWaypoints[index - 1]];
-//     setWaypoints(updatedWaypoints);
-//   };
-
-//   const moveWaypointDown = (index: number) => {
-//     if (index === waypoints.length - 1) return;
-//     const updatedWaypoints = [...waypoints];
-//     [updatedWaypoints[index], updatedWaypoints[index + 1]] = [updatedWaypoints[index + 1], updatedWaypoints[index]];
-//     setWaypoints(updatedWaypoints);
-//   };
-
-//   const handleContinue = async () => {
-//     try {
-//       console.log('📱 ===== CONTINUE CLICKED =====');
-
-//       if (!pickupCoordinates) {
-//         Alert.alert('Required field', 'Please select a pickup location');
-//         return;
-//       }
-
-//       // Format waypoints for passing to next screen (only if needed)
-//       const waypointsData = needsDestination ? waypoints
-//         .filter(wp => 
-//           wp.coordinates && 
-//           wp.coordinates.latitude !== 0 && 
-//           wp.coordinates.longitude !== 0
-//         )
-//         .map((wp, index) => ({
-//           address: String(wp.address || ''),
-//           lat: String(wp.coordinates.latitude || '0'),
-//           lng: String(wp.coordinates.longitude || '0'),
-//           order: index + 1,
-//         })) : [];
-
-//       // Build navigation params with safe values using getStringParam
-//       const navigationParams = {
-//         // Location data
-//         pickupAddress: String(pickupLocation || ''),
-//         pickupLat: String(pickupCoordinates?.latitude || '0'),
-//         pickupLng: String(pickupCoordinates?.longitude || '0'),
-
-//         // Only include dropoff data if service needs destination
-//         ...(needsDestination && {
-//           dropoffAddress: String(dropoffLocation || ''),
-//           dropoffLat: String(dropoffCoordinates?.latitude || '0'),
-//           dropoffLng: String(dropoffCoordinates?.longitude || '0'),
-//         }),
-
-//         // Waypoints data (stringified JSON) - only if needed
-//         ...(needsDestination && {
-//           waypoints: JSON.stringify(waypointsData),
-//           hasWaypoints: String(waypointsData.length > 0),
-//         }),
-
-//         // Service data (passed from ServiceDetails) - use getStringParam for safety
-//         serviceId: getStringParam(params.serviceId),
-//         serviceName: getStringParam(params.serviceName),
-//         servicePrice: getStringParam(params.servicePrice),
-//         serviceCategory: getStringParam(params.serviceCategory),
-
-//         // Service-specific requirements - use getBooleanParam and convert to string
-//         requiresDestination: String(getBooleanParam(params.requiresDestination)),
-//         requiresFuelType: String(getBooleanParam(params.requiresFuelType)),
-//         requiresLicense: String(getBooleanParam(params.requiresLicense)),
-//         hasBooking: String(getBooleanParam(params.hasBooking)),
-//         requiresTextDescription: String(getBooleanParam(params.requiresTextDescription)),
-
-//         // Flag for location
-//         locationSkipped: 'false',
-
-//         // Pass through any additional params from previous screens
-//         ...(params.serviceDescription && { serviceDescription: String(params.serviceDescription) }),
-//         ...(params.serviceRating && { serviceRating: String(params.serviceRating) }),
-//         ...(params.serviceDistance && { serviceDistance: String(params.serviceDistance) }),
-//         ...(params.serviceTime && { serviceTime: String(params.serviceTime) }),
-//         ...(params.comingFrom && { comingFrom: String(params.comingFrom) }),
-//       };
-
-//       // Log the params for debugging
-//       console.log('✅ Navigation params prepared:', JSON.stringify(navigationParams, null, 2));
-
-//       // Navigate to next step
-//       router.push({
-//         pathname: '/(customer)/VehicleContactInfo',
-//         params: navigationParams
-//       });
-
-//       console.log('✅ Navigation successful');
-//       console.log('===== CONTINUE COMPLETED =====\n');
-
-//     } catch (error) {
-//       const errorMessage = getErrorMessage(error);
-//       console.error('❌===== NAVIGATION ERROR =====');
-//       console.error('Error:', errorMessage);
-//       console.error('Stack:', error instanceof Error ? error.stack : 'No stack trace');
-//       console.log('===== ERROR END =====\n');
-
-//       Alert.alert(
-//         'Navigation Error',
-//         `Unable to proceed to next step.\n\nDebug: ${errorMessage}\n\nPlease try again.`,
-//         [{ text: 'OK' }]
-//       );
-//     }
-//   };
-
-//   const clearLocation = (type: 'pickup' | 'dropoff') => {
-//     if (type === 'pickup') {
-//       setPickupLocation('');
-//       setPickupCoordinates(null);
-//       setPickupSuggestions([]);
-//       setShowPickupSuggestions(false);
-//     } else {
-//       setDropoffLocation('');
-//       setDropoffCoordinates(null);
-//       setDropoffSuggestions([]);
-//       setShowDropoffSuggestions(false);
-//     }
-//   };
-
-//   const clearWaypoint = (index: number) => {
-//     const updatedWaypoints = [...waypoints];
-//     updatedWaypoints[index] = {
-//       ...updatedWaypoints[index],
-//       address: '',
-//       coordinates: { latitude: 0, longitude: 0 },
-//     };
-//     setWaypoints(updatedWaypoints);
-//   };
-
-//   // Get icon for saved location type
-//   const getLocationIcon = (type: string) => {
-//     switch (type) {
-//       case 'home':
-//         return '🏠';
-//       case 'work':
-//         return '💼';
-//       default:
-//         return '📍';
-//     }
-//   };
-
-//   // Get marker color based on index
-//   const getWaypointColor = (index: number) => {
-//     const colors = ['#FF9800', '#9C27B0', '#00BCD4', '#FF4081', '#4CAF50'];
-//     return colors[index % colors.length];
-//   };
-
-//   // Helper function to check if coordinates are valid
-//   const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
-//     return !!coord && 
-//            coord.latitude !== 0 && 
-//            coord.longitude !== 0 && 
-//            !isNaN(coord.latitude) && 
-//            !isNaN(coord.longitude);
-//   };
-
-//   // Prepare route coordinates for Polyline
-//   const getRouteCoordinates = (): Coordinates[] => {
-//     const routeCoords: Coordinates[] = [];
-
-//     // Only build route if service needs destination
-//     if (!needsDestination) return routeCoords;
-
-//     // Add pickup if valid
-//     if (isValidCoordinate(pickupCoordinates)) {
-//       routeCoords.push(pickupCoordinates);
-//     }
-
-//     // Add valid waypoints
-//     waypoints.forEach(wp => {
-//       if (isValidCoordinate(wp.coordinates)) {
-//         routeCoords.push(wp.coordinates);
-//       }
-//     });
-
-//     // Add dropoff if valid
-//     if (isValidCoordinate(dropoffCoordinates)) {
-//       routeCoords.push(dropoffCoordinates);
-//     }
-
-//     return routeCoords;
-//   };
-
-//   // Get service type message for UI
-//   const getServiceTypeMessage = () => {
-//     if (needsDestination) {
-//       return "This service requires pickup and destination locations";
-//     } else {
-//       return "This service only requires your current location";
-//     }
-//   };
-
-//   return (
-//     <KeyboardAvoidingView
-//       style={styles.container}
-//       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-//       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
-//     >
-//       {/* Header */}
-//       <View style={styles.header}>
-//         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-//           <Image
-//             source={require('../../assets/customer/back_button.png')}
-//             style={styles.backButtonImage}
-//             resizeMode="contain"
-//           />
-//         </TouchableOpacity>
-//         <View style={styles.headerTextContainer}>
-//           <Text style={styles.headerTitle}>Location Details</Text>
-//           <Text style={styles.headerSubtitle}>Step 1 of 7</Text>
-//         </View>
-//         {isGettingLocation && (
-//           <ActivityIndicator size="small" color="#68bdee" />
-//         )}
-//       </View>
-
-//       {/* Progress Bar */}
-//       <View style={styles.progressBarContainer}>
-//         <View style={styles.progressBar}>
-//           <View style={[styles.progressFill, { width: '14.3%' }]} />
-//         </View>
-//       </View>
-
-
-//       {/* UPDATED: Map Selection Hint */}
-//       {!pendingLocationUpdate && (
-//         <View style={styles.mapSelectionHint}>
-//           <Ionicons name="information-circle-outline" size={16} color="#68bdee" />
-//           <Text style={styles.mapSelectionHintText}>
-//             Tap on the map to select a location
-//           </Text>
-//         </View>
-//       )}
-
-//       {/* UPDATED: Pending Selection Indicator */}
-//       {pendingLocationUpdate && (
-//         <View style={styles.pendingSelectionIndicator}>
-//           <Ionicons name="hand-right" size={20} color="#FFFFFF" />
-//           <Text style={styles.pendingSelectionText}>
-//             Tap on the map to select {pendingLocationUpdate.type === 'pickup' ? 'pickup' : 
-//               pendingLocationUpdate.type === 'dropoff' ? 'drop-off' : 
-//               `stop ${(pendingLocationUpdate.index || 0) + 1}`} location
-//           </Text>
-//           <TouchableOpacity 
-//             style={styles.cancelPendingButton}
-//             onPress={() => setPendingLocationUpdate(null)}
-//           >
-//             <Ionicons name="close" size={20} color="#FFFFFF" />
-//           </TouchableOpacity>
-//         </View>
-//       )}
-
-//       <ScrollView
-//         style={styles.scrollView}
-//         contentContainerStyle={styles.scrollContent}
-//         keyboardShouldPersistTaps="handled"
-//         showsVerticalScrollIndicator={false}
-//         bounces={false}
-//       >
-//         {/* Map View */}
-//         <View style={styles.mapContainer}>
-//           {isGettingLocation && (
-//             <View style={styles.mapLoader}>
-//               <ActivityIndicator size="large" color="#68bdee" />
-//               <Text style={styles.mapLoaderText}>Getting your location...</Text>
-//             </View>
-//           )}
-//           <MapView
-//             ref={mapRef}
-//             style={styles.map}
-//             region={region}
-//             showsUserLocation={true}
-//             showsMyLocationButton={false}
-//             onPress={handleMapPress}  // Always enabled now
-//           >
-//             {isValidCoordinate(pickupCoordinates) && (
-//               <Marker
-//                 coordinate={pickupCoordinates}
-//                 title="Pickup Location"
-//                 description={pickupLocation}
-//                 pinColor="#68bdee"
-//               />
-//             )}
-
-//             {/* Waypoint Markers - only show if service needs destination */}
-//             {needsDestination && waypoints.map((waypoint, index) => (
-//               isValidCoordinate(waypoint.coordinates) && (
-//                 <Marker
-//                   key={waypoint.id}
-//                   coordinate={waypoint.coordinates}
-//                   title={`Stop ${index + 1}`}
-//                   description={waypoint.address}
-//                   pinColor={getWaypointColor(index)}
-//                 />
-//               )
-//             ))}
-
-//             {needsDestination && isValidCoordinate(dropoffCoordinates) && (
-//               <Marker
-//                 coordinate={dropoffCoordinates}
-//                 title="Dropoff Location"
-//                 description={dropoffLocation}
-//                 pinColor="#ff4444"
-//               />
-//             )}
-
-//             {/* Draw route through all points - only if needed and at least 2 valid coordinates */}
-//             {needsDestination && getRouteCoordinates().length >= 2 && (
-//               <Polyline
-//                 coordinates={getRouteCoordinates()}
-//                 strokeColor="#68bdee"
-//                 strokeWidth={3}
-//               />
-//             )}
-//           </MapView>
-
-//           {/* Map View Label */}
-//           <View style={styles.mapLabel}>
-//             <Text style={styles.mapLabelText}>MAP VIEW</Text>
-//           </View>
-
-//           {/* Location Button */}
-//           <TouchableOpacity
-//             style={styles.locationButton}
-//             onPress={handleLocationPress}
-//             disabled={isGettingLocation}
-//           >
-//             <Ionicons
-//               name="navigate"
-//               size={Math.min(24, width * 0.06)}
-//               color={isGettingLocation ? "#b0b0b0" : "#3c3c3c"}
-//             />
-//           </TouchableOpacity>
-//         </View>
-
-//         {/* Current Location Indicator */}
-//         {pickupCoordinates && !isGettingLocation && (
-//           <View style={styles.currentLocationIndicator}>
-//             <Ionicons name="checkmark-circle" size={Math.min(20, width * 0.05)} color="#4CAF50" />
-//             <Text style={styles.currentLocationText} numberOfLines={1}>
-//               Pickup location set
-//             </Text>
-//           </View>
-//         )}
-
-//         {/* Form Section */}
-//         <View style={styles.formSection}>
-//           {/* Pickup Location - with higher z-index when focused */}
-//           <View style={[
-//             styles.inputSection,
-//             focusedInput === 'pickup' && styles.inputSectionFocused
-//           ]}>
-//             <Text style={styles.inputLabel}>
-//               Pickup Location <Text style={styles.required}>*</Text>
-//             </Text>
-//             <View style={styles.inputContainer}>
-//               <View style={[styles.locationDot, pickupCoordinates && styles.locationDotActive]} />
-//               <TextInput
-//                 style={styles.input}
-//                 placeholder="Enter pickup location"
-//                 placeholderTextColor="#b0b0b0"
-//                 value={pickupLocation}
-//                 onChangeText={handlePickupChange}
-//                 onFocus={() => {
-//                   setFocusedInput('pickup');
-//                   if (pickupSuggestions.length > 0) {
-//                     setShowPickupSuggestions(true);
-//                   }
-//                 }}
-//                 onBlur={() => {
-//                   setTimeout(() => {
-//                     setFocusedInput(null);
-//                     setShowPickupSuggestions(false);
-//                   }, 200);
-//                 }}
-//                 editable={!isGettingLocation}
-//               />
-//               {pickupLocation ? (
-//                 <TouchableOpacity
-//                   style={styles.inputIcon}
-//                   onPress={() => clearLocation('pickup')}
-//                 >
-//                   <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
-//                 </TouchableOpacity>
-//               ) : (
-//                 <TouchableOpacity
-//                   style={styles.inputIcon}
-//                   onPress={setPickupPendingUpdate}  // UPDATED: Set pending update
-//                   disabled={isGettingLocation}
-//                 >
-//                   <Ionicons
-//                     name="map-outline"
-//                     size={Math.min(20, width * 0.05)}
-//                     color={isGettingLocation ? "#b0b0b0" : "#68bdee"}
-//                   />
-//                 </TouchableOpacity>
-//               )}
-//             </View>
-
-//             {/* Pickup Suggestions */}
-//             {showPickupSuggestions && pickupSuggestions.length > 0 && (
-//               <View style={styles.suggestionsContainer}>
-//                 {isSearching ? (
-//                   <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
-//                 ) : (
-//                   pickupSuggestions.map((suggestion) => (
-//                     <TouchableOpacity
-//                       key={suggestion.id}
-//                       style={styles.suggestionItem}
-//                       onPress={() => handleSelectLocation(suggestion, 'pickup')}
-//                     >
-//                       <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#68bdee" />
-//                       <View style={styles.suggestionTextContainer}>
-//                         <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
-//                         <Text style={styles.suggestionAddress} numberOfLines={1}>
-//                           {suggestion.address}
-//                         </Text>
-//                       </View>
-//                     </TouchableOpacity>
-//                   ))
-//                 )}
-//               </View>
-//             )}
-//           </View>
-
-//           {/* Drop-off Location - Conditionally rendered based on service type */}
-//           {needsDestination && (
-//             <View style={[
-//               styles.inputSection,
-//               focusedInput === 'dropoff' && styles.inputSectionFocused,
-//               styles.dropoffSection
-//             ]}>
-//               <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
-//               <View style={styles.inputContainer}>
-//                 <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
-//                 <TextInput
-//                   style={styles.input}
-//                   placeholder="Enter drop-off location (optional)"
-//                   placeholderTextColor="#b0b0b0"
-//                   value={dropoffLocation}
-//                   onChangeText={handleDropoffChange}
-//                   onFocus={() => {
-//                     setFocusedInput('dropoff');
-//                     if (dropoffSuggestions.length > 0) {
-//                       setShowDropoffSuggestions(true);
-//                     }
-//                   }}
-//                   onBlur={() => {
-//                     setTimeout(() => {
-//                       setFocusedInput(null);
-//                       setShowDropoffSuggestions(false);
-//                     }, 200);
-//                   }}
-//                 />
-//                 {dropoffLocation ? (
-//                   <TouchableOpacity
-//                     style={styles.inputIcon}
-//                     onPress={() => clearLocation('dropoff')}
-//                   >
-//                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
-//                   </TouchableOpacity>
-//                 ) : (
-//                   <TouchableOpacity 
-//                     style={styles.inputIcon}
-//                     onPress={setDropoffPendingUpdate}  // UPDATED: Set pending update
-//                   >
-//                     <Ionicons 
-//                       name="map-outline" 
-//                       size={Math.min(20, width * 0.05)} 
-//                       color="#68bdee" 
-//                     />
-//                   </TouchableOpacity>
-//                 )}
-//               </View>
-
-//               {/* Dropoff Suggestions */}
-//               {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
-//                 <View style={styles.suggestionsContainer}>
-//                   {isSearching ? (
-//                     <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
-//                   ) : (
-//                     dropoffSuggestions.map((suggestion) => (
-//                       <TouchableOpacity
-//                         key={suggestion.id}
-//                         style={styles.suggestionItem}
-//                         onPress={() => handleSelectLocation(suggestion, 'dropoff')}
-//                       >
-//                         <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#ff4444" />
-//                         <View style={styles.suggestionTextContainer}>
-//                           <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
-//                           <Text style={styles.suggestionAddress} numberOfLines={1}>
-//                             {suggestion.address}
-//                           </Text>
-//                         </View>
-//                       </TouchableOpacity>
-//                     ))
-//                   )}
-//                 </View>
-//               )}
-//             </View>
-//           )}
-
-//           {/* Waypoints (Intermediate Stops) - Only if service needs destination */}
-//           {needsDestination && waypoints.map((waypoint, index) => (
-//             <View
-//               key={waypoint.id}
-//               style={[
-//                 styles.inputSection,
-//                 styles.waypointSection,
-//                 activeWaypointIndex === index && styles.inputSectionFocused,
-//                 { marginLeft: width * 0.05 } // Indent to show hierarchy
-//               ]}
-//             >
-//               <View style={styles.waypointHeader}>
-//                 <Text style={styles.inputLabel}>
-//                   Stop {index + 1}
-//                 </Text>
-//                 <View style={styles.waypointControls}>
-//                   <TouchableOpacity
-//                     onPress={() => moveWaypointUp(index)}
-//                     disabled={index === 0}
-//                     style={styles.waypointControlButton}
-//                   >
-//                     <Ionicons
-//                       name="arrow-up"
-//                       size={Math.min(18, width * 0.045)}
-//                       color={index === 0 ? "#b0b0b0" : "#68bdee"}
-//                     />
-//                   </TouchableOpacity>
-//                   <TouchableOpacity
-//                     onPress={() => moveWaypointDown(index)}
-//                     disabled={index === waypoints.length - 1}
-//                     style={styles.waypointControlButton}
-//                   >
-//                     <Ionicons
-//                       name="arrow-down"
-//                       size={Math.min(18, width * 0.045)}
-//                       color={index === waypoints.length - 1 ? "#b0b0b0" : "#68bdee"}
-//                     />
-//                   </TouchableOpacity>
-//                   <TouchableOpacity
-//                     onPress={() => removeWaypoint(index)}
-//                     style={styles.waypointControlButton}
-//                   >
-//                     <Ionicons name="close" size={Math.min(18, width * 0.045)} color="#ff4444" />
-//                   </TouchableOpacity>
-//                 </View>
-//               </View>
-//               <View style={styles.inputContainer}>
-//                 <View style={[
-//                   styles.locationDot,
-//                   { backgroundColor: getWaypointColor(index) },
-//                   isValidCoordinate(waypoint.coordinates) && styles.locationDotActive
-//                 ]} />
-//                 <TextInput
-//                   style={styles.input}
-//                   placeholder={`Enter stop ${index + 1} location`}
-//                   placeholderTextColor="#b0b0b0"
-//                   value={waypoint.address}
-//                   onChangeText={(text) => handleWaypointChange(text, index)}
-//                   onFocus={() => {
-//                     setActiveWaypointIndex(index);
-//                     setFocusedInput('waypoint');
-//                     if (waypointSuggestions.length > 0) {
-//                       setShowWaypointSuggestions(true);
-//                     }
-//                   }}
-//                   onBlur={() => {
-//                     setTimeout(() => {
-//                       setActiveWaypointIndex(null);
-//                       setFocusedInput(null);
-//                       setShowWaypointSuggestions(false);
-//                     }, 200);
-//                   }}
-//                 />
-//                 {waypoint.address ? (
-//                   <TouchableOpacity
-//                     style={styles.inputIcon}
-//                     onPress={() => clearWaypoint(index)}
-//                   >
-//                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
-//                   </TouchableOpacity>
-//                 ) : (
-//                   <TouchableOpacity
-//                     style={styles.inputIcon}
-//                     onPress={() => setWaypointPendingUpdate(index)}  // UPDATED: Set pending update
-//                   >
-//                     <Ionicons 
-//                       name="map-outline" 
-//                       size={Math.min(20, width * 0.05)} 
-//                       color="#68bdee" 
-//                     />
-//                   </TouchableOpacity>
-//                 )}
-//               </View>
-
-//               {/* Waypoint Suggestions */}
-//               {showWaypointSuggestions && activeWaypointIndex === index && waypointSuggestions.length > 0 && (
-//                 <View style={styles.suggestionsContainer}>
-//                   {isSearching ? (
-//                     <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
-//                   ) : (
-//                     waypointSuggestions.map((suggestion) => (
-//                       <TouchableOpacity
-//                         key={suggestion.id}
-//                         style={styles.suggestionItem}
-//                         onPress={() => handleSelectLocation(suggestion, 'waypoint', index)}
-//                       >
-//                         <Ionicons name="location" size={Math.min(20, width * 0.05)} color={getWaypointColor(index)} />
-//                         <View style={styles.suggestionTextContainer}>
-//                           <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
-//                           <Text style={styles.suggestionAddress} numberOfLines={1}>
-//                             {suggestion.address}
-//                           </Text>
-//                         </View>
-//                       </TouchableOpacity>
-//                     ))
-//                   )}
-//                 </View>
-//               )}
-//             </View>
-//           ))}
-
-//           {/* Add Another Stop Button - Only if service needs destination */}
-//           {needsDestination && waypoints.length < 5 && (
-//             <TouchableOpacity
-//               style={styles.addStopButton}
-//               onPress={() => addWaypoint()}
-//             >
-//               <Ionicons name="add" size={Math.min(20, width * 0.05)} color="#68bdee" />
-//               <Text style={styles.addStopText}>Add Another Stop</Text>
-//             </TouchableOpacity>
-//           )}
-
-//           {/* Saved Locations */}
-//           <View style={styles.savedLocationsSection}>
-//             <View style={styles.savedLocationsHeader}>
-//               <Text style={styles.savedLocationsTitle}>Saved Locations</Text>
-//               {userToken && savedLocations.length > 2 && (
-//                 <TouchableOpacity onPress={() => setShowAllSavedLocations(!showAllSavedLocations)}>
-//                   <Text style={styles.viewAllText}>
-//                     {showAllSavedLocations ? 'Show Less' : 'View All'}
-//                   </Text>
-//                 </TouchableOpacity>
-//               )}
-//             </View>
-
-//             {isLoadingSavedLocations ? (
-//               <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
-//             ) : savedLocations.length > 0 ? (
-//               <>
-//                 {/* Show first 2 locations or all if showAll is true */}
-//                 {(showAllSavedLocations ? savedLocations : savedLocations.slice(0, 2)).map((location) => (
-//                   <TouchableOpacity
-//                     key={location.id}
-//                     style={styles.savedLocationCard}
-//                     onPress={() => handleAddSavedLocation(location)}
-//                   >
-//                     <View style={styles.savedLocationIconContainer}>
-//                       <View style={styles.savedLocationIconCircle}>
-//                         <Text style={styles.savedLocationEmoji}>
-//                           {getLocationIcon(location.type)}
-//                         </Text>
-//                       </View>
-//                     </View>
-//                     <View style={styles.savedLocationInfo}>
-//                       <Text style={styles.savedLocationTitle} numberOfLines={1}>
-//                         {location.title}
-//                       </Text>
-//                       <Text style={styles.savedLocationAddress} numberOfLines={1}>
-//                         {location.address}
-//                       </Text>
-//                     </View>
-//                     <View style={styles.addLocationButton}>
-//                       <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
-//                     </View>
-//                   </TouchableOpacity>
-//                 ))}
-//               </>
-//             ) : (
-//               <View style={styles.emptySavedContainer}>
-//                 <Text style={styles.emptySavedText}>
-//                   {userToken ? 'No saved locations yet' : 'Sign in to save locations'}
-//                 </Text>
-//               </View>
-//             )}
-//           </View>
-//         </View>
-//       </ScrollView>
-
-//       {/* Continue Button */}
-//       <View style={styles.bottomContainer}>
-//         <TouchableOpacity
-//           style={[styles.continueButton, (!pickupCoordinates || isGettingLocation) && styles.continueButtonDisabled]}
-//           onPress={handleContinue}
-//           disabled={!pickupCoordinates || isGettingLocation}
-//           activeOpacity={0.8}
-//         >
-//           {isGettingLocation ? (
-//             <ActivityIndicator size="small" color="#FFFFFF" />
-//           ) : (
-//             <Text style={styles.continueButtonText}>Continue</Text>
-//           )}
-//         </TouchableOpacity>
-//       </View>
-
-//       {/* Save Location Modal */}
-//       <Modal
-//         visible={showSaveModal}
-//         transparent={true}
-//         animationType="slide"
-//         onRequestClose={() => setShowSaveModal(false)}
-//       >
-//         <View style={styles.modalOverlay}>
-//           <View style={styles.modalContent}>
-//             <View style={styles.modalHeader}>
-//               <Text style={styles.modalTitle}>Save Location</Text>
-//               <TouchableOpacity onPress={() => setShowSaveModal(false)}>
-//                 <Ionicons name="close" size={Math.min(24, width * 0.06)} color="#3c3c3c" />
-//               </TouchableOpacity>
-//             </View>
-
-//             <ScrollView showsVerticalScrollIndicator={false}>
-//               <View style={styles.modalBody}>
-//                 <Text style={styles.modalLabel}>Location Name</Text>
-//                 <TextInput
-//                   style={styles.modalInput}
-//                   placeholder="e.g., Home, Work, Gym"
-//                   placeholderTextColor="#b0b0b0"
-//                   value={saveLocationTitle}
-//                   onChangeText={setSaveLocationTitle}
-//                 />
-
-//                 <Text style={styles.modalLabel}>Location Type</Text>
-//                 <View style={styles.locationTypeContainer}>
-//                   <TouchableOpacity
-//                     style={[
-//                       styles.locationTypeButton,
-//                       saveLocationType === 'home' && styles.locationTypeButtonActive
-//                     ]}
-//                     onPress={() => setSaveLocationType('home')}
-//                   >
-//                     <Text style={styles.locationTypeEmoji}>🏠</Text>
-//                     <Text style={[
-//                       styles.locationTypeText,
-//                       saveLocationType === 'home' && styles.locationTypeTextActive
-//                     ]}>Home</Text>
-//                   </TouchableOpacity>
-
-//                   <TouchableOpacity
-//                     style={[
-//                       styles.locationTypeButton,
-//                       saveLocationType === 'work' && styles.locationTypeButtonActive
-//                     ]}
-//                     onPress={() => setSaveLocationType('work')}
-//                   >
-//                     <Text style={styles.locationTypeEmoji}>💼</Text>
-//                     <Text style={[
-//                       styles.locationTypeText,
-//                       saveLocationType === 'work' && styles.locationTypeTextActive
-//                     ]}>Work</Text>
-//                   </TouchableOpacity>
-
-//                   <TouchableOpacity
-//                     style={[
-//                       styles.locationTypeButton,
-//                       saveLocationType === 'other' && styles.locationTypeButtonActive
-//                     ]}
-//                     onPress={() => setSaveLocationType('other')}
-//                   >
-//                     <Text style={styles.locationTypeEmoji}>📍</Text>
-//                     <Text style={[
-//                       styles.locationTypeText,
-//                       saveLocationType === 'other' && styles.locationTypeTextActive
-//                     ]}>Other</Text>
-//                   </TouchableOpacity>
-//                 </View>
-
-//                 {selectedLocationForSave && (
-//                   <View style={styles.modalAddressPreview}>
-//                     <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#68bdee" />
-//                     <Text style={styles.modalAddressText} numberOfLines={2}>
-//                       {selectedLocationForSave.address}
-//                     </Text>
-//                   </View>
-//                 )}
-//               </View>
-//             </ScrollView>
-
-//             <View style={styles.modalFooter}>
-//               <TouchableOpacity
-//                 style={styles.modalCancelButton}
-//                 onPress={() => setShowSaveModal(false)}
-//               >
-//                 <Text style={styles.modalCancelButtonText}>Cancel</Text>
-//               </TouchableOpacity>
-
-//               <TouchableOpacity
-//                 style={[styles.modalSaveButton, isSavingLocation && styles.modalSaveButtonDisabled]}
-//                 onPress={saveLocationToBackend}
-//                 disabled={isSavingLocation}
-//               >
-//                 {isSavingLocation ? (
-//                   <ActivityIndicator size="small" color="#FFFFFF" />
-//                 ) : (
-//                   <Text style={styles.modalSaveButtonText}>Save Location</Text>
-//                 )}
-//               </TouchableOpacity>
-//             </View>
-//           </View>
-//         </View>
-//       </Modal>
-//     </KeyboardAvoidingView>
-//   );
-// };
-
-// export default LocationDetailsScreen;
-
-
-
-
-
-
-
-
-
-
-
-
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
@@ -1911,11 +12,10 @@ import {
   Modal,
   Platform,
   ScrollView,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import { styles } from './styles/LocationDetailsStyles';
@@ -1967,6 +67,7 @@ const LOCATION_ONLY_SERVICES = [
   '8',  // Inspection
   '9',  // Car Wash
   '10', // Car Detailing
+  '12',
 ];
 
 const LocationDetailsScreen = () => {
@@ -1999,8 +100,6 @@ const LocationDetailsScreen = () => {
   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
   const [userToken, setUserToken] = useState<string | null>(null);
   const [firebaseUserId, setFirebaseUserId] = useState<string | null>(null);
-  const [locationTimeout, setLocationTimeout] = useState(false);
-
 
   // State for showing all saved locations
   const [showAllSavedLocations, setShowAllSavedLocations] = useState(false);
@@ -2044,10 +143,6 @@ const LocationDetailsScreen = () => {
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
 
-  // Service-specific checks
-  const isRoadsideAssistance = serviceId === '2';
-  const isTowing = serviceId === '1';
-
   // Get service-specific requirements
   const requiresDestination = getStringParam(params.requiresDestination);
   const requiresFuelType = getStringParam(params.requiresFuelType);
@@ -2084,8 +179,6 @@ const LocationDetailsScreen = () => {
     console.log('📦 All params received:', JSON.stringify(params, null, 2));
     console.log('📍 Service ID:', serviceId);
     console.log('🎯 Needs destination:', needsDestination);
-    console.log('🚗 Is Towing:', isTowing);
-    console.log('🛠️ Is Roadside Assistance:', isRoadsideAssistance);
 
     // Check for critical params
     const requiredParams = ['serviceId', 'serviceName', 'servicePrice'];
@@ -2207,270 +300,62 @@ const LocationDetailsScreen = () => {
     }
   };
 
-const getCurrentLocationAndSetDefault = async () => {
-  setIsGettingLocation(true);
-  setLocationTimeout(false);
-  
-  // Create an abort controller for timeout
-  const abortController = new AbortController();
-  
-  // Set multiple timeouts for different scenarios
-  const gpsTimeout = setTimeout(() => {
-    if (isGettingLocation) {
-      setLocationTimeout(true);
-      Alert.alert(
-        '📍 Location Taking Too Long',
-        'This usually happens when:\n' +
-        '• You have poor internet connection\n' +
-        '• You are indoors (GPS signal weak)\n' +
-        '• Location services are disabled\n\n' +
-        'What would you like to do?',
-        [
-          { 
-            text: 'Retry', 
-            onPress: () => getCurrentLocationAndSetDefault() 
-          },
-          { 
-            text: 'Select on Map', 
-            onPress: () => {
-              setIsGettingLocation(false);
-              setPendingLocationUpdate({ type: 'pickup' });
-              Alert.alert(
-                'Select Pickup Location',
-                'Tap on the map to select your pickup location'
-              );
-            },
-            style: 'default'
-          },
-          { 
-            text: 'Cancel', 
-            style: 'cancel',
-            onPress: () => setIsGettingLocation(false)
-          }
-        ]
-      );
-    }
-  }, 15000); // 15 second timeout for GPS fix
-
-  try {
-    // First check internet connectivity
-    const isConnected = await checkInternetConnectivity();
-    if (!isConnected) {
-      Alert.alert(
-        '📶 No Internet Connection',
-        'Unable to get your location without an internet connection.\n' +
-        'Please connect to the internet or select your location manually on the map.',
-        [
-          { 
-            text: 'Select on Map', 
-            onPress: () => {
-              setIsGettingLocation(false);
-              setPendingLocationUpdate({ type: 'pickup' });
-            }
-          },
-          { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
-        ]
-      );
-      setIsGettingLocation(false);
-      clearTimeout(gpsTimeout);
-      return;
-    }
-
-    // Check location services
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        '🔐 Location Permission Denied',
-        'Please enable location services to automatically set your current location.\n\n' +
-        'You can still select your location manually on the map.',
-        [
-          { 
-            text: 'Select on Map', 
-            onPress: () => {
-              setIsGettingLocation(false);
-              setPendingLocationUpdate({ type: 'pickup' });
-            }
-          },
-          { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
-        ]
-      );
-      setIsGettingLocation(false);
-      clearTimeout(gpsTimeout);
-      return;
-    }
-
-    // Check if location services are enabled on device
-    const isLocationEnabled = await Location.hasServicesEnabledAsync();
-    if (!isLocationEnabled) {
-      Alert.alert(
-        '📍 Location Services Disabled',
-        'Please enable location services in your device settings.',
-        [
-          { 
-            text: 'Select on Map', 
-            onPress: () => {
-              setIsGettingLocation(false);
-              setPendingLocationUpdate({ type: 'pickup' });
-            }
-          },
-          { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
-        ]
-      );
-      setIsGettingLocation(false);
-      clearTimeout(gpsTimeout);
-      return;
-    }
-
-    // Try to get location with different accuracy options
-    let location;
+  const getCurrentLocationAndSetDefault = async () => {
+    setIsGettingLocation(true);
     try {
-      // First try high accuracy (GPS + network)
-      location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-        timeInterval: 5000, // Update every 5 seconds
-      });
-    } catch (highAccuracyError) {
-      console.log('High accuracy failed, trying balanced:', highAccuracyError);
-      
-      // If high accuracy fails, try balanced accuracy (less accurate but faster)
-      try {
-        location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-      } catch (balancedError) {
-        console.log('Balanced accuracy failed, trying low accuracy:', balancedError);
-        
-        // Last resort - get last known position (fastest, but might be outdated)
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          location = lastKnown;
-        } else {
-          throw new Error('No location available');
-        }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission denied',
+          'Please enable location services to automatically set your current location. You can manually enter a location or tap on the map instead.'
+        );
+        setIsGettingLocation(false);
+        return;
       }
-    }
 
-    if (!location) {
-      throw new Error('Could not get location');
-    }
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
 
-    // Try reverse geocoding with timeout
-    let formattedAddress = 'Current Location';
-    try {
-      const reverseGeocodeTimeout = setTimeout(() => {
-        throw new Error('Reverse geocoding timeout');
-      }, 5000);
-
+      // Get address from coordinates (reverse geocoding)
       const [address] = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
-      
-      clearTimeout(reverseGeocodeTimeout);
 
-      if (address) {
-        const parts = [
-          address.street,
-          address.city,
-          address.region,
-          address.country
-        ].filter(Boolean);
-        formattedAddress = parts.join(', ') || 'Current Location';
-      }
-    } catch (reverseError) {
-      console.log('Reverse geocoding failed, using coordinates:', reverseError);
-      // Fallback to coordinates
-      formattedAddress = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
+      // Format the address
+      const formattedAddress = address ?
+        `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
+        : 'Current Location';
+
+      // Set pickup location to current location
+      setPickupLocation(formattedAddress || 'Current Location');
+      setPickupCoordinates({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+
+      // Update map region
+      const newRegion = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
+      };
+      setRegion(newRegion);
+      mapRef.current?.animateToRegion(newRegion, 1000);
+
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert(
+        'Error',
+        'Failed to get your current location. Please enter your pickup location manually or tap on the map.'
+      );
+    } finally {
+      setIsGettingLocation(false);
     }
+  };
 
-    // Set the location
-    setPickupLocation(formattedAddress);
-    setPickupCoordinates({
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    });
-
-    // Update map
-    const newRegion = {
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02,
-    };
-    setRegion(newRegion);
-    mapRef.current?.animateToRegion(newRegion, 1000);
-    
-    // Clear the timeout since we succeeded
-    clearTimeout(gpsTimeout);
-
-  } catch (error) {
-    console.error('Error getting location:', error);
-    
-    // Determine error type and show appropriate message
-    let errorTitle = '📍 Failed to Get Location';
-    let errorMessage = '';
-    
-    const errorString = error instanceof Error ? error.message : String(error);
-    
-    if (errorString.includes('network') || errorString.includes('Network')) {
-      errorMessage = 'Unable to connect to location services. Please check your internet connection.';
-    } else if (errorString.includes('timeout')) {
-      errorMessage = 'Location request timed out. This usually happens indoors or with poor GPS signal.';
-    } else if (errorString.includes('permission')) {
-      errorMessage = 'Location permission was denied.';
-    } else if (errorString.includes('disabled')) {
-      errorMessage = 'Location services are disabled on your device.';
-    } else {
-      errorMessage = 'An unexpected error occurred.\n\nPlease try again or select your location manually on the map.';
-    }
-    
-    Alert.alert(
-      errorTitle,
-      errorMessage,
-      [
-        { 
-          text: 'Try Again', 
-          onPress: () => getCurrentLocationAndSetDefault() 
-        },
-        { 
-          text: 'Select on Map', 
-          onPress: () => {
-            setIsGettingLocation(false);
-            setPendingLocationUpdate({ type: 'pickup' });
-          },
-          style: 'default'
-        },
-        { 
-          text: 'Cancel', 
-          style: 'cancel',
-          onPress: () => setIsGettingLocation(false)
-        }
-      ]
-    );
-  } finally {
-    setIsGettingLocation(false);
-    clearTimeout(gpsTimeout);
-  }
-};
-
-// Helper function to check internet connectivity
-const checkInternetConnectivity = async (): Promise<boolean> => {
-  try {
-    // Try to fetch a small resource to check connectivity
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-    
-    const response = await fetch('https://www.google.com/generate_204', {
-      method: 'HEAD',
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    return response.ok;
-  } catch {
-    return false;
-  }
-};
   const getCurrentLocation = async () => {
     setIsGettingLocation(true);
     try {
@@ -2753,7 +638,7 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
 
     } catch (error) {
       console.error('Error getting address:', error);
-      Alert.alert('Error', 'Failed to get address for selected location, Please Try Again');
+      Alert.alert('Error', 'Failed to get address for selected location');
     }
   };
 
@@ -2790,7 +675,6 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
   };
 
   const handlePickupChange = (text: string) => {
-    // This function is kept but won't be called since pickup is read-only
     setPickupLocation(text);
     searchLocation(text, 'pickup');
   };
@@ -3116,11 +1000,27 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
           title: location.title,
         });
       } else {
-        // For location-only services, just show message that pickup is already set
+        // For location-only services, just replace pickup (or show message)
         Alert.alert(
-          'Location Already Set',
-          'Your pickup location has been automatically set to your current location.',
-          [{ text: 'OK' }]
+          'Location Only Service',
+          'This service only requires your current location. Would you like to update your pickup location?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Update', 
+              onPress: () => {
+                setPickupLocation(location.address);
+                setPickupCoordinates({
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                });
+                fitMapToSinglePoint({
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                });
+              }
+            }
+          ]
         );
       }
     }
@@ -3184,21 +1084,15 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
       console.log('📱 ===== CONTINUE CLICKED =====');
 
       if (!pickupCoordinates) {
-        Alert.alert('Required field', 'Please wait while we get your current location');
-        return;
-      }
-
-      // Add validation for Towing - dropoff required
-      if (isTowing && !dropoffCoordinates) {
-        Alert.alert('Required field', 'Please select a drop-off location for towing service');
+        Alert.alert('Required field', 'Please select a pickup location');
         return;
       }
 
       // Format waypoints for passing to next screen (only if needed)
       const waypointsData = needsDestination ? waypoints
-        .filter(wp =>
-          wp.coordinates &&
-          wp.coordinates.latitude !== 0 &&
+        .filter(wp => 
+          wp.coordinates && 
+          wp.coordinates.latitude !== 0 && 
           wp.coordinates.longitude !== 0
         )
         .map((wp, index) => ({
@@ -3323,11 +1217,11 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
 
   // Helper function to check if coordinates are valid
   const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
-    return !!coord &&
-      coord.latitude !== 0 &&
-      coord.longitude !== 0 &&
-      !isNaN(coord.latitude) &&
-      !isNaN(coord.longitude);
+    return !!coord && 
+           coord.latitude !== 0 && 
+           coord.longitude !== 0 && 
+           !isNaN(coord.latitude) && 
+           !isNaN(coord.longitude);
   };
 
   // Prepare route coordinates for Polyline
@@ -3413,11 +1307,11 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
         <View style={styles.pendingSelectionIndicator}>
           <Ionicons name="hand-right" size={20} color="#FFFFFF" />
           <Text style={styles.pendingSelectionText}>
-            Tap on the map to select {pendingLocationUpdate.type === 'pickup' ? 'pickup' :
-              pendingLocationUpdate.type === 'dropoff' ? 'drop-off' :
-                `stop ${(pendingLocationUpdate.index || 0) + 1}`} location
+            Tap on the map to select {pendingLocationUpdate.type === 'pickup' ? 'pickup' : 
+              pendingLocationUpdate.type === 'dropoff' ? 'drop-off' : 
+              `stop ${(pendingLocationUpdate.index || 0) + 1}`} location
           </Text>
-          <TouchableOpacity
+          <TouchableOpacity 
             style={styles.cancelPendingButton}
             onPress={() => setPendingLocationUpdate(null)}
           >
@@ -3514,38 +1408,89 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
           <View style={styles.currentLocationIndicator}>
             <Ionicons name="checkmark-circle" size={Math.min(20, width * 0.05)} color="#4CAF50" />
             <Text style={styles.currentLocationText} numberOfLines={1}>
-              Pickup location automatically set
+              Pickup location set
             </Text>
           </View>
         )}
 
         {/* Form Section */}
         <View style={styles.formSection}>
-          {/* Pickup Location - Read-only for all services */}
+          {/* Pickup Location - with higher z-index when focused */}
           <View style={[
             styles.inputSection,
             focusedInput === 'pickup' && styles.inputSectionFocused
           ]}>
             <Text style={styles.inputLabel}>
-              {isRoadsideAssistance ? 'Drop-off Location' : 'Pickup Location'} <Text style={styles.required}>*</Text>
+              Pickup Location <Text style={styles.required}>*</Text>
             </Text>
             <View style={styles.inputContainer}>
               <View style={[styles.locationDot, pickupCoordinates && styles.locationDotActive]} />
               <TextInput
-                style={[styles.input, styles.readOnlyInput]}
-                placeholder={isRoadsideAssistance ? "Your current drop-off location" : "Your current pickup location"}
+                style={styles.input}
+                placeholder="Enter pickup location"
                 placeholderTextColor="#b0b0b0"
                 value={pickupLocation}
-                editable={false}  // Make it read-only
+                onChangeText={handlePickupChange}
+                onFocus={() => {
+                  setFocusedInput('pickup');
+                  if (pickupSuggestions.length > 0) {
+                    setShowPickupSuggestions(true);
+                  }
+                }}
+                onBlur={() => {
+                  setTimeout(() => {
+                    setFocusedInput(null);
+                    setShowPickupSuggestions(false);
+                  }, 200);
+                }}
+                editable={!isGettingLocation}
               />
-              <View style={styles.inputIcon}>
-                <Ionicons
-                  name="checkmark-circle"
-                  size={Math.min(20, width * 0.05)}
-                  color="#4CAF50"
-                />
-              </View>
+              {pickupLocation ? (
+                <TouchableOpacity
+                  style={styles.inputIcon}
+                  onPress={() => clearLocation('pickup')}
+                >
+                  <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={styles.inputIcon}
+                  onPress={setPickupPendingUpdate}  // UPDATED: Set pending update
+                  disabled={isGettingLocation}
+                >
+                  <Ionicons
+                    name="map-outline"
+                    size={Math.min(20, width * 0.05)}
+                    color={isGettingLocation ? "#b0b0b0" : "#68bdee"}
+                  />
+                </TouchableOpacity>
+              )}
             </View>
+
+            {/* Pickup Suggestions */}
+            {showPickupSuggestions && pickupSuggestions.length > 0 && (
+              <View style={styles.suggestionsContainer}>
+                {isSearching ? (
+                  <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+                ) : (
+                  pickupSuggestions.map((suggestion) => (
+                    <TouchableOpacity
+                      key={suggestion.id}
+                      style={styles.suggestionItem}
+                      onPress={() => handleSelectLocation(suggestion, 'pickup')}
+                    >
+                      <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#68bdee" />
+                      <View style={styles.suggestionTextContainer}>
+                        <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
+                        <Text style={styles.suggestionAddress} numberOfLines={1}>
+                          {suggestion.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            )}
           </View>
 
           {/* Drop-off Location - Conditionally rendered based on service type */}
@@ -3555,14 +1500,12 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
               focusedInput === 'dropoff' && styles.inputSectionFocused,
               styles.dropoffSection
             ]}>
-              <Text style={styles.inputLabel}>
-                Drop-off Location {isTowing && <Text style={styles.required}>*</Text>}
-              </Text>
+              <Text style={styles.inputLabel}>Drop-off Location (Optional)</Text>
               <View style={styles.inputContainer}>
                 <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
                 <TextInput
                   style={styles.input}
-                  placeholder={isTowing ? "Enter drop-off location (required)" : "Enter drop-off location (optional)"}
+                  placeholder="Enter drop-off location (optional)"
                   placeholderTextColor="#b0b0b0"
                   value={dropoffLocation}
                   onChangeText={handleDropoffChange}
@@ -3578,7 +1521,6 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
                       setShowDropoffSuggestions(false);
                     }, 200);
                   }}
-                  editable={!isGettingLocation}
                 />
                 {dropoffLocation ? (
                   <TouchableOpacity
@@ -3588,14 +1530,14 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity
+                  <TouchableOpacity 
                     style={styles.inputIcon}
                     onPress={setDropoffPendingUpdate}  // UPDATED: Set pending update
                   >
-                    <Ionicons
-                      name="map-outline"
-                      size={Math.min(20, width * 0.05)}
-                      color="#68bdee"
+                    <Ionicons 
+                      name="map-outline" 
+                      size={Math.min(20, width * 0.05)} 
+                      color="#68bdee" 
                     />
                   </TouchableOpacity>
                 )}
@@ -3713,10 +1655,10 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
                     style={styles.inputIcon}
                     onPress={() => setWaypointPendingUpdate(index)}  // UPDATED: Set pending update
                   >
-                    <Ionicons
-                      name="map-outline"
-                      size={Math.min(20, width * 0.05)}
-                      color="#68bdee"
+                    <Ionicons 
+                      name="map-outline" 
+                      size={Math.min(20, width * 0.05)} 
+                      color="#68bdee" 
                     />
                   </TouchableOpacity>
                 )}
@@ -3943,3 +1885,2062 @@ const checkInternetConnectivity = async (): Promise<boolean> => {
 };
 
 export default LocationDetailsScreen;
+
+
+
+
+
+
+
+
+
+
+
+
+// import { Ionicons } from '@expo/vector-icons';
+// import AsyncStorage from '@react-native-async-storage/async-storage';
+// import * as Location from 'expo-location';
+// import { useLocalSearchParams, useRouter } from 'expo-router';
+// import React, { useEffect, useRef, useState } from 'react';
+// import {
+//   ActivityIndicator,
+//   Alert,
+//   Dimensions,
+//   Image,
+//   KeyboardAvoidingView,
+//   Modal,
+//   Platform,
+//   ScrollView,
+//   StyleSheet,
+//   Text,
+//   TextInput,
+//   TouchableOpacity,
+//   View,
+// } from 'react-native';
+// import MapView, { Marker, Polyline, Region } from 'react-native-maps';
+// import { styles } from './styles/LocationDetailsStyles';
+// const { width, height } = Dimensions.get('window');
+
+// // API Base URL
+// const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
+
+// // Types
+// interface LocationSuggestion {
+//   id: string;
+//   title: string;
+//   address: string;
+//   latitude: number;
+//   longitude: number;
+//   placeId?: string;
+// }
+
+// interface SavedLocation {
+//   id: string;
+//   title: string;
+//   address: string;
+//   latitude: number;
+//   longitude: number;
+//   type: 'home' | 'work' | 'other';
+// }
+
+// interface Coordinates {
+//   latitude: number;
+//   longitude: number;
+// }
+
+// // New type for waypoints (stops between pickup and dropoff)
+// interface Waypoint {
+//   id: string;
+//   address: string;
+//   coordinates: Coordinates;
+//   title?: string;
+// }
+
+// // Services that only need pickup location (no destination needed)
+// const LOCATION_ONLY_SERVICES = [
+//   '2',  // Roadside Assistance
+//   '3',  // Fuel Delivery
+//   '4',  // Battery Replacement
+//   '5',  // AC Gas Refill
+//   '6',  // Tire Replacement
+//   '7',  // Oil Change
+//   '8',  // Inspection
+//   '9',  // Car Wash
+//   '10', // Car Detailing
+//   '12'
+// ];
+
+// const LocationDetailsScreen = () => {
+//   const router = useRouter();
+//   const params = useLocalSearchParams();
+//   const mapRef = useRef<MapView>(null);
+
+//   const [pickupLocation, setPickupLocation] = useState<string>('');
+//   const [dropoffLocation, setDropoffLocation] = useState<string>('');
+//   const [pickupCoordinates, setPickupCoordinates] = useState<Coordinates | null>(null);
+//   const [dropoffCoordinates, setDropoffCoordinates] = useState<Coordinates | null>(null);
+
+//   // New state for waypoints (intermediate stops)
+//   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
+//   const [activeWaypointIndex, setActiveWaypointIndex] = useState<number | null>(null);
+
+//   const [pickupSuggestions, setPickupSuggestions] = useState<LocationSuggestion[]>([]);
+//   const [dropoffSuggestions, setDropoffSuggestions] = useState<LocationSuggestion[]>([]);
+//   const [waypointSuggestions, setWaypointSuggestions] = useState<LocationSuggestion[]>([]);
+
+//   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
+//   const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
+//   const [showWaypointSuggestions, setShowWaypointSuggestions] = useState(false);
+
+//   const [isLoading, setIsLoading] = useState(false);
+//   const [isGettingLocation, setIsGettingLocation] = useState(true);
+//   const [isSearching, setIsSearching] = useState(false);
+//   const [focusedInput, setFocusedInput] = useState<'pickup' | 'dropoff' | 'waypoint' | null>(null);
+//   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>([]);
+//   const [isLoadingSavedLocations, setIsLoadingSavedLocations] = useState(true);
+//   const [userToken, setUserToken] = useState<string | null>(null);
+//   const [firebaseUserId, setFirebaseUserId] = useState<string | null>(null);
+//   const [locationTimeout, setLocationTimeout] = useState(false);
+
+
+//   // State for showing all saved locations
+//   const [showAllSavedLocations, setShowAllSavedLocations] = useState(false);
+
+//   // Save location modal states
+//   const [showSaveModal, setShowSaveModal] = useState(false);
+//   const [selectedLocationForSave, setSelectedLocationForSave] = useState<{
+//     address: string;
+//     latitude: number;
+//     longitude: number;
+//     type: 'pickup' | 'dropoff' | 'waypoint';
+//   } | null>(null);
+//   const [saveLocationTitle, setSaveLocationTitle] = useState('');
+//   const [saveLocationType, setSaveLocationType] = useState<'home' | 'work' | 'other'>('home');
+//   const [isSavingLocation, setIsSavingLocation] = useState(false);
+
+//   // UPDATED: Track which location to update when tapping the map
+//   const [pendingLocationUpdate, setPendingLocationUpdate] = useState<{
+//     type: 'pickup' | 'dropoff' | 'waypoint';
+//     index?: number;
+//   } | null>(null);
+
+//   // Update initial region to Faisalabad, Pakistan (your actual location area)
+//   const [region, setRegion] = useState<Region>({
+//     latitude: 31.4504,  // Faisalabad latitude
+//     longitude: 73.1350, // Faisalabad longitude
+//     latitudeDelta: 0.05,
+//     longitudeDelta: 0.05,
+//   });
+
+//   // Helper function to safely get string from params
+//   const getStringParam = (param: string | string[] | undefined): string => {
+//     if (!param) return '';
+//     return Array.isArray(param) ? param[0] : param;
+//   };
+
+//   // Get all service info from params
+//   const serviceId = getStringParam(params.serviceId);
+//   const needsDestination = !LOCATION_ONLY_SERVICES.includes(serviceId);
+//   const serviceName = getStringParam(params.serviceName);
+//   const servicePrice = getStringParam(params.servicePrice);
+//   const serviceCategory = getStringParam(params.serviceCategory);
+
+//   // Service-specific checks
+//   const isRoadsideAssistance = serviceId === '2';
+//   const isTowing = serviceId === '1';
+
+//   // Get service-specific requirements
+//   const requiresDestination = getStringParam(params.requiresDestination);
+//   const requiresFuelType = getStringParam(params.requiresFuelType);
+//   const requiresLicense = getStringParam(params.requiresLicense);
+//   const hasBooking = getStringParam(params.hasBooking);
+//   const requiresTextDescription = getStringParam(params.requiresTextDescription);
+
+//   // Helper function to safely parse boolean
+//   const getBooleanParam = (param: string | string[] | undefined): boolean => {
+//     const value = getStringParam(param);
+//     return value === 'true' || value === 'True' || value === '1';
+//   };
+
+//   // Helper function to safely parse number
+//   const getNumberParam = (param: string | string[] | undefined): number => {
+//     const value = getStringParam(param);
+//     const parsed = parseFloat(value);
+//     return isNaN(parsed) ? 0 : parsed;
+//   };
+
+//   // Helper function to get error message
+//   const getErrorMessage = (error: unknown): string => {
+//     if (error instanceof Error) return error.message;
+//     if (typeof error === 'string') return error;
+//     if (error && typeof error === 'object' && 'message' in error) {
+//       return String(error.message);
+//     }
+//     return 'Unknown error occurred';
+//   };
+
+//   // Debug function to log params on mount
+//   const logParams = (params: any) => {
+//     console.log('📱 LocationDetailsScreen mounted');
+//     console.log('📦 All params received:', JSON.stringify(params, null, 2));
+//     console.log('📍 Service ID:', serviceId);
+//     console.log('🎯 Needs destination:', needsDestination);
+//     console.log('🚗 Is Towing:', isTowing);
+//     console.log('🛠️ Is Roadside Assistance:', isRoadsideAssistance);
+
+//     // Check for critical params
+//     const requiredParams = ['serviceId', 'serviceName', 'servicePrice'];
+//     requiredParams.forEach(param => {
+//       if (!params[param]) {
+//         console.warn(`⚠️ Warning: Missing ${param} param!`);
+//       }
+//     });
+//   };
+
+//   // Load user token and saved locations on mount
+//   useEffect(() => {
+//     logParams(params);
+//     loadUserData();
+//     getCurrentLocationAndSetDefault();
+//   }, []);
+
+//   // Update map when waypoints change (only if destination is needed)
+//   useEffect(() => {
+//     if (needsDestination) {
+//       if (pickupCoordinates && dropoffCoordinates && waypoints.length > 0) {
+//         fitMapToAllPoints();
+//       } else if (pickupCoordinates && dropoffCoordinates) {
+//         fitMapToCoordinates(pickupCoordinates, dropoffCoordinates);
+//       } else if (pickupCoordinates) {
+//         fitMapToSinglePoint(pickupCoordinates);
+//       } else if (dropoffCoordinates) {
+//         fitMapToSinglePoint(dropoffCoordinates);
+//       }
+//     } else {
+//       // For location-only services, just focus on pickup
+//       if (pickupCoordinates) {
+//         fitMapToSinglePoint(pickupCoordinates);
+//       }
+//     }
+//   }, [waypoints.length, pickupCoordinates, dropoffCoordinates, needsDestination]);
+
+//   const loadUserData = async () => {
+//     try {
+//       // Get user token from AsyncStorage
+//       const token = await AsyncStorage.getItem('userToken');
+//       const userDataStr = await AsyncStorage.getItem('userData');
+
+//       if (token && userDataStr) {
+//         setUserToken(token);
+
+//         const userData = JSON.parse(userDataStr);
+//         console.log('User data loaded:', {
+//           firebaseUserId: userData.firebaseUserId,
+//           email: userData.email,
+//           role: userData.role
+//         });
+
+//         // Store the firebaseUserId for API calls
+//         if (userData.firebaseUserId) {
+//           setFirebaseUserId(userData.firebaseUserId);
+//           // Load saved locations after getting firebaseUserId
+//           await fetchSavedLocations(token, userData.firebaseUserId);
+//         } else {
+//           console.log('No firebaseUserId found in user data');
+//         }
+//       } else {
+//         console.log('No user token or data found - continuing without saved locations');
+//       }
+//     } catch (error) {
+//       console.error('Error loading user data:', error);
+//     } finally {
+//       setIsLoadingSavedLocations(false);
+//     }
+//   };
+
+//   const fetchSavedLocations = async (token: string, uid: string) => {
+//     try {
+//       console.log('Fetching saved locations for firebaseUserId:', uid);
+//       const url = `${API_BASE_URL}/customer/${uid}/saved-locations`;
+//       console.log('Fetching from URL:', url);
+
+//       const response = await fetch(url, {
+//         method: 'GET',
+//         headers: {
+//           'Authorization': `Bearer ${token}`,
+//           'Content-Type': 'application/json',
+//         },
+//       });
+
+//       console.log('Response status:', response.status);
+
+//       if (!response.ok) {
+//         // If 404, the endpoint might not be implemented yet
+//         if (response.status === 404) {
+//           console.log('Saved locations endpoint not found - feature not implemented yet');
+//         } else {
+//           console.log('Could not fetch saved locations, continuing with empty list');
+//         }
+//         setSavedLocations([]);
+//         return;
+//       }
+
+//       const data = await response.json();
+//       console.log('Response data:', data);
+
+//       if (data.success && data.data) {
+//         // Transform the data to match our SavedLocation interface
+//         const transformedLocations = data.data.map((loc: any) => ({
+//           id: loc._id || loc.id,
+//           title: loc.title,
+//           address: loc.address,
+//           latitude: loc.latitude,
+//           longitude: loc.longitude,
+//           type: loc.type || 'other',
+//         }));
+//         setSavedLocations(transformedLocations);
+//       } else {
+//         setSavedLocations([]);
+//       }
+//     } catch (error) {
+//       console.error('Error fetching saved locations:', error);
+//       setSavedLocations([]);
+//     }
+//   };
+
+// const getCurrentLocationAndSetDefault = async () => {
+//   setIsGettingLocation(true);
+//   setLocationTimeout(false);
+  
+//   // Create an abort controller for timeout
+//   const abortController = new AbortController();
+  
+//   // Set multiple timeouts for different scenarios
+//   const gpsTimeout = setTimeout(() => {
+//     if (isGettingLocation) {
+//       setLocationTimeout(true);
+//       Alert.alert(
+//         '📍 Location Taking Too Long',
+//         'This usually happens when:\n' +
+//         '• You have poor internet connection\n' +
+//         '• You are indoors (GPS signal weak)\n' +
+//         '• Location services are disabled\n\n' +
+//         'What would you like to do?',
+//         [
+//           { 
+//             text: 'Retry', 
+//             onPress: () => getCurrentLocationAndSetDefault() 
+//           },
+//           { 
+//             text: 'Select on Map', 
+//             onPress: () => {
+//               setIsGettingLocation(false);
+//               setPendingLocationUpdate({ type: 'pickup' });
+//               Alert.alert(
+//                 'Select Pickup Location',
+//                 'Tap on the map to select your pickup location'
+//               );
+//             },
+//             style: 'default'
+//           },
+//           { 
+//             text: 'Cancel', 
+//             style: 'cancel',
+//             onPress: () => setIsGettingLocation(false)
+//           }
+//         ]
+//       );
+//     }
+//   }, 15000); // 15 second timeout for GPS fix
+
+//   try {
+//     // First check internet connectivity
+//     const isConnected = await checkInternetConnectivity();
+//     if (!isConnected) {
+//       Alert.alert(
+//         '📶 No Internet Connection',
+//         'Unable to get your location without an internet connection.\n' +
+//         'Please connect to the internet or select your location manually on the map.',
+//         [
+//           { 
+//             text: 'Select on Map', 
+//             onPress: () => {
+//               setIsGettingLocation(false);
+//               setPendingLocationUpdate({ type: 'pickup' });
+//             }
+//           },
+//           { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
+//         ]
+//       );
+//       setIsGettingLocation(false);
+//       clearTimeout(gpsTimeout);
+//       return;
+//     }
+
+//     // Check location services
+//     const { status } = await Location.requestForegroundPermissionsAsync();
+//     if (status !== 'granted') {
+//       Alert.alert(
+//         '🔐 Location Permission Denied',
+//         'Please enable location services to automatically set your current location.\n\n' +
+//         'You can still select your location manually on the map.',
+//         [
+//           { 
+//             text: 'Select on Map', 
+//             onPress: () => {
+//               setIsGettingLocation(false);
+//               setPendingLocationUpdate({ type: 'pickup' });
+//             }
+//           },
+//           { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
+//         ]
+//       );
+//       setIsGettingLocation(false);
+//       clearTimeout(gpsTimeout);
+//       return;
+//     }
+
+//     // Check if location services are enabled on device
+//     const isLocationEnabled = await Location.hasServicesEnabledAsync();
+//     if (!isLocationEnabled) {
+//       Alert.alert(
+//         '📍 Location Services Disabled',
+//         'Please enable location services in your device settings.',
+//         [
+//           { 
+//             text: 'Select on Map', 
+//             onPress: () => {
+//               setIsGettingLocation(false);
+//               setPendingLocationUpdate({ type: 'pickup' });
+//             }
+//           },
+//           { text: 'Cancel', style: 'cancel', onPress: () => setIsGettingLocation(false) }
+//         ]
+//       );
+//       setIsGettingLocation(false);
+//       clearTimeout(gpsTimeout);
+//       return;
+//     }
+
+//     // Try to get location with different accuracy options
+//     let location;
+//     try {
+//       // First try high accuracy (GPS + network)
+//       location = await Location.getCurrentPositionAsync({
+//         accuracy: Location.Accuracy.High,
+//         timeInterval: 5000, // Update every 5 seconds
+//       });
+//     } catch (highAccuracyError) {
+//       console.log('High accuracy failed, trying balanced:', highAccuracyError);
+      
+//       // If high accuracy fails, try balanced accuracy (less accurate but faster)
+//       try {
+//         location = await Location.getCurrentPositionAsync({
+//           accuracy: Location.Accuracy.Balanced,
+//         });
+//       } catch (balancedError) {
+//         console.log('Balanced accuracy failed, trying low accuracy:', balancedError);
+        
+//         // Last resort - get last known position (fastest, but might be outdated)
+//         const lastKnown = await Location.getLastKnownPositionAsync();
+//         if (lastKnown) {
+//           location = lastKnown;
+//         } else {
+//           throw new Error('No location available');
+//         }
+//       }
+//     }
+
+//     if (!location) {
+//       throw new Error('Could not get location');
+//     }
+
+//     // Try reverse geocoding with timeout
+//     let formattedAddress = 'Current Location';
+//     try {
+//       const reverseGeocodeTimeout = setTimeout(() => {
+//         throw new Error('Reverse geocoding timeout');
+//       }, 5000);
+
+//       const [address] = await Location.reverseGeocodeAsync({
+//         latitude: location.coords.latitude,
+//         longitude: location.coords.longitude,
+//       });
+      
+//       clearTimeout(reverseGeocodeTimeout);
+
+//       if (address) {
+//         const parts = [
+//           address.street,
+//           address.city,
+//           address.region,
+//           address.country
+//         ].filter(Boolean);
+//         formattedAddress = parts.join(', ') || 'Current Location';
+//       }
+//     } catch (reverseError) {
+//       console.log('Reverse geocoding failed, using coordinates:', reverseError);
+//       // Fallback to coordinates
+//       formattedAddress = `${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`;
+//     }
+
+//     // Set the location
+//     setPickupLocation(formattedAddress);
+//     setPickupCoordinates({
+//       latitude: location.coords.latitude,
+//       longitude: location.coords.longitude,
+//     });
+
+//     // Update map
+//     const newRegion = {
+//       latitude: location.coords.latitude,
+//       longitude: location.coords.longitude,
+//       latitudeDelta: 0.02,
+//       longitudeDelta: 0.02,
+//     };
+//     setRegion(newRegion);
+//     mapRef.current?.animateToRegion(newRegion, 1000);
+    
+//     // Clear the timeout since we succeeded
+//     clearTimeout(gpsTimeout);
+
+//   } catch (error) {
+//     console.error('Error getting location:', error);
+    
+//     // Determine error type and show appropriate message
+//     let errorTitle = '📍 Failed to Get Location';
+//     let errorMessage = '';
+    
+//     const errorString = error instanceof Error ? error.message : String(error);
+    
+//     if (errorString.includes('network') || errorString.includes('Network')) {
+//       errorMessage = 'Unable to connect to location services. Please check your internet connection.';
+//     } else if (errorString.includes('timeout')) {
+//       errorMessage = 'Location request timed out. This usually happens indoors or with poor GPS signal.';
+//     } else if (errorString.includes('permission')) {
+//       errorMessage = 'Location permission was denied.';
+//     } else if (errorString.includes('disabled')) {
+//       errorMessage = 'Location services are disabled on your device.';
+//     } else {
+//       errorMessage = 'An unexpected error occurred.\n\nPlease try again or select your location manually on the map.';
+//     }
+    
+//     Alert.alert(
+//       errorTitle,
+//       errorMessage,
+//       [
+//         { 
+//           text: 'Try Again', 
+//           onPress: () => getCurrentLocationAndSetDefault() 
+//         },
+//         { 
+//           text: 'Select on Map', 
+//           onPress: () => {
+//             setIsGettingLocation(false);
+//             setPendingLocationUpdate({ type: 'pickup' });
+//           },
+//           style: 'default'
+//         },
+//         { 
+//           text: 'Cancel', 
+//           style: 'cancel',
+//           onPress: () => setIsGettingLocation(false)
+//         }
+//       ]
+//     );
+//   } finally {
+//     setIsGettingLocation(false);
+//     clearTimeout(gpsTimeout);
+//   }
+// };
+
+// // Helper function to check internet connectivity
+// const checkInternetConnectivity = async (): Promise<boolean> => {
+//   try {
+//     // Try to fetch a small resource to check connectivity
+//     const controller = new AbortController();
+//     const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+//     const response = await fetch('https://www.google.com/generate_204', {
+//       method: 'HEAD',
+//       signal: controller.signal
+//     });
+    
+//     clearTimeout(timeoutId);
+//     return response.ok;
+//   } catch {
+//     return false;
+//   }
+// };
+//   const getCurrentLocation = async () => {
+//     setIsGettingLocation(true);
+//     try {
+//       const { status } = await Location.requestForegroundPermissionsAsync();
+//       if (status !== 'granted') {
+//         Alert.alert('Permission denied', 'Please enable location services to use this feature.');
+//         setIsGettingLocation(false);
+//         return;
+//       }
+
+//       const location = await Location.getCurrentPositionAsync({});
+
+//       // Get address from coordinates
+//       const [address] = await Location.reverseGeocodeAsync({
+//         latitude: location.coords.latitude,
+//         longitude: location.coords.longitude,
+//       });
+
+//       const formattedAddress = address ?
+//         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
+//         : 'Current Location';
+
+//       // Update pickup location if it's empty, otherwise just update the map
+//       if (!pickupCoordinates) {
+//         setPickupLocation(formattedAddress || 'Current Location');
+//         setPickupCoordinates({
+//           latitude: location.coords.latitude,
+//           longitude: location.coords.longitude,
+//         });
+//       }
+
+//       const newRegion = {
+//         latitude: location.coords.latitude,
+//         longitude: location.coords.longitude,
+//         latitudeDelta: 0.02,
+//         longitudeDelta: 0.02,
+//       };
+//       setRegion(newRegion);
+//       mapRef.current?.animateToRegion(newRegion, 1000);
+
+//     } catch (error) {
+//       console.error('Error getting location:', error);
+//       Alert.alert('Error', 'Failed to get your current location. Please try again.');
+//     } finally {
+//       setIsGettingLocation(false);
+//     }
+//   };
+
+//   const searchLocation = async (query: string, type: 'pickup' | 'dropoff' | 'waypoint') => {
+//     if (query.length < 3) {
+//       if (type === 'pickup') {
+//         setPickupSuggestions([]);
+//         setShowPickupSuggestions(false);
+//       } else if (type === 'dropoff') {
+//         setDropoffSuggestions([]);
+//         setShowDropoffSuggestions(false);
+//       } else {
+//         setWaypointSuggestions([]);
+//         setShowWaypointSuggestions(false);
+//       }
+//       return;
+//     }
+
+//     setIsSearching(true);
+
+//     try {
+//       // Use device geocoding for search
+//       const geocodeResults = await Location.geocodeAsync(query);
+
+//       if (geocodeResults.length > 0) {
+//         const suggestions: LocationSuggestion[] = [];
+
+//         // Get addresses for first 5 results
+//         for (let i = 0; i < Math.min(geocodeResults.length, 5); i++) {
+//           const result = geocodeResults[i];
+//           try {
+//             const [address] = await Location.reverseGeocodeAsync({
+//               latitude: result.latitude,
+//               longitude: result.longitude,
+//             });
+
+//             const formattedAddress = address ?
+//               `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
+//               : `${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}`;
+
+//             suggestions.push({
+//               id: `geo-${i}-${Date.now()}`,
+//               title: address?.street || address?.name || query,
+//               address: formattedAddress,
+//               latitude: result.latitude,
+//               longitude: result.longitude,
+//             });
+//           } catch (reverseError) {
+//             // If reverse geocoding fails, just use coordinates
+//             suggestions.push({
+//               id: `geo-${i}-${Date.now()}`,
+//               title: query,
+//               address: `${result.latitude.toFixed(4)}, ${result.longitude.toFixed(4)}`,
+//               latitude: result.latitude,
+//               longitude: result.longitude,
+//             });
+//           }
+//         }
+
+//         if (type === 'pickup') {
+//           setPickupSuggestions(suggestions);
+//           setShowPickupSuggestions(suggestions.length > 0);
+//         } else if (type === 'dropoff') {
+//           setDropoffSuggestions(suggestions);
+//           setShowDropoffSuggestions(suggestions.length > 0);
+//         } else {
+//           setWaypointSuggestions(suggestions);
+//           setShowWaypointSuggestions(suggestions.length > 0);
+//         }
+//       } else {
+//         // No results found
+//         if (type === 'pickup') {
+//           setPickupSuggestions([]);
+//           setShowPickupSuggestions(false);
+//         } else if (type === 'dropoff') {
+//           setDropoffSuggestions([]);
+//           setShowDropoffSuggestions(false);
+//         } else {
+//           setWaypointSuggestions([]);
+//           setShowWaypointSuggestions(false);
+//         }
+//       }
+//     } catch (error) {
+//       console.error('Error searching locations:', error);
+//       // Clear suggestions on error
+//       if (type === 'pickup') {
+//         setPickupSuggestions([]);
+//         setShowPickupSuggestions(false);
+//       } else if (type === 'dropoff') {
+//         setDropoffSuggestions([]);
+//         setShowDropoffSuggestions(false);
+//       } else {
+//         setWaypointSuggestions([]);
+//         setShowWaypointSuggestions(false);
+//       }
+//     } finally {
+//       setIsSearching(false);
+//     }
+//   };
+
+//   // UPDATED: Handle map press - always enabled, intelligently update based on context
+//   const handleMapPress = async (event: any) => {
+//     const { coordinate } = event.nativeEvent;
+
+//     try {
+//       // Determine which location to update
+//       let locationType: 'pickup' | 'dropoff' | 'waypoint' = 'pickup';
+//       let waypointIndex: number | undefined = undefined;
+
+//       if (pendingLocationUpdate) {
+//         // Use the pending update from a specific button click
+//         locationType = pendingLocationUpdate.type;
+//         waypointIndex = pendingLocationUpdate.index;
+//         setPendingLocationUpdate(null);
+//       } else {
+//         // Smart selection based on context
+//         if (!pickupCoordinates) {
+//           // No pickup yet, default to pickup
+//           locationType = 'pickup';
+//         } else if (needsDestination && !dropoffCoordinates && waypoints.length === 0) {
+//           // No dropoff and no waypoints, default to dropoff
+//           locationType = 'dropoff';
+//         } else if (needsDestination && waypoints.length > 0 && activeWaypointIndex !== null) {
+//           // Active waypoint being edited
+//           locationType = 'waypoint';
+//           waypointIndex = activeWaypointIndex;
+//         } else if (needsDestination && waypoints.length < 5) {
+//           // Add as a new waypoint
+//           locationType = 'waypoint';
+//           const newWaypoint: Waypoint = {
+//             id: `waypoint-${Date.now()}`,
+//             address: '',
+//             coordinates: {
+//               latitude: 0,
+//               longitude: 0,
+//             },
+//           };
+//           setWaypoints([...waypoints, newWaypoint]);
+//           waypointIndex = waypoints.length;
+//         } else if (needsDestination && !dropoffCoordinates) {
+//           // Default to dropoff
+//           locationType = 'dropoff';
+//         } else {
+//           // Default to pickup (replace)
+//           locationType = 'pickup';
+//         }
+//       }
+
+//       // Reverse geocode to get address
+//       const [address] = await Location.reverseGeocodeAsync({
+//         latitude: coordinate.latitude,
+//         longitude: coordinate.longitude,
+//       });
+
+//       const formattedAddress = address ?
+//         `${address.street || ''}, ${address.city || ''}, ${address.country || ''}`.replace(/^, |, $/g, '')
+//         : `${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`;
+
+//       // Create location object
+//       const location: LocationSuggestion = {
+//         id: `map-${Date.now()}`,
+//         title: address?.street || address?.name || 'Selected Location',
+//         address: formattedAddress,
+//         latitude: coordinate.latitude,
+//         longitude: coordinate.longitude,
+//       };
+
+//       // Handle based on determined type
+//       if (locationType === 'pickup') {
+//         setPickupLocation(formattedAddress);
+//         setPickupCoordinates({
+//           latitude: coordinate.latitude,
+//           longitude: coordinate.longitude,
+//         });
+//         fitMapToSinglePoint({
+//           latitude: coordinate.latitude,
+//           longitude: coordinate.longitude,
+//         });
+//       } else if (locationType === 'dropoff' && needsDestination) {
+//         setDropoffLocation(formattedAddress);
+//         setDropoffCoordinates({
+//           latitude: coordinate.latitude,
+//           longitude: coordinate.longitude,
+//         });
+//         if (pickupCoordinates) {
+//           fitMapToAllPoints();
+//         } else {
+//           fitMapToSinglePoint({
+//             latitude: coordinate.latitude,
+//             longitude: coordinate.longitude,
+//           });
+//         }
+//       } else if (locationType === 'waypoint' && needsDestination && waypointIndex !== undefined) {
+//         const updatedWaypoints = [...waypoints];
+//         if (updatedWaypoints[waypointIndex]) {
+//           updatedWaypoints[waypointIndex] = {
+//             ...updatedWaypoints[waypointIndex],
+//             address: formattedAddress,
+//             coordinates: {
+//               latitude: coordinate.latitude,
+//               longitude: coordinate.longitude,
+//             },
+//             title: location.title,
+//           };
+//         } else {
+//           // If waypoint doesn't exist at this index, create it
+//           updatedWaypoints[waypointIndex] = {
+//             id: `waypoint-${Date.now()}-${waypointIndex}`,
+//             address: formattedAddress,
+//             coordinates: {
+//               latitude: coordinate.latitude,
+//               longitude: coordinate.longitude,
+//             },
+//             title: location.title,
+//           };
+//         }
+//         setWaypoints(updatedWaypoints);
+//         setActiveWaypointIndex(null);
+//         fitMapToAllPoints();
+//       }
+
+//       // Show save option if user is signed in
+//       if (userToken && firebaseUserId) {
+//         setTimeout(() => {
+//           Alert.alert(
+//             'Save Location',
+//             'Would you like to save this location for future use?',
+//             [
+//               { text: 'Not Now', style: 'cancel' },
+//               { text: 'Save', onPress: () => openSaveLocationModal(location, locationType) }
+//             ]
+//           );
+//         }, 500);
+//       }
+
+//     } catch (error) {
+//       console.error('Error getting address:', error);
+//       Alert.alert('Error', 'Failed to get address for selected location, Please Try Again');
+//     }
+//   };
+
+//   // UPDATED: Set pending update for pickup
+//   const setPickupPendingUpdate = () => {
+//     setPendingLocationUpdate({ type: 'pickup' });
+//     Alert.alert(
+//       'Select Pickup Location',
+//       'Tap on the map to select your pickup location',
+//       [{ text: 'OK' }]
+//     );
+//   };
+
+//   // UPDATED: Set pending update for dropoff
+//   const setDropoffPendingUpdate = () => {
+//     if (!needsDestination) return;
+//     setPendingLocationUpdate({ type: 'dropoff' });
+//     Alert.alert(
+//       'Select Drop-off Location',
+//       'Tap on the map to select your drop-off location',
+//       [{ text: 'OK' }]
+//     );
+//   };
+
+//   // UPDATED: Set pending update for waypoint
+//   const setWaypointPendingUpdate = (index: number) => {
+//     if (!needsDestination) return;
+//     setPendingLocationUpdate({ type: 'waypoint', index });
+//     Alert.alert(
+//       `Select Stop ${index + 1}`,
+//       'Tap on the map to select this stop location',
+//       [{ text: 'OK' }]
+//     );
+//   };
+
+//   const handlePickupChange = (text: string) => {
+//     // This function is kept but won't be called since pickup is read-only
+//     setPickupLocation(text);
+//     searchLocation(text, 'pickup');
+//   };
+
+//   const handleDropoffChange = (text: string) => {
+//     setDropoffLocation(text);
+//     searchLocation(text, 'dropoff');
+//   };
+
+//   const handleWaypointChange = (text: string, index: number) => {
+//     const updatedWaypoints = [...waypoints];
+//     updatedWaypoints[index] = { ...updatedWaypoints[index], address: text };
+//     setWaypoints(updatedWaypoints);
+//     setActiveWaypointIndex(index);
+//     searchLocation(text, 'waypoint');
+//   };
+
+//   const handleSelectLocation = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint', waypointIndex?: number) => {
+//     if (type === 'pickup') {
+//       setPickupLocation(location.address);
+//       setPickupCoordinates({
+//         latitude: location.latitude,
+//         longitude: location.longitude,
+//       });
+//       setPickupSuggestions([]);
+//       setShowPickupSuggestions(false);
+//       setFocusedInput(null);
+
+//       fitMapToSinglePoint({
+//         latitude: location.latitude,
+//         longitude: location.longitude,
+//       });
+
+//       // Show save location option only if user is signed in
+//       if (userToken && firebaseUserId) {
+//         setTimeout(() => {
+//           Alert.alert(
+//             'Save Location',
+//             'Would you like to save this location for future use?',
+//             [
+//               { text: 'Not Now', style: 'cancel' },
+//               { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
+//             ]
+//           );
+//         }, 500);
+//       }
+//     } else if (type === 'dropoff' && needsDestination) {
+//       setDropoffLocation(location.address);
+//       setDropoffCoordinates({
+//         latitude: location.latitude,
+//         longitude: location.longitude,
+//       });
+//       setDropoffSuggestions([]);
+//       setShowDropoffSuggestions(false);
+//       setFocusedInput(null);
+
+//       if (pickupCoordinates) {
+//         fitMapToAllPoints();
+//       } else {
+//         fitMapToSinglePoint({
+//           latitude: location.latitude,
+//           longitude: location.longitude,
+//         });
+//       }
+
+//       // Show save location option only if user is signed in
+//       if (userToken && firebaseUserId) {
+//         setTimeout(() => {
+//           Alert.alert(
+//             'Save Location',
+//             'Would you like to save this location for future use?',
+//             [
+//               { text: 'Not Now', style: 'cancel' },
+//               { text: 'Save', onPress: () => openSaveLocationModal(location, type) }
+//             ]
+//           );
+//         }, 500);
+//       }
+//     } else if (type === 'waypoint' && waypointIndex !== undefined && needsDestination) {
+//       const updatedWaypoints = [...waypoints];
+//       updatedWaypoints[waypointIndex] = {
+//         id: `waypoint-${Date.now()}-${waypointIndex}`,
+//         address: location.address,
+//         coordinates: {
+//           latitude: location.latitude,
+//           longitude: location.longitude,
+//         },
+//         title: location.title,
+//       };
+//       setWaypoints(updatedWaypoints);
+//       setWaypointSuggestions([]);
+//       setShowWaypointSuggestions(false);
+//       setActiveWaypointIndex(null);
+//       setFocusedInput(null);
+
+//       fitMapToAllPoints();
+//     }
+
+//     // Try to save to recent locations (silently fail if it doesn't work)
+//     if (userToken && firebaseUserId) {
+//       saveRecentLocation(location).catch(() => { });
+//     }
+//   };
+
+//   const openSaveLocationModal = (location: LocationSuggestion, type: 'pickup' | 'dropoff' | 'waypoint') => {
+//     setSelectedLocationForSave({
+//       address: location.address,
+//       latitude: location.latitude,
+//       longitude: location.longitude,
+//       type: type,
+//     });
+//     setSaveLocationTitle(location.title || 'My Location');
+//     setSaveLocationType('home');
+//     setShowSaveModal(true);
+//   };
+
+//   const saveLocationToBackend = async () => {
+//     if (!selectedLocationForSave || !userToken || !firebaseUserId) {
+//       Alert.alert('Error', 'You need to be signed in to save locations');
+//       setShowSaveModal(false);
+//       return;
+//     }
+
+//     if (!saveLocationTitle.trim()) {
+//       Alert.alert('Error', 'Please enter a name for this location');
+//       return;
+//     }
+
+//     setIsSavingLocation(true);
+
+//     try {
+//       const url = `${API_BASE_URL}/customer/${firebaseUserId}/saved-locations`;
+//       console.log('Saving to URL:', url);
+
+//       const requestBody = {
+//         title: saveLocationTitle,
+//         address: selectedLocationForSave.address,
+//         latitude: selectedLocationForSave.latitude,
+//         longitude: selectedLocationForSave.longitude,
+//         type: saveLocationType,
+//       };
+//       console.log('Request body:', requestBody);
+
+//       const response = await fetch(url, {
+//         method: 'POST',
+//         headers: {
+//           'Authorization': `Bearer ${userToken}`,
+//           'Content-Type': 'application/json',
+//         },
+//         body: JSON.stringify(requestBody),
+//       });
+
+//       console.log('Save response status:', response.status);
+
+//       if (!response.ok) {
+//         // If 404, the feature is not implemented yet
+//         if (response.status === 404) {
+//           Alert.alert(
+//             'Coming Soon',
+//             'The ability to save locations will be available soon! Your location has been selected for this booking.',
+//             [{ text: 'OK' }]
+//           );
+//           setShowSaveModal(false);
+//           return;
+//         }
+//         throw new Error(`Failed to save location: ${response.status}`);
+//       }
+
+//       const data = await response.json();
+//       console.log('Save response data:', data);
+
+//       if (data.success && data.data) {
+//         // Add the new location to saved locations list
+//         const newLocation = {
+//           id: data.data._id || data.data.id,
+//           title: data.data.title,
+//           address: data.data.address,
+//           latitude: data.data.latitude,
+//           longitude: data.data.longitude,
+//           type: data.data.type || saveLocationType,
+//         };
+
+//         setSavedLocations(prev => [newLocation, ...prev]);
+
+//         Alert.alert('Success', 'Location saved successfully!');
+//         setShowSaveModal(false);
+//       } else {
+//         Alert.alert('Notice', 'Location selected successfully!');
+//         setShowSaveModal(false);
+//       }
+//     } catch (error) {
+//       console.error('Error saving location:', error);
+//       // Don't show error to user, just close modal - location is still selected
+//       Alert.alert(
+//         'Notice',
+//         'Your location has been selected for this booking.',
+//         [{ text: 'OK' }]
+//       );
+//       setShowSaveModal(false);
+//     } finally {
+//       setIsSavingLocation(false);
+//     }
+//   };
+
+//   const saveRecentLocation = async (location: LocationSuggestion) => {
+//     if (!userToken || !firebaseUserId) return;
+
+//     try {
+//       const url = `${API_BASE_URL}/customer/${firebaseUserId}/recent-locations`;
+
+//       await fetch(url, {
+//         method: 'POST',
+//         headers: {
+//           'Authorization': `Bearer ${userToken}`,
+//           'Content-Type': 'application/json',
+//         },
+//         body: JSON.stringify({
+//           title: location.title,
+//           address: location.address,
+//           latitude: location.latitude,
+//           longitude: location.longitude,
+//           placeId: location.placeId,
+//         }),
+//       });
+//     } catch (error) {
+//       // Silently fail - don't show error to user
+//       console.log('Failed to save recent location');
+//     }
+//   };
+
+//   const fitMapToCoordinates = (coord1: Coordinates, coord2: Coordinates) => {
+//     const latitudes = [coord1.latitude, coord2.latitude];
+//     const longitudes = [coord1.longitude, coord2.longitude];
+
+//     const minLat = Math.min(...latitudes);
+//     const maxLat = Math.max(...latitudes);
+//     const minLng = Math.min(...longitudes);
+//     const maxLng = Math.max(...longitudes);
+
+//     const latDelta = (maxLat - minLat) * 1.5;
+//     const lngDelta = (maxLng - minLng) * 1.5;
+
+//     const newRegion = {
+//       latitude: (minLat + maxLat) / 2,
+//       longitude: (minLng + maxLng) / 2,
+//       latitudeDelta: Math.max(latDelta, 0.02),
+//       longitudeDelta: Math.max(lngDelta, 0.02),
+//     };
+
+//     setRegion(newRegion);
+//     mapRef.current?.animateToRegion(newRegion, 1000);
+//   };
+
+//   const fitMapToSinglePoint = (coord: Coordinates) => {
+//     const newRegion = {
+//       latitude: coord.latitude,
+//       longitude: coord.longitude,
+//       latitudeDelta: 0.02,
+//       longitudeDelta: 0.02,
+//     };
+//     setRegion(newRegion);
+//     mapRef.current?.animateToRegion(newRegion, 1000);
+//   };
+
+//   const fitMapToAllPoints = () => {
+//     const allPoints: Coordinates[] = [];
+
+//     if (pickupCoordinates) allPoints.push(pickupCoordinates);
+//     waypoints.forEach(wp => allPoints.push(wp.coordinates));
+//     if (dropoffCoordinates) allPoints.push(dropoffCoordinates);
+
+//     if (allPoints.length === 0) return;
+
+//     if (allPoints.length === 1) {
+//       fitMapToSinglePoint(allPoints[0]);
+//       return;
+//     }
+
+//     const latitudes = allPoints.map(p => p.latitude);
+//     const longitudes = allPoints.map(p => p.longitude);
+
+//     const minLat = Math.min(...latitudes);
+//     const maxLat = Math.max(...latitudes);
+//     const minLng = Math.min(...longitudes);
+//     const maxLng = Math.max(...longitudes);
+
+//     const latDelta = (maxLat - minLat) * 1.5;
+//     const lngDelta = (maxLng - minLng) * 1.5;
+
+//     const newRegion = {
+//       latitude: (minLat + maxLat) / 2,
+//       longitude: (minLng + maxLng) / 2,
+//       latitudeDelta: Math.max(latDelta, 0.02),
+//       longitudeDelta: Math.max(lngDelta, 0.02),
+//     };
+
+//     setRegion(newRegion);
+//     mapRef.current?.animateToRegion(newRegion, 1000);
+//   };
+
+//   const handleAddSavedLocation = (location: SavedLocation) => {
+//     if (!pickupCoordinates) {
+//       setPickupLocation(location.address);
+//       setPickupCoordinates({
+//         latitude: location.latitude,
+//         longitude: location.longitude,
+//       });
+
+//       fitMapToSinglePoint({
+//         latitude: location.latitude,
+//         longitude: location.longitude,
+//       });
+//     } else {
+//       // If pickup is set and service needs destination, add as a waypoint
+//       if (needsDestination) {
+//         addWaypoint({
+//           id: `saved-${Date.now()}`,
+//           address: location.address,
+//           coordinates: {
+//             latitude: location.latitude,
+//             longitude: location.longitude,
+//           },
+//           title: location.title,
+//         });
+//       } else {
+//         // For location-only services, just show message that pickup is already set
+//         Alert.alert(
+//           'Location Already Set',
+//           'Your pickup location has been automatically set to your current location.',
+//           [{ text: 'OK' }]
+//         );
+//       }
+//     }
+//   };
+
+//   const handleLocationPress = () => {
+//     getCurrentLocation();
+//   };
+
+//   const addWaypoint = (waypoint?: Waypoint) => {
+//     if (needsDestination && waypoint) {
+//       setWaypoints([...waypoints, waypoint]);
+//     } else if (needsDestination) {
+//       // Add empty waypoint
+//       const newWaypoint: Waypoint = {
+//         id: `waypoint-${Date.now()}`,
+//         address: '',
+//         coordinates: {
+//           latitude: 0,
+//           longitude: 0,
+//         },
+//       };
+//       setWaypoints([...waypoints, newWaypoint]);
+//       setActiveWaypointIndex(waypoints.length);
+//       setFocusedInput('waypoint');
+//     }
+//   };
+
+//   const removeWaypoint = (index: number) => {
+//     const updatedWaypoints = waypoints.filter((_, i) => i !== index);
+//     setWaypoints(updatedWaypoints);
+
+//     if (updatedWaypoints.length === 0) {
+//       setActiveWaypointIndex(null);
+//     }
+
+//     // Update map after removal
+//     if (pickupCoordinates && dropoffCoordinates) {
+//       fitMapToAllPoints();
+//     } else if (pickupCoordinates) {
+//       fitMapToSinglePoint(pickupCoordinates);
+//     }
+//   };
+
+//   const moveWaypointUp = (index: number) => {
+//     if (index === 0) return;
+//     const updatedWaypoints = [...waypoints];
+//     [updatedWaypoints[index - 1], updatedWaypoints[index]] = [updatedWaypoints[index], updatedWaypoints[index - 1]];
+//     setWaypoints(updatedWaypoints);
+//   };
+
+//   const moveWaypointDown = (index: number) => {
+//     if (index === waypoints.length - 1) return;
+//     const updatedWaypoints = [...waypoints];
+//     [updatedWaypoints[index], updatedWaypoints[index + 1]] = [updatedWaypoints[index + 1], updatedWaypoints[index]];
+//     setWaypoints(updatedWaypoints);
+//   };
+
+//   const handleContinue = async () => {
+//     try {
+//       console.log('📱 ===== CONTINUE CLICKED =====');
+
+//       if (!pickupCoordinates) {
+//         Alert.alert('Required field', 'Please wait while we get your current location');
+//         return;
+//       }
+
+//       // Add validation for Towing - dropoff required
+//       if (isTowing && !dropoffCoordinates) {
+//         Alert.alert('Required field', 'Please select a drop-off location for towing service');
+//         return;
+//       }
+
+//       // Format waypoints for passing to next screen (only if needed)
+//       const waypointsData = needsDestination ? waypoints
+//         .filter(wp =>
+//           wp.coordinates &&
+//           wp.coordinates.latitude !== 0 &&
+//           wp.coordinates.longitude !== 0
+//         )
+//         .map((wp, index) => ({
+//           address: String(wp.address || ''),
+//           lat: String(wp.coordinates.latitude || '0'),
+//           lng: String(wp.coordinates.longitude || '0'),
+//           order: index + 1,
+//         })) : [];
+
+//       // Build navigation params with safe values using getStringParam
+//       const navigationParams = {
+//         // Location data
+//         pickupAddress: String(pickupLocation || ''),
+//         pickupLat: String(pickupCoordinates?.latitude || '0'),
+//         pickupLng: String(pickupCoordinates?.longitude || '0'),
+
+//         // Only include dropoff data if service needs destination
+//         ...(needsDestination && {
+//           dropoffAddress: String(dropoffLocation || ''),
+//           dropoffLat: String(dropoffCoordinates?.latitude || '0'),
+//           dropoffLng: String(dropoffCoordinates?.longitude || '0'),
+//         }),
+
+//         // Waypoints data (stringified JSON) - only if needed
+//         ...(needsDestination && {
+//           waypoints: JSON.stringify(waypointsData),
+//           hasWaypoints: String(waypointsData.length > 0),
+//         }),
+
+//         // Service data (passed from ServiceDetails) - use getStringParam for safety
+//         serviceId: getStringParam(params.serviceId),
+//         serviceName: getStringParam(params.serviceName),
+//         servicePrice: getStringParam(params.servicePrice),
+//         serviceCategory: getStringParam(params.serviceCategory),
+
+//         // Service-specific requirements - use getBooleanParam and convert to string
+//         requiresDestination: String(getBooleanParam(params.requiresDestination)),
+//         requiresFuelType: String(getBooleanParam(params.requiresFuelType)),
+//         requiresLicense: String(getBooleanParam(params.requiresLicense)),
+//         hasBooking: String(getBooleanParam(params.hasBooking)),
+//         requiresTextDescription: String(getBooleanParam(params.requiresTextDescription)),
+
+//         // Flag for location
+//         locationSkipped: 'false',
+
+//         // Pass through any additional params from previous screens
+//         ...(params.serviceDescription && { serviceDescription: String(params.serviceDescription) }),
+//         ...(params.serviceRating && { serviceRating: String(params.serviceRating) }),
+//         ...(params.serviceDistance && { serviceDistance: String(params.serviceDistance) }),
+//         ...(params.serviceTime && { serviceTime: String(params.serviceTime) }),
+//         ...(params.comingFrom && { comingFrom: String(params.comingFrom) }),
+//       };
+
+//       // Log the params for debugging
+//       console.log('✅ Navigation params prepared:', JSON.stringify(navigationParams, null, 2));
+
+//       // Navigate to next step
+//       router.push({
+//         pathname: '/(customer)/VehicleContactInfo',
+//         params: navigationParams
+//       });
+
+//       console.log('✅ Navigation successful');
+//       console.log('===== CONTINUE COMPLETED =====\n');
+
+//     } catch (error) {
+//       const errorMessage = getErrorMessage(error);
+//       console.error('❌===== NAVIGATION ERROR =====');
+//       console.error('Error:', errorMessage);
+//       console.error('Stack:', error instanceof Error ? error.stack : 'No stack trace');
+//       console.log('===== ERROR END =====\n');
+
+//       Alert.alert(
+//         'Navigation Error',
+//         `Unable to proceed to next step.\n\nDebug: ${errorMessage}\n\nPlease try again.`,
+//         [{ text: 'OK' }]
+//       );
+//     }
+//   };
+
+//   const clearLocation = (type: 'pickup' | 'dropoff') => {
+//     if (type === 'pickup') {
+//       setPickupLocation('');
+//       setPickupCoordinates(null);
+//       setPickupSuggestions([]);
+//       setShowPickupSuggestions(false);
+//     } else {
+//       setDropoffLocation('');
+//       setDropoffCoordinates(null);
+//       setDropoffSuggestions([]);
+//       setShowDropoffSuggestions(false);
+//     }
+//   };
+
+//   const clearWaypoint = (index: number) => {
+//     const updatedWaypoints = [...waypoints];
+//     updatedWaypoints[index] = {
+//       ...updatedWaypoints[index],
+//       address: '',
+//       coordinates: { latitude: 0, longitude: 0 },
+//     };
+//     setWaypoints(updatedWaypoints);
+//   };
+
+//   // Get icon for saved location type
+//   const getLocationIcon = (type: string) => {
+//     switch (type) {
+//       case 'home':
+//         return '🏠';
+//       case 'work':
+//         return '💼';
+//       default:
+//         return '📍';
+//     }
+//   };
+
+//   // Get marker color based on index
+//   const getWaypointColor = (index: number) => {
+//     const colors = ['#FF9800', '#9C27B0', '#00BCD4', '#FF4081', '#4CAF50'];
+//     return colors[index % colors.length];
+//   };
+
+//   // Helper function to check if coordinates are valid
+//   const isValidCoordinate = (coord: Coordinates | null | undefined): coord is Coordinates => {
+//     return !!coord &&
+//       coord.latitude !== 0 &&
+//       coord.longitude !== 0 &&
+//       !isNaN(coord.latitude) &&
+//       !isNaN(coord.longitude);
+//   };
+
+//   // Prepare route coordinates for Polyline
+//   const getRouteCoordinates = (): Coordinates[] => {
+//     const routeCoords: Coordinates[] = [];
+
+//     // Only build route if service needs destination
+//     if (!needsDestination) return routeCoords;
+
+//     // Add pickup if valid
+//     if (isValidCoordinate(pickupCoordinates)) {
+//       routeCoords.push(pickupCoordinates);
+//     }
+
+//     // Add valid waypoints
+//     waypoints.forEach(wp => {
+//       if (isValidCoordinate(wp.coordinates)) {
+//         routeCoords.push(wp.coordinates);
+//       }
+//     });
+
+//     // Add dropoff if valid
+//     if (isValidCoordinate(dropoffCoordinates)) {
+//       routeCoords.push(dropoffCoordinates);
+//     }
+
+//     return routeCoords;
+//   };
+
+//   // Get service type message for UI
+//   const getServiceTypeMessage = () => {
+//     if (needsDestination) {
+//       return "This service requires pickup and destination locations";
+//     } else {
+//       return "This service only requires your current location";
+//     }
+//   };
+
+//   return (
+//     <KeyboardAvoidingView
+//       style={styles.container}
+//       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+//       keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+//     >
+//       {/* Header */}
+//       <View style={styles.header}>
+//         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+//           <Image
+//             source={require('../../assets/customer/back_button.png')}
+//             style={styles.backButtonImage}
+//             resizeMode="contain"
+//           />
+//         </TouchableOpacity>
+//         <View style={styles.headerTextContainer}>
+//           <Text style={styles.headerTitle}>Location Details</Text>
+//           <Text style={styles.headerSubtitle}>Step 1 of 7</Text>
+//         </View>
+//         {isGettingLocation && (
+//           <ActivityIndicator size="small" color="#68bdee" />
+//         )}
+//       </View>
+
+//       {/* Progress Bar */}
+//       <View style={styles.progressBarContainer}>
+//         <View style={styles.progressBar}>
+//           <View style={[styles.progressFill, { width: '14.3%' }]} />
+//         </View>
+//       </View>
+
+
+//       {/* UPDATED: Map Selection Hint */}
+//       {!pendingLocationUpdate && (
+//         <View style={styles.mapSelectionHint}>
+//           <Ionicons name="information-circle-outline" size={16} color="#68bdee" />
+//           <Text style={styles.mapSelectionHintText}>
+//             Tap on the map to select a location
+//           </Text>
+//         </View>
+//       )}
+
+//       {/* UPDATED: Pending Selection Indicator */}
+//       {pendingLocationUpdate && (
+//         <View style={styles.pendingSelectionIndicator}>
+//           <Ionicons name="hand-right" size={20} color="#FFFFFF" />
+//           <Text style={styles.pendingSelectionText}>
+//             Tap on the map to select {pendingLocationUpdate.type === 'pickup' ? 'pickup' :
+//               pendingLocationUpdate.type === 'dropoff' ? 'drop-off' :
+//                 `stop ${(pendingLocationUpdate.index || 0) + 1}`} location
+//           </Text>
+//           <TouchableOpacity
+//             style={styles.cancelPendingButton}
+//             onPress={() => setPendingLocationUpdate(null)}
+//           >
+//             <Ionicons name="close" size={20} color="#FFFFFF" />
+//           </TouchableOpacity>
+//         </View>
+//       )}
+
+//       <ScrollView
+//         style={styles.scrollView}
+//         contentContainerStyle={styles.scrollContent}
+//         keyboardShouldPersistTaps="handled"
+//         showsVerticalScrollIndicator={false}
+//         bounces={false}
+//       >
+//         {/* Map View */}
+//         <View style={styles.mapContainer}>
+//           {isGettingLocation && (
+//             <View style={styles.mapLoader}>
+//               <ActivityIndicator size="large" color="#68bdee" />
+//               <Text style={styles.mapLoaderText}>Getting your location...</Text>
+//             </View>
+//           )}
+//           <MapView
+//             ref={mapRef}
+//             style={styles.map}
+//             region={region}
+//             showsUserLocation={true}
+//             showsMyLocationButton={false}
+//             onPress={handleMapPress}  // Always enabled now
+//           >
+//             {isValidCoordinate(pickupCoordinates) && (
+//               <Marker
+//                 coordinate={pickupCoordinates}
+//                 title="Pickup Location"
+//                 description={pickupLocation}
+//                 pinColor="#68bdee"
+//               />
+//             )}
+
+//             {/* Waypoint Markers - only show if service needs destination */}
+//             {needsDestination && waypoints.map((waypoint, index) => (
+//               isValidCoordinate(waypoint.coordinates) && (
+//                 <Marker
+//                   key={waypoint.id}
+//                   coordinate={waypoint.coordinates}
+//                   title={`Stop ${index + 1}`}
+//                   description={waypoint.address}
+//                   pinColor={getWaypointColor(index)}
+//                 />
+//               )
+//             ))}
+
+//             {needsDestination && isValidCoordinate(dropoffCoordinates) && (
+//               <Marker
+//                 coordinate={dropoffCoordinates}
+//                 title="Dropoff Location"
+//                 description={dropoffLocation}
+//                 pinColor="#ff4444"
+//               />
+//             )}
+
+//             {/* Draw route through all points - only if needed and at least 2 valid coordinates */}
+//             {needsDestination && getRouteCoordinates().length >= 2 && (
+//               <Polyline
+//                 coordinates={getRouteCoordinates()}
+//                 strokeColor="#68bdee"
+//                 strokeWidth={3}
+//               />
+//             )}
+//           </MapView>
+
+//           {/* Map View Label */}
+//           <View style={styles.mapLabel}>
+//             <Text style={styles.mapLabelText}>MAP VIEW</Text>
+//           </View>
+
+//           {/* Location Button */}
+//           <TouchableOpacity
+//             style={styles.locationButton}
+//             onPress={handleLocationPress}
+//             disabled={isGettingLocation}
+//           >
+//             <Ionicons
+//               name="navigate"
+//               size={Math.min(24, width * 0.06)}
+//               color={isGettingLocation ? "#b0b0b0" : "#3c3c3c"}
+//             />
+//           </TouchableOpacity>
+//         </View>
+
+//         {/* Current Location Indicator */}
+//         {pickupCoordinates && !isGettingLocation && (
+//           <View style={styles.currentLocationIndicator}>
+//             <Ionicons name="checkmark-circle" size={Math.min(20, width * 0.05)} color="#4CAF50" />
+//             <Text style={styles.currentLocationText} numberOfLines={1}>
+//               Pickup location automatically set
+//             </Text>
+//           </View>
+//         )}
+
+//         {/* Form Section */}
+//         <View style={styles.formSection}>
+//           {/* Pickup Location - Read-only for all services */}
+//           <View style={[
+//             styles.inputSection,
+//             focusedInput === 'pickup' && styles.inputSectionFocused
+//           ]}>
+//             <Text style={styles.inputLabel}>
+//               {isRoadsideAssistance ? 'Drop-off Location' : 'Pickup Location'} <Text style={styles.required}>*</Text>
+//             </Text>
+//             <View style={styles.inputContainer}>
+//               <View style={[styles.locationDot, pickupCoordinates && styles.locationDotActive]} />
+//               <TextInput
+//                 style={[styles.input, styles.readOnlyInput]}
+//                 placeholder={isRoadsideAssistance ? "Your current drop-off location" : "Your current pickup location"}
+//                 placeholderTextColor="#b0b0b0"
+//                 value={pickupLocation}
+//                 editable={false}  // Make it read-only
+//               />
+//               <View style={styles.inputIcon}>
+//                 <Ionicons
+//                   name="checkmark-circle"
+//                   size={Math.min(20, width * 0.05)}
+//                   color="#4CAF50"
+//                 />
+//               </View>
+//             </View>
+//           </View>
+
+//           {/* Drop-off Location - Conditionally rendered based on service type */}
+//           {needsDestination && (
+//             <View style={[
+//               styles.inputSection,
+//               focusedInput === 'dropoff' && styles.inputSectionFocused,
+//               styles.dropoffSection
+//             ]}>
+//               <Text style={styles.inputLabel}>
+//                 Drop-off Location {isTowing && <Text style={styles.required}>*</Text>}
+//               </Text>
+//               <View style={styles.inputContainer}>
+//                 <View style={[styles.locationDot, styles.locationDotEmpty, dropoffCoordinates && styles.locationDotActive]} />
+//                 <TextInput
+//                   style={styles.input}
+//                   placeholder={isTowing ? "Enter drop-off location (required)" : "Enter drop-off location (optional)"}
+//                   placeholderTextColor="#b0b0b0"
+//                   value={dropoffLocation}
+//                   onChangeText={handleDropoffChange}
+//                   onFocus={() => {
+//                     setFocusedInput('dropoff');
+//                     if (dropoffSuggestions.length > 0) {
+//                       setShowDropoffSuggestions(true);
+//                     }
+//                   }}
+//                   onBlur={() => {
+//                     setTimeout(() => {
+//                       setFocusedInput(null);
+//                       setShowDropoffSuggestions(false);
+//                     }, 200);
+//                   }}
+//                   editable={!isGettingLocation}
+//                 />
+//                 {dropoffLocation ? (
+//                   <TouchableOpacity
+//                     style={styles.inputIcon}
+//                     onPress={() => clearLocation('dropoff')}
+//                   >
+//                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
+//                   </TouchableOpacity>
+//                 ) : (
+//                   <TouchableOpacity
+//                     style={styles.inputIcon}
+//                     onPress={setDropoffPendingUpdate}  // UPDATED: Set pending update
+//                   >
+//                     <Ionicons
+//                       name="map-outline"
+//                       size={Math.min(20, width * 0.05)}
+//                       color="#68bdee"
+//                     />
+//                   </TouchableOpacity>
+//                 )}
+//               </View>
+
+//               {/* Dropoff Suggestions */}
+//               {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
+//                 <View style={styles.suggestionsContainer}>
+//                   {isSearching ? (
+//                     <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+//                   ) : (
+//                     dropoffSuggestions.map((suggestion) => (
+//                       <TouchableOpacity
+//                         key={suggestion.id}
+//                         style={styles.suggestionItem}
+//                         onPress={() => handleSelectLocation(suggestion, 'dropoff')}
+//                       >
+//                         <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#ff4444" />
+//                         <View style={styles.suggestionTextContainer}>
+//                           <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
+//                           <Text style={styles.suggestionAddress} numberOfLines={1}>
+//                             {suggestion.address}
+//                           </Text>
+//                         </View>
+//                       </TouchableOpacity>
+//                     ))
+//                   )}
+//                 </View>
+//               )}
+//             </View>
+//           )}
+
+//           {/* Waypoints (Intermediate Stops) - Only if service needs destination */}
+//           {needsDestination && waypoints.map((waypoint, index) => (
+//             <View
+//               key={waypoint.id}
+//               style={[
+//                 styles.inputSection,
+//                 styles.waypointSection,
+//                 activeWaypointIndex === index && styles.inputSectionFocused,
+//                 { marginLeft: width * 0.05 } // Indent to show hierarchy
+//               ]}
+//             >
+//               <View style={styles.waypointHeader}>
+//                 <Text style={styles.inputLabel}>
+//                   Stop {index + 1}
+//                 </Text>
+//                 <View style={styles.waypointControls}>
+//                   <TouchableOpacity
+//                     onPress={() => moveWaypointUp(index)}
+//                     disabled={index === 0}
+//                     style={styles.waypointControlButton}
+//                   >
+//                     <Ionicons
+//                       name="arrow-up"
+//                       size={Math.min(18, width * 0.045)}
+//                       color={index === 0 ? "#b0b0b0" : "#68bdee"}
+//                     />
+//                   </TouchableOpacity>
+//                   <TouchableOpacity
+//                     onPress={() => moveWaypointDown(index)}
+//                     disabled={index === waypoints.length - 1}
+//                     style={styles.waypointControlButton}
+//                   >
+//                     <Ionicons
+//                       name="arrow-down"
+//                       size={Math.min(18, width * 0.045)}
+//                       color={index === waypoints.length - 1 ? "#b0b0b0" : "#68bdee"}
+//                     />
+//                   </TouchableOpacity>
+//                   <TouchableOpacity
+//                     onPress={() => removeWaypoint(index)}
+//                     style={styles.waypointControlButton}
+//                   >
+//                     <Ionicons name="close" size={Math.min(18, width * 0.045)} color="#ff4444" />
+//                   </TouchableOpacity>
+//                 </View>
+//               </View>
+//               <View style={styles.inputContainer}>
+//                 <View style={[
+//                   styles.locationDot,
+//                   { backgroundColor: getWaypointColor(index) },
+//                   isValidCoordinate(waypoint.coordinates) && styles.locationDotActive
+//                 ]} />
+//                 <TextInput
+//                   style={styles.input}
+//                   placeholder={`Enter stop ${index + 1} location`}
+//                   placeholderTextColor="#b0b0b0"
+//                   value={waypoint.address}
+//                   onChangeText={(text) => handleWaypointChange(text, index)}
+//                   onFocus={() => {
+//                     setActiveWaypointIndex(index);
+//                     setFocusedInput('waypoint');
+//                     if (waypointSuggestions.length > 0) {
+//                       setShowWaypointSuggestions(true);
+//                     }
+//                   }}
+//                   onBlur={() => {
+//                     setTimeout(() => {
+//                       setActiveWaypointIndex(null);
+//                       setFocusedInput(null);
+//                       setShowWaypointSuggestions(false);
+//                     }, 200);
+//                   }}
+//                 />
+//                 {waypoint.address ? (
+//                   <TouchableOpacity
+//                     style={styles.inputIcon}
+//                     onPress={() => clearWaypoint(index)}
+//                   >
+//                     <Ionicons name="close-circle" size={Math.min(20, width * 0.05)} color="#b0b0b0" />
+//                   </TouchableOpacity>
+//                 ) : (
+//                   <TouchableOpacity
+//                     style={styles.inputIcon}
+//                     onPress={() => setWaypointPendingUpdate(index)}  // UPDATED: Set pending update
+//                   >
+//                     <Ionicons
+//                       name="map-outline"
+//                       size={Math.min(20, width * 0.05)}
+//                       color="#68bdee"
+//                     />
+//                   </TouchableOpacity>
+//                 )}
+//               </View>
+
+//               {/* Waypoint Suggestions */}
+//               {showWaypointSuggestions && activeWaypointIndex === index && waypointSuggestions.length > 0 && (
+//                 <View style={styles.suggestionsContainer}>
+//                   {isSearching ? (
+//                     <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+//                   ) : (
+//                     waypointSuggestions.map((suggestion) => (
+//                       <TouchableOpacity
+//                         key={suggestion.id}
+//                         style={styles.suggestionItem}
+//                         onPress={() => handleSelectLocation(suggestion, 'waypoint', index)}
+//                       >
+//                         <Ionicons name="location" size={Math.min(20, width * 0.05)} color={getWaypointColor(index)} />
+//                         <View style={styles.suggestionTextContainer}>
+//                           <Text style={styles.suggestionTitle} numberOfLines={1}>{suggestion.title}</Text>
+//                           <Text style={styles.suggestionAddress} numberOfLines={1}>
+//                             {suggestion.address}
+//                           </Text>
+//                         </View>
+//                       </TouchableOpacity>
+//                     ))
+//                   )}
+//                 </View>
+//               )}
+//             </View>
+//           ))}
+
+//           {/* Add Another Stop Button - Only if service needs destination */}
+//           {needsDestination && waypoints.length < 5 && (
+//             <TouchableOpacity
+//               style={styles.addStopButton}
+//               onPress={() => addWaypoint()}
+//             >
+//               <Ionicons name="add" size={Math.min(20, width * 0.05)} color="#68bdee" />
+//               <Text style={styles.addStopText}>Add Another Stop</Text>
+//             </TouchableOpacity>
+//           )}
+
+//           {/* Saved Locations */}
+//           <View style={styles.savedLocationsSection}>
+//             <View style={styles.savedLocationsHeader}>
+//               <Text style={styles.savedLocationsTitle}>Saved Locations</Text>
+//               {userToken && savedLocations.length > 2 && (
+//                 <TouchableOpacity onPress={() => setShowAllSavedLocations(!showAllSavedLocations)}>
+//                   <Text style={styles.viewAllText}>
+//                     {showAllSavedLocations ? 'Show Less' : 'View All'}
+//                   </Text>
+//                 </TouchableOpacity>
+//               )}
+//             </View>
+
+//             {isLoadingSavedLocations ? (
+//               <ActivityIndicator size="small" color="#68bdee" style={styles.loader} />
+//             ) : savedLocations.length > 0 ? (
+//               <>
+//                 {/* Show first 2 locations or all if showAll is true */}
+//                 {(showAllSavedLocations ? savedLocations : savedLocations.slice(0, 2)).map((location) => (
+//                   <TouchableOpacity
+//                     key={location.id}
+//                     style={styles.savedLocationCard}
+//                     onPress={() => handleAddSavedLocation(location)}
+//                   >
+//                     <View style={styles.savedLocationIconContainer}>
+//                       <View style={styles.savedLocationIconCircle}>
+//                         <Text style={styles.savedLocationEmoji}>
+//                           {getLocationIcon(location.type)}
+//                         </Text>
+//                       </View>
+//                     </View>
+//                     <View style={styles.savedLocationInfo}>
+//                       <Text style={styles.savedLocationTitle} numberOfLines={1}>
+//                         {location.title}
+//                       </Text>
+//                       <Text style={styles.savedLocationAddress} numberOfLines={1}>
+//                         {location.address}
+//                       </Text>
+//                     </View>
+//                     <View style={styles.addLocationButton}>
+//                       <Ionicons name="add" size={Math.min(24, width * 0.06)} color="#b0b0b0" />
+//                     </View>
+//                   </TouchableOpacity>
+//                 ))}
+//               </>
+//             ) : (
+//               <View style={styles.emptySavedContainer}>
+//                 <Text style={styles.emptySavedText}>
+//                   {userToken ? 'No saved locations yet' : 'Sign in to save locations'}
+//                 </Text>
+//               </View>
+//             )}
+//           </View>
+//         </View>
+//       </ScrollView>
+
+//       {/* Continue Button */}
+//       <View style={styles.bottomContainer}>
+//         <TouchableOpacity
+//           style={[styles.continueButton, (!pickupCoordinates || isGettingLocation) && styles.continueButtonDisabled]}
+//           onPress={handleContinue}
+//           disabled={!pickupCoordinates || isGettingLocation}
+//           activeOpacity={0.8}
+//         >
+//           {isGettingLocation ? (
+//             <ActivityIndicator size="small" color="#FFFFFF" />
+//           ) : (
+//             <Text style={styles.continueButtonText}>Continue</Text>
+//           )}
+//         </TouchableOpacity>
+//       </View>
+
+//       {/* Save Location Modal */}
+//       <Modal
+//         visible={showSaveModal}
+//         transparent={true}
+//         animationType="slide"
+//         onRequestClose={() => setShowSaveModal(false)}
+//       >
+//         <View style={styles.modalOverlay}>
+//           <View style={styles.modalContent}>
+//             <View style={styles.modalHeader}>
+//               <Text style={styles.modalTitle}>Save Location</Text>
+//               <TouchableOpacity onPress={() => setShowSaveModal(false)}>
+//                 <Ionicons name="close" size={Math.min(24, width * 0.06)} color="#3c3c3c" />
+//               </TouchableOpacity>
+//             </View>
+
+//             <ScrollView showsVerticalScrollIndicator={false}>
+//               <View style={styles.modalBody}>
+//                 <Text style={styles.modalLabel}>Location Name</Text>
+//                 <TextInput
+//                   style={styles.modalInput}
+//                   placeholder="e.g., Home, Work, Gym"
+//                   placeholderTextColor="#b0b0b0"
+//                   value={saveLocationTitle}
+//                   onChangeText={setSaveLocationTitle}
+//                 />
+
+//                 <Text style={styles.modalLabel}>Location Type</Text>
+//                 <View style={styles.locationTypeContainer}>
+//                   <TouchableOpacity
+//                     style={[
+//                       styles.locationTypeButton,
+//                       saveLocationType === 'home' && styles.locationTypeButtonActive
+//                     ]}
+//                     onPress={() => setSaveLocationType('home')}
+//                   >
+//                     <Text style={styles.locationTypeEmoji}>🏠</Text>
+//                     <Text style={[
+//                       styles.locationTypeText,
+//                       saveLocationType === 'home' && styles.locationTypeTextActive
+//                     ]}>Home</Text>
+//                   </TouchableOpacity>
+
+//                   <TouchableOpacity
+//                     style={[
+//                       styles.locationTypeButton,
+//                       saveLocationType === 'work' && styles.locationTypeButtonActive
+//                     ]}
+//                     onPress={() => setSaveLocationType('work')}
+//                   >
+//                     <Text style={styles.locationTypeEmoji}>💼</Text>
+//                     <Text style={[
+//                       styles.locationTypeText,
+//                       saveLocationType === 'work' && styles.locationTypeTextActive
+//                     ]}>Work</Text>
+//                   </TouchableOpacity>
+
+//                   <TouchableOpacity
+//                     style={[
+//                       styles.locationTypeButton,
+//                       saveLocationType === 'other' && styles.locationTypeButtonActive
+//                     ]}
+//                     onPress={() => setSaveLocationType('other')}
+//                   >
+//                     <Text style={styles.locationTypeEmoji}>📍</Text>
+//                     <Text style={[
+//                       styles.locationTypeText,
+//                       saveLocationType === 'other' && styles.locationTypeTextActive
+//                     ]}>Other</Text>
+//                   </TouchableOpacity>
+//                 </View>
+
+//                 {selectedLocationForSave && (
+//                   <View style={styles.modalAddressPreview}>
+//                     <Ionicons name="location" size={Math.min(20, width * 0.05)} color="#68bdee" />
+//                     <Text style={styles.modalAddressText} numberOfLines={2}>
+//                       {selectedLocationForSave.address}
+//                     </Text>
+//                   </View>
+//                 )}
+//               </View>
+//             </ScrollView>
+
+//             <View style={styles.modalFooter}>
+//               <TouchableOpacity
+//                 style={styles.modalCancelButton}
+//                 onPress={() => setShowSaveModal(false)}
+//               >
+//                 <Text style={styles.modalCancelButtonText}>Cancel</Text>
+//               </TouchableOpacity>
+
+//               <TouchableOpacity
+//                 style={[styles.modalSaveButton, isSavingLocation && styles.modalSaveButtonDisabled]}
+//                 onPress={saveLocationToBackend}
+//                 disabled={isSavingLocation}
+//               >
+//                 {isSavingLocation ? (
+//                   <ActivityIndicator size="small" color="#FFFFFF" />
+//                 ) : (
+//                   <Text style={styles.modalSaveButtonText}>Save Location</Text>
+//                 )}
+//               </TouchableOpacity>
+//             </View>
+//           </View>
+//         </View>
+//       </Modal>
+//     </KeyboardAvoidingView>
+//   );
+// };
+
+// export default LocationDetailsScreen;

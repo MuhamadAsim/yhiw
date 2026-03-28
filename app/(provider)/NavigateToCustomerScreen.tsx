@@ -254,7 +254,7 @@ export default function NavigateToCustomerScreen() {
     // If cancelled by provider, just go home without alert
     if (cancelledBy === 'provider') {
       cleanupBooking().then(() => {
-        router.replace('/(provider)/HomePage');
+        router.replace('/(provider)/Home');
       });
       return;
     }
@@ -737,14 +737,14 @@ export default function NavigateToCustomerScreen() {
         {
           text: 'Yes, Arrived',
           onPress: () => {
-            router.push({
+            router.replace({
               pathname: '/ServiceInProgressScreen',
               params: {
                 bookingId: bookingId || '',
                 customerName: jobDetails?.customerName || '',
                 customerPhone: jobDetails?.customerPhone || '',
                 serviceType: safeGetString(params.serviceType, ''),
-                vehicleType: safeGetString(params.vehicleType, ''),
+                vehicleTye: safeGetString(params.vehicleType, ''),
                 estimatedEarnings: safeGetString(params.estimatedEarnings, '0'),
               }
             });
@@ -806,13 +806,13 @@ export default function NavigateToCustomerScreen() {
               }
 
               // Navigate to home screen directly
-              router.replace('/(provider)/HomePage');
+              router.replace('/(provider)/Home');
               
             } catch (error) {
               console.log('Cancel API call failed:', error);
               // Still clean up and navigate home
               await cleanupBooking();
-              router.replace('/(provider)/HomePage');
+              router.replace('/(provider)/Home');
             }
           }
         }

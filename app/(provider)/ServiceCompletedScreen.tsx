@@ -8,7 +8,6 @@ import {
   SafeAreaView,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -198,12 +197,6 @@ export default function ServiceCompleteScreen() {
           addDebug('✅ Customer has confirmed service completion!');
           setCustomerConfirmed(true);
           setRatingChecked(true);
-
-          Alert.alert(
-            'Customer Confirmed!',
-            'The customer has confirmed service completion. You can now finalize the service.',
-            [{ text: 'OK' }]
-          );
         }
       }
     } catch (error) {
@@ -374,7 +367,7 @@ export default function ServiceCompleteScreen() {
         durationFormatted: finalDuration
       });
 
-      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/finalize`, {
+      const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/complete`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -394,6 +387,7 @@ export default function ServiceCompleteScreen() {
         throw new Error(errorMessage);
       }
 
+      // Clean up all booking data from AsyncStorage on success
       await cleanupBooking();
 
       Alert.alert(
@@ -420,36 +414,11 @@ export default function ServiceCompleteScreen() {
         error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.',
         [
           { text: 'Try Again', style: 'cancel' },
-          {
-            text: 'Go to Home',
-            onPress: async () => {
-              await cleanupBooking();
-              router.replace('/(provider)/Home');
-            }
-          }
         ]
       );
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  // Handle back to home
-  const handleBackToHome = async () => {
-    Alert.alert(
-      'Exit Completion',
-      'Are you sure you want to go back to home? The service will still need customer confirmation.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Yes, Go Home',
-          onPress: async () => {
-            await cleanupBooking();
-            router.replace('/(provider)/Home');
-          }
-        }
-      ]
-    );
   };
 
   if (isLoading) {
@@ -678,17 +647,6 @@ export default function ServiceCompleteScreen() {
         {!paymentChecked && (
           <Text style={styles.paymentWarning}>Please confirm payment received to complete</Text>
         )}
-
-        {/* ── BACK TO HOME ── */}
-        <TouchableOpacity
-          style={styles.backHomeBtn}
-          onPress={handleBackToHome}
-          activeOpacity={0.8}
-          disabled={isSubmitting}
-        >
-          <Feather name="home" size={15} color="#555" style={{ marginRight: 7 }} />
-          <Text style={styles.backHomeBtnText}>Back to Home</Text>
-        </TouchableOpacity>
 
         <View style={{ height: 24 }} />
       </ScrollView>

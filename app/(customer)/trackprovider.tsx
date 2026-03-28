@@ -501,7 +501,7 @@ const TrackProviderScreen = () => {
 
           setTimeout(() => {
             if (isMounted.current) {
-              router.push({
+              router.replace({
                 pathname: '/(customer)/ServiceInProgress',
                 params: {
                   bookingId,
@@ -545,7 +545,7 @@ const TrackProviderScreen = () => {
 
           setTimeout(() => {
             if (isMounted.current) {
-              router.push({
+              router.replace({
                 pathname: '/(customer)/ServiceInProgress',
                 params: {
                   bookingId,
@@ -590,7 +590,7 @@ const TrackProviderScreen = () => {
 
           setTimeout(() => {
             if (isMounted.current) {
-              router.push({
+              router.replace({
                 pathname: '/(customer)/ServiceCompleted',
                 params: {
                   bookingId,
@@ -639,7 +639,7 @@ const TrackProviderScreen = () => {
 
           setTimeout(() => {
             if (isMounted.current) {
-              router.push({
+              router.replace({
                 pathname: '/(customer)/ServiceCompleted',
                 params: {
                   bookingId,

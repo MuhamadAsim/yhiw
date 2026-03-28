@@ -340,7 +340,7 @@ const ProviderAssignedScreen = () => {
       
       setTimeout(() => {
         if (isMounted.current) {
-          router.push({
+          router.replace({
             pathname: '/(customer)/ServiceInProgress',
             params: {
               bookingId,
@@ -372,7 +372,7 @@ const ProviderAssignedScreen = () => {
 
       setTimeout(() => {
         if (isMounted.current) {
-          router.push({
+          router.replace({
             pathname: '/(customer)/ServiceInProgress',
             params: {
               bookingId,
@@ -403,7 +403,7 @@ const ProviderAssignedScreen = () => {
 
       setTimeout(() => {
         if (isMounted.current) {
-          router.push({
+          router.replace({
             pathname: '/(customer)/ServiceCompleted',
             params: {
               bookingId,
@@ -440,7 +440,7 @@ const ProviderAssignedScreen = () => {
 
       setTimeout(() => {
         if (isMounted.current) {
-          router.push({
+          router.replace({
             pathname: '/(customer)/ServiceCompleted',
             params: {
               bookingId,
@@ -878,7 +878,7 @@ const ProviderAssignedScreen = () => {
   const handleTrackProvider = () => {
     if (providerLocation && jobDetails) {
       addDebug(`📍 Navigating to TrackProvider screen`);
-      router.push({
+      router.replace({
         pathname: '/(customer)/TrackProvider',
         params: {
           bookingId,

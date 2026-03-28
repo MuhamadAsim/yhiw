@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 export default function NoRequestsAvailableScreen() {
    const router = useRouter();
   const handleRefresh = () => Alert.alert('Refresh', 'Checking for new requests...');
-  // const handleBackToHome = () => router.replace('./HomePage');
+  // const handleBackToHome = () => router.replace('./Home');
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />

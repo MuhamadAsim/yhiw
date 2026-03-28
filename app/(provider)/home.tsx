@@ -299,14 +299,96 @@ const HomePage = () => {
   };
 
   // Initialize component
+  // Initialize component - ACTIVE JOB HAS TOP PRIORITY
   useEffect(() => {
     const initializeHomePage = async () => {
+      // FIRST: Check for active job - this is the highest priority
+      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+      console.log('🔍 PRIORITY CHECK: Checking for active job first, bookingId:', currentBookingId);
+
+      if (currentBookingId) {
+        console.log('🎯 ACTIVE JOB FOUND! Prioritizing job navigation before any other initialization');
+
+        // Try to get the job status to determine where to navigate
+        try {
+          const token = await AsyncStorage.getItem('userToken');
+          if (token) {
+            const url = await addLanguageParam(`${API_BASE_URL}/provider/job/${currentBookingId}/status`);
+            const response = await fetch(url, {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+
+            if (response.ok) {
+              const data = await response.json();
+              console.log('📊 Active job status:', data.status);
+
+              // Navigate immediately based on job status - don't load anything else
+              switch (data.status) {
+                case 'accepted':
+                  console.log('🚗 Redirecting to NavigateToCustomerScreen - active job priority');
+                  router.replace({
+                    pathname: '/NavigateToCustomerScreen',
+                    params: { bookingId: currentBookingId }
+                  });
+                  return; // STOP all further initialization
+
+                case 'in_progress':
+                  console.log('🔧 Redirecting to ServiceInProgressScreen - active job priority');
+                  router.replace({
+                    pathname: '/(provider)/ServiceInProgressScreen',
+                    params: { bookingId: currentBookingId }
+                  });
+                  return; // STOP all further initialization
+
+                case 'completed_provider':
+                  console.log('📝 Redirecting to ServiceCompletedScreen - active job priority');
+                  router.replace({
+                    pathname: '/(provider)/ServiceCompletedScreen',
+                    params: { bookingId: currentBookingId }
+                  });
+                  return; // STOP all further initialization
+
+                case 'completed_confirmed':
+                  console.log('✅ Redirecting to ServiceCompletedScreen - active job priority');
+                  router.replace({
+                    pathname: '/(provider)/ServiceCompletedScreen',
+                    params: { bookingId: currentBookingId }
+                  });
+                  return; // STOP all further initialization
+
+                case 'cancelled':
+                case 'completed':
+                  console.log('🧹 Job finished or cancelled, cleaning up and continuing initialization');
+                  await cleanupStoredBooking(currentBookingId);
+                  // Continue with normal initialization
+                  break;
+
+                default:
+                  console.log('ℹ️ Unknown status, continuing with normal initialization');
+                  break;
+              }
+            } else if (response.status === 404) {
+              // Job not found, clean up
+              console.log('❌ Job not found, cleaning up storage');
+              await cleanupStoredBooking(currentBookingId);
+            }
+          }
+        } catch (error) {
+          console.error('Error checking active job during priority check:', error);
+        }
+      }
+
+      // ONLY IF NO ACTIVE JOB, proceed with normal initialization
+      console.log('✅ No active job found, proceeding with normal initialization');
       await loadLanguage();
       await loadProviderData();
       await checkLocationPermission();
       await checkProviderStatus();
       await loadSeenJobsFromStorage();
-      await checkActiveJob();
+      await checkActiveJob(); // This will also check but should find nothing
     };
 
     initializeHomePage();
@@ -377,9 +459,7 @@ const HomePage = () => {
   }, [locationUpdateStatus]);
 
 
-
-  // Add this function to check for active job
-  // Add this function to check for active job
+  // Add this function to check for active job - with priority navigation
   const checkActiveJob = async () => {
     try {
       // Get bookingId from local storage
@@ -420,11 +500,10 @@ const HomePage = () => {
       if (data.success) {
         console.log('📊 Active job status:', data.status);
 
-        // Handle based on status
+        // PRIORITY: Navigate immediately based on status
         switch (data.status) {
           case 'accepted':
-            // Navigate to NavigateToCustomerScreen
-            console.log('🚗 Job accepted - navigating to customer');
+            console.log('🚗 Job accepted - IMMEDIATE navigation to customer');
             router.replace({
               pathname: '/NavigateToCustomerScreen',
               params: { bookingId: currentBookingId }
@@ -432,40 +511,35 @@ const HomePage = () => {
             break;
 
           case 'in_progress':
-            // Navigate to ServiceInProgressScreen
-            console.log('🔧 Job in progress - navigating to service');
+            console.log('🔧 Job in progress - IMMEDIATE navigation to service');
             router.replace({
               pathname: '/(provider)/ServiceInProgressScreen',
               params: { bookingId: currentBookingId }
             });
             break;
 
-          // ✅ NEW: Handle completed_provider - navigate to completion screen
           case 'completed_provider':
-            console.log('📝 Job completed by provider - navigating to completion screen');
+            console.log('📝 Job completed by provider - IMMEDIATE navigation to completion');
             router.replace({
               pathname: '/(provider)/ServiceCompletedScreen',
               params: { bookingId: currentBookingId }
             });
             break;
 
-          // ✅ NEW: Handle completed_confirmed - navigate to completion screen
           case 'completed_confirmed':
-            console.log('✅ Job confirmed - navigating to completion screen');
+            console.log('✅ Job confirmed - IMMEDIATE navigation to completion');
             router.replace({
               pathname: '/(provider)/ServiceCompletedScreen',
               params: { bookingId: currentBookingId }
             });
             break;
 
-          // ✅ UPDATED: Handle completed - means job is fully finished, just cleanup
           case 'completed':
             console.log('✅ Job fully completed - cleaning up storage');
             await cleanupStoredBooking(currentBookingId);
             break;
 
           case 'cancelled':
-            // Clean up storage
             console.log(`❌ Job cancelled - cleaning up storage`);
             await cleanupStoredBooking(currentBookingId);
             break;
@@ -480,7 +554,7 @@ const HomePage = () => {
     }
   };
 
-  
+
   // Add cleanup function
   const cleanupStoredBooking = async (bookingId: string) => {
     try {

@@ -175,7 +175,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
         if (!serverPaused && lastUpdated) {
           const now = new Date();
           const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
-          
+
           // Only add elapsed time if it's positive and reasonable (less than 1 hour)
           if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
             serverSeconds = serverSeconds + elapsedSeconds;
@@ -186,7 +186,7 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
         setSeconds(serverSeconds);
         setPaused(serverPaused);
         lastSyncTime.current = new Date();
-        
+
         addDebug(`✅ Timer loaded: ${serverSeconds}s, paused: ${serverPaused}`);
       } else {
         addDebug('ℹ️ No existing timer found - starting fresh');
@@ -357,7 +357,7 @@ export default function ServiceInProgressScreen() {
       addDebug('❌ Error updating storage:', error);
     }
   };
-  
+
   // Mark service as started when screen loads
   const markServiceStarted = async (): Promise<void> => {
     try {
@@ -558,7 +558,7 @@ export default function ServiceInProgressScreen() {
           checkForAnyMessage()
         ]);
       }
-    }, 10000);
+    }, 5000);
 
     checkJobStatus();
     checkForAnyMessage();
@@ -724,7 +724,6 @@ export default function ServiceInProgressScreen() {
       setLoading(false);
     }
   };
-
   const handleComplete = (): void => {
     Alert.alert(
       'Complete Service',
@@ -737,43 +736,68 @@ export default function ServiceInProgressScreen() {
             setLoading(true);
 
             try {
+              addDebug('🟢 STARTING COMPLETE SERVICE FLOW');
+              addDebug(`📡 Booking ID: ${bookingId}`);
+              addDebug(`📡 Current seconds: ${seconds}`);
+              addDebug(`📡 Current paused state: ${paused}`);
+
+              // Save final timer state before completing
+              addDebug('💾 Saving timer before completion...');
               await saveTimerForCompletion();
+              addDebug('✅ Timer saved successfully');
 
               const token = await AsyncStorage.getItem('userToken');
+              addDebug(`🔑 Token exists: ${!!token}`);
+
               if (!token) {
-                throw new Error('Authentication failed');
+                throw new Error('Authentication failed - no token found');
               }
+
+              const url = `${API_BASE_URL}/provider/${bookingId}/status`;
+              addDebug(`🌐 Making request to: ${url}`);
+
+              const requestBody = {
+                status: 'completed_provider',
+                action: 'complete',
+                durationSeconds: seconds,
+                completedAt: new Date().toISOString()
+              };
+              addDebug(`📦 Request body:`, requestBody);
 
               addDebug('📡 Marking service as completed_provider for booking:', bookingId);
 
-              const response = await fetch(`${API_BASE_URL}/provider/${bookingId}/status`, {
+              const response = await fetch(url, {
                 method: 'PATCH',
                 headers: {
                   'Authorization': `Bearer ${token}`,
                   'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                  status: 'completed_provider',
-                  action: 'complete',
-                  durationSeconds: seconds,
-                  completedAt: new Date().toISOString()
-                }),
+                body: JSON.stringify(requestBody),
               });
+
+              addDebug(`📡 Response status: ${response.status}`);
 
               const data = await response.json();
               addDebug('📡 Status update response:', {
                 status: response.status,
-                data
+                ok: response.ok,
+                data: data
               });
 
               if (!response.ok) {
-                throw new Error(data.message || data.error || 'Failed to complete service');
+                throw new Error(data.message || data.error || `Failed to complete service: ${response.status}`);
               }
 
-              await updateStorageStatus('completed_provider');
               addDebug('✅ Service marked as completed_provider successfully');
 
-              router.push({
+              // Update status in storage
+              await updateStorageStatus('completed_provider');
+              addDebug('💾 Storage updated with completed_provider status');
+
+              addDebug('🚀 Navigating to ServiceCompletedScreen...');
+
+              // Navigate to completion screen
+              router.replace({
                 pathname: '/(provider)/ServiceCompletedScreen',
                 params: {
                   bookingId,
@@ -793,6 +817,8 @@ export default function ServiceInProgressScreen() {
 
             } catch (error) {
               addDebug('❌ Error completing service:', error);
+              addDebug('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+
               Alert.alert(
                 'Error',
                 error instanceof Error ? error.message : 'Failed to complete service. Please try again.',
@@ -809,13 +835,13 @@ export default function ServiceInProgressScreen() {
               );
             } finally {
               setLoading(false);
+              addDebug('🏁 Complete service flow finished');
             }
           }
         }
       ]
     );
   };
-
   const handleCancelService = () => {
     Alert.alert(
       'Cancel Service',
@@ -890,16 +916,16 @@ export default function ServiceInProgressScreen() {
           <Text style={styles.timerLabel}>SERVICE DURATION</Text>
           <Text style={styles.timerDisplay}>{display}</Text>
 
-          {timerSaving && (
+          {/* {timerSaving && (
             <View style={styles.timerSavingIndicator}>
               <ActivityIndicator size="small" color="#87cefa" />
               <Text style={styles.timerSavingText}>Syncing...</Text>
             </View>
-          )}
+          )} */}
 
-          <Text style={styles.timerStarted}>
+          {/* <Text style={styles.timerStarted}>
             Started at {formatStartTime(jobData.startedAt)}
-          </Text>
+          </Text> */}
           <View style={styles.timerBtnRow}>
             <TouchableOpacity
               style={styles.pauseBtn}
