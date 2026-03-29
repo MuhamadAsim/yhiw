@@ -141,7 +141,7 @@ const ServiceCompletedScreen = () => {
     });
   };
 
-  // Fetch timer data
+
   const fetchTimerData = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -159,21 +159,12 @@ const ServiceCompletedScreen = () => {
         const data = await response.json();
         if (data.success && data.timer) {
           setTimerData(data.timer);
-          
-          let finalSeconds = data.timer.durationSeconds || 0;
-          
-          // If timer wasn't paused, calculate elapsed time since last sync
-          if (!data.timer.isPaused && data.timer.lastUpdated) {
-            const lastUpdated = new Date(data.timer.lastUpdated);
-            const now = new Date();
-            const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
-            
-            if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
-              finalSeconds = finalSeconds + elapsedSeconds;
-              console.log(`⏱️ Added ${elapsedSeconds}s elapsed time to final duration`);
-            }
-          }
-          
+
+          // ✅ FIX: This is a COMPLETED job screen — never add elapsed time.
+          // The provider's timer was frozen at completion. Adding seconds since
+          // lastUpdated inflates the duration every time this screen loads.
+          const finalSeconds = data.timer.durationSeconds || 0;
+
           const formattedDuration = formatDuration(finalSeconds);
           setFinalDuration(formattedDuration);
           console.log(`✅ Final duration from timer: ${finalSeconds}s (${formattedDuration})`);

@@ -1,20 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Feather from '@expo/vector-icons/Feather';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  AppState,
+  Linking,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
   Text,
   TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
-  StatusBar,
-  ActivityIndicator,
-  Linking,
-  AppState,
+  View
 } from 'react-native';
-import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/ServiceInProgressScreenStyles';
 
@@ -22,60 +21,58 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 // ─── Timer Hook with Continuous Sync (Every 10 seconds) ───────────────────
 const useTimer = (initialSeconds: number = 0, bookingId: string) => {
-  const [seconds, setSeconds] = useState<number>(initialSeconds);
-  const [paused, setPaused] = useState<boolean>(false);
+  const [seconds, setSeconds]   = useState<number>(initialSeconds);
+  const [paused, setPaused]     = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
-  const lastSyncTime = useRef<Date>(new Date());
+ 
+  // ── THE FIX: keep a ref that always mirrors latest state ─────────────────
+  // useEffect closures capture state at creation time (stale closure).
+  // The sync interval was always sending the value of `seconds` from when
+  // the interval was first set up — i.e. 0 — overwriting real progress.
+  const secondsRef = useRef<number>(initialSeconds);
+  const pausedRef  = useRef<boolean>(false);
+ 
+  // Keep refs in sync every render
+  secondsRef.current = seconds;
+  pausedRef.current  = paused;
+  // ─────────────────────────────────────────────────────────────────────────
+ 
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const addDebug = (message: string, data?: any) => {
-    console.log(`🔍 [Timer] ${message}`, data || '');
-  };
-
-  // Timer increment effect - only runs when NOT paused AND loaded
+ 
+  const log = (msg: string, data?: any) =>
+    console.log(`🔍 [Timer] ${msg}`, data ?? '');
+ 
+  // ── Tick ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!isLoaded) {
-      addDebug('⏳ Waiting for timer data to load...');
-      return;
-    }
-
-    if (paused) {
-      addDebug('⏸️ Timer paused');
-      return;
-    }
-
-    addDebug('▶️ Timer started/running');
-
+    if (!isLoaded || paused) return;
+ 
     const interval = setInterval(() => {
-      setSeconds(s => s + 1);
+      setSeconds(s => s + 1); // updater form — always correct, no closure needed
     }, 1000);
-
+ 
     return () => clearInterval(interval);
   }, [paused, isLoaded]);
-
-  // Sync timer to backend every 10 seconds when running
+ 
+  // ── Backend sync every 10 s ───────────────────────────────────────────────
   useEffect(() => {
     if (!isLoaded || paused || !bookingId) {
-      // Clear sync interval if paused or not loaded
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
       }
       return;
     }
-
-    addDebug('🔄 Starting 10-second sync interval');
-
-    // Sync immediately when timer starts running
+ 
+    log('🔄 Starting 10-second sync');
+ 
+    // Sync immediately when we (re)start
     saveTimerToDatabase('sync');
-
-    // Set up interval to sync every 10 seconds
+ 
     syncIntervalRef.current = setInterval(() => {
       saveTimerToDatabase('sync');
-      lastSyncTime.current = new Date();
     }, 10000);
-
+ 
     return () => {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
@@ -83,136 +80,151 @@ const useTimer = (initialSeconds: number = 0, bookingId: string) => {
       }
     };
   }, [isLoaded, paused, bookingId]);
-
-  // Save timer to database
-  const saveTimerToDatabase = async (action: 'pause' | 'resume' | 'complete' | 'add_time' | 'sync', additionalData?: any): Promise<boolean> => {
-    if (!bookingId) return false;
-
-    try {
-      setIsSaving(true);
-      const token = await AsyncStorage.getItem('userToken');
-
-      addDebug(`📡 Syncing timer: ${seconds}s, action: ${action}, paused: ${paused}`);
-
-      const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          durationSeconds: seconds,
-          paused: paused,
-          action: action,
-          lastUpdated: new Date().toISOString(),
-          ...additionalData
-        }),
-      });
-
-      const responseData = await response.json();
-
-      if (response.ok) {
-        addDebug(`✅ Timer synced: ${seconds}s`);
-        return true;
-      } else {
-        addDebug(`⚠️ Failed to sync timer: ${response.status}`, responseData);
+ 
+  // ── Core save function — reads from REFS, not state ───────────────────────
+  const saveTimerToDatabase = useCallback(
+    async (
+      action: 'pause' | 'resume' | 'complete' | 'add_time' | 'sync',
+      additionalData?: Record<string, any>
+    ): Promise<boolean> => {
+      if (!bookingId) return false;
+ 
+      // Read from refs so we always get the current value,
+      // even when called from inside a setInterval closure.
+      const currentSeconds = secondsRef.current;
+      const currentPaused  = pausedRef.current;
+ 
+      try {
+        setIsSaving(true);
+        const token = await AsyncStorage.getItem('userToken');
+ 
+        log(`📡 Syncing — action: ${action}  seconds: ${currentSeconds}  paused: ${currentPaused}`);
+ 
+        const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            durationSeconds: currentSeconds,   // ✅ always live value
+            paused: currentPaused,             // ✅ always live value
+            action,
+            lastUpdated: new Date().toISOString(),
+            ...additionalData,
+          }),
+        });
+ 
+        const responseData = await response.json();
+ 
+        if (response.ok) {
+          log(`✅ Synced: ${currentSeconds}s`);
+          return true;
+        } else {
+          log(`⚠️ Sync failed: ${response.status}`, responseData);
+          return false;
+        }
+      } catch (error) {
+        log('❌ Sync error:', error);
         return false;
+      } finally {
+        setIsSaving(false);
       }
-    } catch (error) {
-      addDebug('❌ Error syncing timer:', error);
-      return false;
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  // Pause/Resume handler
+    },
+    [bookingId] // stable — reads live values via refs
+  );
+ 
+  // ── Pause / Resume ────────────────────────────────────────────────────────
   const handlePauseResume = async () => {
-    const newPausedState = !paused;
-    const action = newPausedState ? 'pause' : 'resume';
-
-    // Update local state first for immediate UI response
-    setPaused(newPausedState);
-
-    // Save to database
-    await saveTimerToDatabase(action);
+    const newPaused = !pausedRef.current;
+    setPaused(newPaused);
+    // pausedRef will update next render, but we need it now for the save
+    pausedRef.current = newPaused;
+    await saveTimerToDatabase(newPaused ? 'pause' : 'resume');
   };
-
-  // Add time function
+ 
+  // ── Add time ──────────────────────────────────────────────────────────────
   const addTime = async (minutes: number): Promise<boolean> => {
-    const newSeconds = seconds + (minutes * 60);
-    setSeconds(newSeconds);
-    return await saveTimerToDatabase('add_time', { addedMinutes: minutes });
+    const added = minutes * 60;
+    setSeconds(s => {
+      secondsRef.current = s + added; // keep ref in sync immediately
+      return s + added;
+    });
+    return saveTimerToDatabase('add_time', { addedMinutes: minutes });
   };
-
-  // Format time
-  const format = (s: number): string => {
-    const h = String(Math.floor(s / 3600)).padStart(2, '0');
-    const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+ 
+  // ── Format ────────────────────────────────────────────────────────────────
+  const format = (s: number) => {
+    const h   = String(Math.floor(s / 3600)).padStart(2, '0');
+    const m   = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
     const sec = String(s % 60).padStart(2, '0');
     return `${h}:${m}:${sec}`;
   };
-
-  // Load timer from database and calculate elapsed time
+ 
+  // ── Load from backend ─────────────────────────────────────────────────────
   const loadTimerFromDatabase = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-
-      addDebug(`📡 Loading timer for booking: ${bookingId}`);
-
+      log(`📡 Loading timer for booking: ${bookingId}`);
+ 
       const response = await fetch(`${API_BASE_URL}/jobs/${bookingId}/timer`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` },
       });
-
+ 
       const data = await response.json();
-
+ 
       if (response.ok && data.success && data.timer) {
         let serverSeconds = data.timer.durationSeconds || 0;
-        const serverPaused = data.timer.isPaused || false;
-        const lastUpdated = data.timer.lastUpdated ? new Date(data.timer.lastUpdated) : null;
-
-        // If timer wasn't paused, calculate elapsed time since last update
+        const serverPaused  = data.timer.isPaused || false;
+        const lastUpdated   = data.timer.lastUpdated
+          ? new Date(data.timer.lastUpdated)
+          : null;
+ 
+        // If the timer was running when last saved, add elapsed time
         if (!serverPaused && lastUpdated) {
-          const now = new Date();
-          const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
-
-          // Only add elapsed time if it's positive and reasonable (less than 1 hour)
+          const elapsedSeconds = Math.floor(
+            (Date.now() - lastUpdated.getTime()) / 1000
+          );
           if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
-            serverSeconds = serverSeconds + elapsedSeconds;
-            addDebug(`⏱️ Timer was running - added ${elapsedSeconds}s elapsed time`);
+            serverSeconds += elapsedSeconds;
+            log(`⏱️ Added ${elapsedSeconds}s elapsed since last save`);
           }
         }
-
+ 
         setSeconds(serverSeconds);
         setPaused(serverPaused);
-        lastSyncTime.current = new Date();
-
-        addDebug(`✅ Timer loaded: ${serverSeconds}s, paused: ${serverPaused}`);
+        secondsRef.current = serverSeconds; // sync ref immediately
+        pausedRef.current  = serverPaused;
+ 
+        log(`✅ Loaded: ${serverSeconds}s  paused: ${serverPaused}`);
       } else {
-        addDebug('ℹ️ No existing timer found - starting fresh');
+        log('ℹ️ No existing timer — starting fresh');
         setSeconds(0);
         setPaused(false);
-        // Save initial state
+        secondsRef.current = 0;
+        pausedRef.current  = false;
         await saveTimerToDatabase('resume');
       }
     } catch (error) {
-      addDebug('❌ Error loading timer:', error);
+      log('❌ Load error:', error);
       setSeconds(0);
       setPaused(false);
+      secondsRef.current = 0;
+      pausedRef.current  = false;
     } finally {
       setIsLoaded(true);
     }
   };
-
+ 
   return {
-    display: format(seconds),
+    display:               format(seconds),
     seconds,
     paused,
+    isSaving,
     handlePauseResume,
     addTime,
-    isSaving,
     loadTimerFromDatabase,
-    saveTimerForCompletion: () => saveTimerToDatabase('complete')
+    saveTimerForCompletion: () => saveTimerToDatabase('complete'),
   };
 };
 

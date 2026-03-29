@@ -3,8 +3,8 @@ import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IntentLauncher from 'expo-intent-launcher';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from "react";
+import { useRouter, useFocusEffect } from 'expo-router';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -156,6 +156,7 @@ const HomePage = () => {
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<LocationData | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean | null>(null);
+  const isScreenFocused = useRef(false);
   const [performanceData, setPerformanceData] = useState<PerformanceData>({
     earnings: 0,
     jobs: 0,
@@ -298,7 +299,6 @@ const HomePage = () => {
     }
   };
 
-  // Initialize component
   // Initialize component - ACTIVE JOB HAS TOP PRIORITY
   useEffect(() => {
     const initializeHomePage = async () => {
@@ -402,39 +402,37 @@ const HomePage = () => {
     };
   }, []);
 
-  // Start periodic active job check when online
-  useEffect(() => {
-    if (isOnline) {
-      // Check every 30 seconds
-      activeJobCheckInterval.current = setInterval(() => {
-        checkActiveJob();
-      }, 30000);
+  useFocusEffect(
+    useCallback(() => {
+      isScreenFocused.current = true;
+      console.log('🟢 Screen focused - starting intervals');
+
+      if (isOnline && providerData?.token) {
+        startPolling();
+      }
+
+      if (isOnline && locationPermission && currentLocation && !currentLocation.isManual) {
+        startLocationTracking();
+      }
+
+      if (isOnline) {
+        activeJobCheckInterval.current = setInterval(() => {
+          checkActiveJob();
+        }, 30000);
+      }
 
       return () => {
+        isScreenFocused.current = false;
+        console.log('🔴 Screen unfocused - stopping all intervals');
+        stopPolling();
+        stopLocationTracking();
         if (activeJobCheckInterval.current) {
           clearInterval(activeJobCheckInterval.current);
+          activeJobCheckInterval.current = null;
         }
       };
-    }
-  }, [isOnline]);
-
-  // Start/stop polling based on online status
-  useEffect(() => {
-    if (isOnline && providerData?.token) {
-      startPolling();
-    } else {
-      stopPolling();
-    }
-  }, [isOnline, providerData]);
-
-  // Start/stop location tracking based on online status
-  useEffect(() => {
-    if (isOnline && locationPermission && currentLocation && !currentLocation.isManual) {
-      startLocationTracking();
-    } else {
-      stopLocationTracking();
-    }
-  }, [isOnline, locationPermission, currentLocation?.isManual]);
+    }, [isOnline, providerData, locationPermission, currentLocation])
+  );
 
   // Update notification count based on queue size
   useEffect(() => {
@@ -873,8 +871,7 @@ const HomePage = () => {
     }
   };
   const sendLocationToBackend = async (location: LocationData) => {
-    if (!providerData?.firebaseUserId || !providerData?.token) return;
-
+    if (!providerData?.firebaseUserId || !providerData?.token || !isScreenFocused.current) return;
     try {
       const lang = await getCurrentLanguage();
       const url = `${API_BASE_URL}/provider/${providerData.firebaseUserId}/location`;
@@ -977,8 +974,7 @@ const HomePage = () => {
   };
 
   const pollAvailableJobs = async () => {
-    if (!isOnline || !providerData?.token || isPolling.current) return;
-
+    if (!isOnline || !providerData?.token || isPolling.current || !isScreenFocused.current) return;
     isPolling.current = true;
 
     try {

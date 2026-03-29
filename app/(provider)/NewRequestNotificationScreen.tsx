@@ -10,7 +10,6 @@ import {
   SafeAreaView,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -61,17 +60,57 @@ const NewRequestNotification = () => {
   const [progress] = useState(new Animated.Value(1)); // Start at 100%
   const [isExpired, setIsExpired] = useState(false);
   const [hasShownExpiredAlert, setHasShownExpiredAlert] = useState(false);
+  
+  // Refs for cleanup
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
   const statusCheckRef = useRef<NodeJS.Timeout | null>(null);
   const initialDelayRef = useRef<NodeJS.Timeout | null>(null);
+  const isCleanedUp = useRef(false);
+
+  // Cleanup function to stop all timers and animations
+  const cleanupAllTimers = () => {
+    if (isCleanedUp.current) return;
+    
+    console.log('🧹 [NewRequestNotification] Cleaning up all timers and intervals...');
+    
+    // Clear timer interval
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+      console.log('✅ Cleared timer interval');
+    }
+    
+    // Stop animation
+    if (animationRef.current) {
+      animationRef.current.stop();
+      animationRef.current = null;
+      console.log('✅ Stopped animation');
+    }
+    
+    // Clear status check interval
+    if (statusCheckRef.current) {
+      clearInterval(statusCheckRef.current);
+      statusCheckRef.current = null;
+      console.log('✅ Cleared status check interval');
+    }
+    
+    // Clear initial delay timeout
+    if (initialDelayRef.current) {
+      clearTimeout(initialDelayRef.current);
+      initialDelayRef.current = null;
+      console.log('✅ Cleared initial delay');
+    }
+    
+    isCleanedUp.current = true;
+  };
 
   // Handle app state changes (background/foreground)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
         // App came to foreground - restart timer with remaining time
-        if (!isExpired && timeLeft > 0) {
+        if (!isExpired && timeLeft > 0 && !isCleanedUp.current) {
           restartTimer(timeLeft);
         }
       }
@@ -90,20 +129,9 @@ const NewRequestNotification = () => {
       if (!isExpired && !hasMarkedAsSeen) {
         markJobAsSeen();
       }
-
-      // Clear all timers
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-      if (animationRef.current) {
-        animationRef.current.stop();
-      }
-      if (statusCheckRef.current) {
-        clearInterval(statusCheckRef.current);
-      }
-      if (initialDelayRef.current) {
-        clearTimeout(initialDelayRef.current);
-      }
+      
+      // Clean up all timers on unmount
+      cleanupAllTimers();
     };
   }, [isExpired, hasMarkedAsSeen]);
 
@@ -119,6 +147,9 @@ const NewRequestNotification = () => {
       markJobAsSeen();
       setHasMarkedAsSeen(true);
     }
+
+    // Clean up all timers when expired
+    cleanupAllTimers();
 
     // Only show alert if it's a timer expiration (not status check)
     if (!silent && !hasShownExpiredAlert) {
@@ -143,19 +174,27 @@ const NewRequestNotification = () => {
 
   // Restart timer with new time
   const restartTimer = (remainingTime: number) => {
+    // Don't restart if already cleaned up
+    if (isCleanedUp.current || isExpired) return;
+    
     // Clear existing timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
+      timerRef.current = null;
     }
     if (animationRef.current) {
       animationRef.current.stop();
+      animationRef.current = null;
     }
 
     // Start new countdown
     timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          clearInterval(timerRef.current!);
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
           handleExpire(false); // Timer expiration - show alert
           return 0;
         }
@@ -202,8 +241,8 @@ const NewRequestNotification = () => {
 
   // Check if job still exists in backend - SILENTLY handle
   const checkJobStatus = async () => {
-    // Don't check if already expired
-    if (isExpired) return;
+    // Don't check if already expired or cleaned up
+    if (isExpired || isCleanedUp.current) return;
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -257,17 +296,25 @@ const NewRequestNotification = () => {
   useEffect(() => {
     // Wait 2 seconds before first status check
     initialDelayRef.current = setTimeout(() => {
-      checkJobStatus();
+      if (!isExpired && !isCleanedUp.current) {
+        checkJobStatus();
+      }
     }, 2000);
 
-    statusCheckRef.current = setInterval(checkJobStatus, 10000); // Check every 10 seconds
+    statusCheckRef.current = setInterval(() => {
+      if (!isExpired && !isCleanedUp.current) {
+        checkJobStatus();
+      }
+    }, 10000); // Check every 10 seconds
 
     return () => {
       if (initialDelayRef.current) {
         clearTimeout(initialDelayRef.current);
+        initialDelayRef.current = null;
       }
       if (statusCheckRef.current) {
         clearInterval(statusCheckRef.current);
+        statusCheckRef.current = null;
       }
     };
   }, []);
@@ -282,7 +329,10 @@ const NewRequestNotification = () => {
         console.log(`⏱️ Time left: ${prev - 1}s`);
         if (prev <= 1) {
           console.log('⏱️ Timer reached zero');
-          clearInterval(timerRef.current!);
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
           handleExpire(false); // Timer expiration - show alert
           return 0;
         }
@@ -299,11 +349,14 @@ const NewRequestNotification = () => {
     animationRef.current.start();
 
     return () => {
+      // Clean up timers on unmount
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
       if (animationRef.current) {
         animationRef.current.stop();
+        animationRef.current = null;
       }
     };
   }, []); // Empty dependency array - runs once when component mounts
@@ -314,32 +367,12 @@ const NewRequestNotification = () => {
       return;
     }
 
-    // CRITICAL: Stop ALL timers and polling before navigating
-    // Clear timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    console.log('🛑 [NewRequestNotification] Stopping all timers before navigation...');
+    
+    // CRITICAL: Clean up ALL timers and intervals before navigating
+    cleanupAllTimers();
 
-    // Stop animation
-    if (animationRef.current) {
-      animationRef.current.stop();
-      animationRef.current = null;
-    }
-
-    // Clear status check interval
-    if (statusCheckRef.current) {
-      clearInterval(statusCheckRef.current);
-      statusCheckRef.current = null;
-    }
-
-    // Clear initial delay
-    if (initialDelayRef.current) {
-      clearTimeout(initialDelayRef.current);
-      initialDelayRef.current = null;
-    }
-
-    console.log('🛑 All timers stopped - navigating to details');
+    console.log('🚀 Navigating to RequestDetailScreen...');
 
     // Navigate to details page
     router.push({
@@ -355,6 +388,10 @@ const NewRequestNotification = () => {
     if (!isExpired && !hasMarkedAsSeen) {
       markJobAsSeen();
     }
+    
+    // Clean up before going back
+    cleanupAllTimers();
+    
     router.back();
   };
 
@@ -483,7 +520,7 @@ const NewRequestNotification = () => {
             <Text style={styles.queueText}>
               {parseInt(jobData.isLastInQueue || 'false')
                 ? 'Last request in queue'
-                : `${jobData.queueSize} more request(s) in queue`}
+                : `${parseInt(jobData.queueSize || '0') - 1} more request(s) in queue`}
             </Text>
           )}
 
@@ -500,6 +537,5 @@ const NewRequestNotification = () => {
     </SafeAreaView>
   );
 };
-
 
 export default NewRequestNotification;
