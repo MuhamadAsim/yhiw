@@ -172,8 +172,6 @@ const HomePage = () => {
 
   // Store multiple incoming job requests in a queue
   const [jobRequestQueue, setJobRequestQueue] = useState<JobRequestQueue>({});
-  const [currentJobRequest, setCurrentJobRequest] = useState<JobRequest | null>(null);
-  const [hasActiveJob, setHasActiveJob] = useState(false);
 
   // Polling control
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
@@ -434,17 +432,10 @@ const HomePage = () => {
     }, [isOnline, providerData, locationPermission, currentLocation])
   );
 
-  // Update notification count based on queue size
   useEffect(() => {
     const queueSize = Object.keys(jobRequestQueue).length;
     setNotificationCount(queueSize);
-
-    // If there are jobs in queue and no current job showing and no active job, show the next one
-    if (queueSize > 0 && !currentJobRequest && !hasActiveJob) {
-      const nextJobId = Object.keys(jobRequestQueue)[0];
-      setCurrentJobRequest(jobRequestQueue[nextJobId]);
-    }
-  }, [jobRequestQueue, hasActiveJob]);
+  }, [jobRequestQueue]);
 
   // Reset location update status after 3 seconds
   useEffect(() => {
@@ -1478,92 +1469,50 @@ const HomePage = () => {
     setSidebarVisible(false);
   };
 
-  const handleNotificationPress = () => {
-    console.log('🔔 Notification pressed, current job:', currentJobRequest);
-    console.log('🔔 Queue size:', Object.keys(jobRequestQueue).length);
 
-    if (currentJobRequest) {
-      const jobId = currentJobRequest.id || currentJobRequest.bookingId || '';
 
-      // Mark this job as seen before navigating
-      if (jobId) {
-        markJobAsSeen(jobId);
-      }
 
-      // Log the data being sent
-      console.log('📤 Navigating with job data:', {
-        jobId: currentJobRequest.id,
-        customerName: currentJobRequest.customerName,
-        serviceType: currentJobRequest.serviceType,
-      });
 
-      // ✅ FIXED: Remove this job from queue BEFORE navigating
-      setJobRequestQueue(prev => {
-        const newQueue = { ...prev };
-        delete newQueue[jobId];
-        return newQueue;
-      });
+  const handleNotificationPress = async () => {
+    const allJobs: JobRequest[] = Object.values(jobRequestQueue);
 
-      // ✅ Also clear currentJobRequest
-      setCurrentJobRequest(null);
-
-      // Navigate with all job data
-      router.push({
-        pathname: '/NewRequestNotificationScreen',
-        params: {
-          jobId: currentJobRequest.id,
-          bookingId: currentJobRequest.bookingId || currentJobRequest.id,
-          customerName: currentJobRequest.customerName,
-          customerPhone: currentJobRequest.customerPhone || '',
-          customerRating: currentJobRequest.customerRating?.toString() || '',
-          serviceType: currentJobRequest.serviceType,
-          serviceName: getServiceName(currentJobRequest.serviceType, currentLanguage),
-          serviceId: currentJobRequest.serviceId || '',
-          pickupLocation: currentJobRequest.pickupLocation,
-          pickupLat: currentJobRequest.pickupLat?.toString() || '',
-          pickupLng: currentJobRequest.pickupLng?.toString() || '',
-          dropoffLocation: currentJobRequest.dropoffLocation || '',
-          dropoffLat: currentJobRequest.dropoffLat?.toString() || '',
-          dropoffLng: currentJobRequest.dropoffLng?.toString() || '',
-          distance: currentJobRequest.distance,
-          estimatedEarnings: currentJobRequest.estimatedEarnings.toString(),
-          price: (currentJobRequest.price || currentJobRequest.estimatedEarnings).toString(),
-          urgency: currentJobRequest.urgency || 'normal',
-          timestamp: currentJobRequest.timestamp,
-          description: currentJobRequest.description || '',
-          vehicleType: currentJobRequest.vehicleType || currentJobRequest.vehicleDetails?.type || '',
-          vehicleMakeModel: currentJobRequest.vehicleMakeModel || currentJobRequest.vehicleDetails?.makeModel || '',
-          vehicleYear: currentJobRequest.vehicleYear || currentJobRequest.vehicleDetails?.year || '',
-          vehicleColor: currentJobRequest.vehicleColor || currentJobRequest.vehicleDetails?.color || '',
-          vehicleLicensePlate: currentJobRequest.vehicleLicensePlate || currentJobRequest.vehicleDetails?.licensePlate || '',
-          issues: JSON.stringify(currentJobRequest.issues || []),
-          photos: JSON.stringify(currentJobRequest.photos || []),
-          queueSize: Object.keys(jobRequestQueue).length.toString(),
-          isLastInQueue: (Object.keys(jobRequestQueue).length === 0).toString(),
-        }
-      });
-    } else {
+    if (allJobs.length === 0) {
       Alert.alert(
         t('noJobRequests', currentLanguage),
-        Object.keys(jobRequestQueue).length > 0
-          ? t('loadingNextRequest', currentLanguage)
-          : t('noPendingJobs', currentLanguage),
+        t('noPendingJobs', currentLanguage),
         [{ text: t('ok', currentLanguage) }]
       );
+      return;
     }
-  };
 
-  const markJobAsActive = (jobId: string) => {
-    // Remove from queue
-    setJobRequestQueue(prev => {
-      const newQueue = { ...prev };
-      delete newQueue[jobId];
-      return newQueue;
+    // Mark all as seen
+    try {
+      const seenJobsStr = await AsyncStorage.getItem('seenJobs');
+      let seenJobs: string[] = seenJobsStr ? JSON.parse(seenJobsStr) : [];
+      allJobs.forEach(job => {
+        const jobId = job.bookingId || job.id;
+        if (jobId && !seenJobs.includes(jobId)) seenJobs.unshift(jobId);
+      });
+      if (seenJobs.length > 50) seenJobs = seenJobs.slice(0, 50);
+      await AsyncStorage.setItem('seenJobs', JSON.stringify(seenJobs));
+    } catch (error) {
+      console.error('Error marking jobs as seen:', error);
+    }
+
+    // Clear queue
+    setJobRequestQueue({});
+    setNotificationCount(0);
+
+    // Navigate
+    router.push({
+      pathname: '/NewRequestNotificationScreen',
+      params: { jobs: JSON.stringify(allJobs) }
     });
-
-    setHasActiveJob(true);
-    setCurrentJobRequest(null);
   };
+
+
+
+
 
   const formatProviderId = (id: string) => {
     if (id.startsWith('PRV-')) return id;
