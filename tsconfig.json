@@ -11,5 +11,5 @@
   "include": [
     "**/*.ts",
     "**/*.tsx"
-, "app/(provider)/AcceptRejectRequestScreen.tsx", "app/(customer)/ProfileScreen.tsx"  ]
+, "app/(provider)/AcceptRejectRequestScreen.tsx", "app/(customer)/ProfileScreen.tsx", "utils/a"  ]
 }

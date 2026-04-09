@@ -1,21 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Dimensions,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { StyleSheet, Dimensions } from 'react-native';
 
 const { height } = Dimensions.get('window');
-
-
 
 export const styles = StyleSheet.create({
   container: {
@@ -535,6 +520,42 @@ export const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
+  markCompleteButton: {
+    backgroundColor: '#68bdee',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 8,
+  },
+  markCompleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  cancelServiceButton: {
+    backgroundColor: '#FF4444',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 8,
+  },
+  cancelServiceButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   reportButton: {
     backgroundColor: '#FFFFFF',
     paddingVertical: 14,
@@ -550,65 +571,40 @@ export const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  // Add these to your styles object
-messageIconContainer: {
-  position: 'relative',
-  width: 24,
-  height: 24,
-  justifyContent: 'center',
-  alignItems: 'center',
-},
-messageDot: {
-  position: 'absolute',
-  top: -2,
-  right: -2,
-  width: 8,
-  height: 8,
-  borderRadius: 4,
-  backgroundColor: '#FF4444',
-  borderWidth: 1,
-  borderColor: '#FFFFFF',
-},
-// Add these styles to your existing styles
-
-// Mark as Complete Button
-markCompleteButton: {
-  backgroundColor: '#68bdee',
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  paddingVertical: 12,
-  paddingHorizontal: 16,
-  borderRadius: 12,
-  marginBottom: 12,
-  gap: 8,
-},
-
-markCompleteButtonText: {
-  color: '#fff',
-  fontSize: 16,
-  fontWeight: '600',
-},
-
-buttonDisabled: {
-  opacity: 0.6,
-},
-
-// Provider Complete Indicator
-providerCompleteIndicator: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  backgroundColor: '#E8F5E9',
-  padding: 12,
-  borderRadius: 8,
-  marginTop: 12,
-  gap: 8,
-},
-
-providerCompleteText: {
-  color: '#2E7D32',
-  fontSize: 13,
-  fontWeight: '500',
-  flex: 1,
-},
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  messageIconContainer: {
+    position: 'relative',
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  messageDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#FF4444',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+  },
+  providerCompleteIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    gap: 8,
+  },
+  providerCompleteText: {
+    color: '#2E7D32',
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
 });

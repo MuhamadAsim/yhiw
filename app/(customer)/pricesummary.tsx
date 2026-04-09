@@ -10,8 +10,11 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { styles } from './styles/PriceSummaryStyles';
+
+const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 const PriceSummaryScreen = () => {
   const router = useRouter();
@@ -227,21 +230,118 @@ const PriceSummaryScreen = () => {
 
   }, []);
 
-
   const handleBack = () => {
     router.back();
   };
 
-  // Mock API request function
-  const submitBooking = async (): Promise<boolean> => {
-    // Simulate API call
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        // 90% success rate for demo
-        const success = Math.random() > 0.1;
-        resolve(success);
-      }, 1500); // Simulate network delay
+  // Real API call for scheduled booking
+  const submitScheduledBooking = async (bookingData: any): Promise<any> => {
+    // Get auth token and user data from AsyncStorage
+    const token = await AsyncStorage.getItem('userToken');
+    const userDataJson = await AsyncStorage.getItem('userData');
+    
+    if (!token) {
+      throw new Error('Authentication required. Please log in again.');
+    }
+    
+    if (!userDataJson) {
+      throw new Error('User data not found. Please log in again.');
+    }
+    
+    const userData = JSON.parse(userDataJson);
+    const userId = userData.id;
+    
+    console.log('📤 Submitting scheduled booking to backend...');
+    console.log('  • userId:', userId);
+    console.log('  • serviceId:', bookingData.serviceId);
+    console.log('  • scheduledDate:', bookingData.scheduledDate);
+    console.log('  • scheduledTimeSlot:', bookingData.scheduledTimeSlot);
+    
+    // Prepare the request body according to your backend API format
+    const requestBody = {
+      userId: userId,
+      serviceId: parseInt(bookingData.serviceId),
+      serviceName: bookingData.serviceName,
+      serviceCategory: bookingData.serviceCategory,
+      basePrice: bookingData.basePrice,
+      totalAmount: bookingData.totalAmount,
+      tip: bookingData.tip,
+      
+      // Location data
+      pickupAddress: bookingData.pickupAddress,
+      pickupLat: bookingData.pickupLat ? parseFloat(bookingData.pickupLat) : null,
+      pickupLng: bookingData.pickupLng ? parseFloat(bookingData.pickupLng) : null,
+      dropoffAddress: bookingData.dropoffAddress,
+      dropoffLat: bookingData.dropoffLat ? parseFloat(bookingData.dropoffLat) : null,
+      dropoffLng: bookingData.dropoffLng ? parseFloat(bookingData.dropoffLng) : null,
+      waypoints: bookingData.waypoints,
+      locationSkipped: bookingData.locationSkipped,
+      
+      // Schedule data
+      serviceTime: bookingData.serviceTime,
+      scheduledDate: bookingData.scheduledDate,
+      scheduledTimeSlot: bookingData.scheduledTimeSlot,
+      
+      // Vehicle data
+      vehicleType: bookingData.vehicleType,
+      makeModel: bookingData.makeModel,
+      year: bookingData.year,
+      color: bookingData.color,
+      licensePlate: bookingData.licensePlate,
+      
+      // Contact data
+      fullName: bookingData.fullName,
+      phoneNumber: bookingData.phoneNumber,
+      email: bookingData.email,
+      emergencyContact: bookingData.emergencyContact,
+      
+      // Special fields
+      licenseFront: bookingData.licenseFront,
+      licenseBack: bookingData.licenseBack,
+      fuelType: bookingData.fuelType,
+      partDescription: bookingData.partDescription,
+      
+      // Additional details
+      urgency: bookingData.urgency,
+      issues: bookingData.issues,
+      description: bookingData.description,
+      hasInsurance: bookingData.hasInsurance,
+      needSpecificTruck: bookingData.needSpecificTruck,
+      hasModifications: bookingData.hasModifications,
+      needMultilingual: bookingData.needMultilingual,
+      
+      // Metadata
+      createdAt: new Date().toISOString(),
+      bookingType: 'scheduled',
+      status: 'pending',
+      paymentStatus: 'pending',
+      paymentMethod: 'cash',
+    };
+    
+    console.log('📤 Request body:', JSON.stringify(requestBody, null, 2));
+    
+    // Make the API call
+    const response = await fetch(`${API_BASE_URL}/schedule`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(requestBody),
     });
+    
+    console.log('📥 Response status:', response.status);
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ API Error response:', errorData);
+      throw new Error(errorData.message || 'Failed to schedule service');
+    }
+    
+    const data = await response.json();
+    console.log('✅ API Success response:', data);
+    
+    return data;
   };
 
   const handleContinue = async () => {
@@ -319,30 +419,31 @@ const PriceSummaryScreen = () => {
       const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
 
       if (isScheduledBooking) {
-        // For scheduled bookings, make mock API request and go to home on success
-        const success = await submitBooking();
-
-        if (success) {
-          Alert.alert(
-            'Booking Confirmed!',
-            'Your service has been scheduled successfully. You will receive a confirmation shortly.',
-            [
-              {
-                text: 'OK',
-                onPress: () => {
-                  // Navigate to home screen (main app)
-                  router.push('/(customer)/Home'); // Adjust this path based on your routing structure
-                }
-              }
-            ]
-          );
-        } else {
-          Alert.alert(
-            'Booking Failed',
-            'There was an error saving your booking. Please try again.',
-            [{ text: 'OK' }]
-          );
+        // Make REAL API call for scheduled booking
+        const response = await submitScheduledBooking(bookingData);
+        
+        // Format the date for display in success message
+        let formattedDate = '';
+        try {
+          const date = new Date(scheduledDate);
+          formattedDate = `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
+        } catch {
+          formattedDate = `${scheduledDate} at ${scheduledTimeSlot}`;
         }
+        
+        Alert.alert(
+          'Booking Confirmed! 🎉',
+          `Your ${serviceName} has been scheduled successfully for ${formattedDate}.\n\nBooking ID: ${response.bookingId || response.data?.bookingId || 'N/A'}\n\nYou will receive a confirmation SMS/Email shortly.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                // Navigate to home screen
+                router.replace('/(customer)/Home');
+              }
+            }
+          ]
+        );
       } else {
         // For immediate bookings (Right Now), proceed to Confirm Booking screen
         router.push({
@@ -411,11 +512,31 @@ const PriceSummaryScreen = () => {
           }
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Booking error:', error);
+      
+      // Handle specific error cases
+      let errorMessage = 'An unexpected error occurred. Please try again.';
+      let errorTitle = 'Booking Failed';
+      
+      if (error.message === 'Authentication required. Please log in again.') {
+        errorMessage = 'Please log in again to continue with your booking.';
+        errorTitle = 'Session Expired';
+        // Optionally redirect to login screen
+        // router.replace('/(auth)/Login');
+      } else if (error.message.includes('network') || error.message.includes('Network')) {
+        errorMessage = 'Network error. Please check your internet connection and try again.';
+      } else if (error.message.includes('timeout')) {
+        errorMessage = 'Request timed out. Please try again.';
+      } else if (error.message.includes('500')) {
+        errorMessage = 'Server error. Please try again later.';
+      } else {
+        errorMessage = error.message || 'Failed to schedule service. Please try again.';
+      }
+      
       Alert.alert(
-        'Error',
-        'An unexpected error occurred. Please try again.',
+        errorTitle,
+        errorMessage,
         [{ text: 'OK' }]
       );
     } finally {
@@ -509,8 +630,8 @@ const PriceSummaryScreen = () => {
 
   // Get step number based on service
   const getStepNumber = () => {
-    if (isCarRental) return 6; // Location (1) → Vehicle+License (2) → Additional (3) → Schedule (4) → Price Summary (5) → Confirm (6)
-    return 5; // Normal flow: Location (1) → Vehicle (2) → Additional (3) → Schedule (4) → Price Summary (5)
+    if (isCarRental) return 6;
+    return 5;
   };
 
   // Get total steps

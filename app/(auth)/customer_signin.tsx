@@ -16,6 +16,8 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../constants/firebase';
+import { registerForPushNotifications } from '../../utils/notifications';
+import * as Notifications from 'expo-notifications';
 
 // Define the complete user data structure from backend
 interface UserData {
@@ -51,6 +53,8 @@ const SignInScreen = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+
+
   // Load saved credentials on mount
   useEffect(() => {
     const loadSavedCredentials = async () => {
@@ -68,6 +72,22 @@ const SignInScreen = () => {
     };
 
     loadSavedCredentials();
+  }, []);
+
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationReceivedListener(notification => {
+      console.log('Notification received:', notification);
+    });
+
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+      console.log('User tapped notification:', response);
+    });
+
+    return () => {
+      subscription.remove();
+      responseListener.remove();
+    };
   }, []);
   const fetchUserDataFromBackend = async (firebaseUserId: string): Promise<UserData | null> => {
     try {
@@ -193,6 +213,26 @@ const SignInScreen = () => {
       }
 
       console.log('Sign in successful - token and user data saved');
+
+      // 🔔 Get push token
+      const pushToken = await registerForPushNotifications();
+
+      if (pushToken) {
+        // Send token to backend
+        await fetch('https://yhiw-backend.onrender.com/api/notifications', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${userData.token}`, // your JWT
+          },
+          body: JSON.stringify({
+            pushToken,
+            userId: userData.id,
+          }),
+        });
+
+        console.log('Push token sent to backend');
+      }
 
       // Navigate to home
       router.replace('/(customer)/Home');

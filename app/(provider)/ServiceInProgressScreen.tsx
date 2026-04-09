@@ -462,7 +462,7 @@ export default function ServiceInProgressScreen() {
           text: 'OK',
           onPress: async () => {
             await cleanupBooking();
-            router.replace('/(provider)/home');
+            router.replace('/(provider)/Home');
           }
         }
       ],
@@ -840,7 +840,7 @@ export default function ServiceInProgressScreen() {
                     text: 'Go to Home',
                     onPress: async () => {
                       await cleanupBooking();
-                      router.replace('/(provider)/home');
+                      router.replace('/(provider)/Home');
                     }
                   }
                 ]

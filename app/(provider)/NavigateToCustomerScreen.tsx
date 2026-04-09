@@ -61,10 +61,10 @@ export default function NavigateToCustomerScreen() {
   console.log('🚀 NavigateToCustomerScreen mounted with bookingId:', bookingId);
 
   const mapRef = useRef<MapView>(null);
-  const locationInterval = useRef<NodeJS.Timeout | null>(null);
-  const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
-  const jobRefreshInterval = useRef<NodeJS.Timeout | null>(null);
-  const routeFetchTimeout = useRef<NodeJS.Timeout | null>(null);
+  const locationInterval =  useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusCheckInterval =  useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jobRefreshInterval =  useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeFetchTimeout =  useRef<ReturnType<typeof setTimeout> | null>(null);
   const appState = useRef(AppState.currentState);
   
   // Chat state

@@ -115,8 +115,8 @@ const TrackProviderScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const mapRef = useRef<MapView>(null);
-  const pollingTimer = useRef<NodeJS.Timeout | null>(null);
-  const routeFetchTimer = useRef<NodeJS.Timeout | null>(null);
+  const pollingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMounted = useRef(true);
   const navigationInProgress = useRef(false);
   const initialRouteFetched = useRef(false);

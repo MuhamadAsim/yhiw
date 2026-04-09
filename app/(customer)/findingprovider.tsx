@@ -43,8 +43,8 @@ const FindingProviderScreen = () => {
 
   // Refs
   const appState = useRef(AppState.currentState);
-  const pollingTimer = useRef<NodeJS.Timeout | null>(null);
-  const timeoutTimer = useRef<NodeJS.Timeout | null>(null);
+  const pollingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timeoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMounted = useRef(true);
   const isDone = useRef(false);
   const lastCheckedStatus = useRef<string | null>(null);

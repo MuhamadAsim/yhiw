@@ -1384,10 +1384,7 @@ const LocationDetailsScreen = () => {
             )}
           </MapView>
 
-          {/* Map View Label */}
-          <View style={styles.mapLabel}>
-            <Text style={styles.mapLabelText}>MAP VIEW</Text>
-          </View>
+    
 
           {/* Location Button */}
           <TouchableOpacity

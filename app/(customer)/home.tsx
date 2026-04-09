@@ -58,7 +58,6 @@ const HomeScreen = () => {
 
 
 
-  // In HomeScreen.tsx - replace checkExistingBooking with this:
   const checkExistingBooking = async () => {
     if (navigationInProgress) {
       console.log('🏠 Navigation already in progress, skipping...');
@@ -68,253 +67,170 @@ const HomeScreen = () => {
     try {
       setIsLoading(true);
 
-      const currentBookingId = await AsyncStorage.getItem('currentBookingId');
+      const token = await AsyncStorage.getItem('userToken');
+      const userDataJson = await AsyncStorage.getItem('userData');
 
-      console.log('🏠 HomeScreen - Checking existing booking:', { currentBookingId });
-
-      if (currentBookingId) {
-        setNavigationInProgress(true);
-
-        const token = await AsyncStorage.getItem('userToken');
-        if (!token) {
-          setIsLoading(false);
-          setNavigationInProgress(false);
-          return;
-        }
-
-        try {
-          const response = await fetch(`${API_BASE_URL}/jobs/${currentBookingId}/status`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-
-          if (!response.ok) {
-            if (response.status === 404) {
-              await AsyncStorage.removeItem('currentBookingId');
-              setIsLoading(false);
-              setNavigationInProgress(false);
-              return;
-            }
-            throw new Error('Failed to fetch status');
-          }
-
-          const data = await response.json();
-          console.log('📊 HomeScreen - Real status from backend:', data);
-
-          // Get additional booking details from activeBookings or fetch them
-          let customerName = 'Customer';
-          let pickupLocation = '';
-          let serviceType = '';
-          let totalAmount = '0';
-          let duration = '';
-          let providerName = '';
-          let providerId = '';
-          let providerPhone = '';
-          let vehicleType = '';
-          let licensePlate = '';
-          let vehicleModel = '';
-
-          const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
-          if (activeBookingsJson) {
-            try {
-              const activeBookings = JSON.parse(activeBookingsJson);
-              const currentBooking = activeBookings.find((b: any) => b.bookingId === currentBookingId);
-              if (currentBooking) {
-                customerName = currentBooking.customerName || 'Customer';
-                pickupLocation = currentBooking.pickupLocation || '';
-                serviceType = currentBooking.serviceType || '';
-                totalAmount = currentBooking.totalAmount || '0';
-                duration = currentBooking.duration || '';
-                providerName = currentBooking.providerName || 'Provider';
-                providerId = currentBooking.providerId || '';
-                providerPhone = currentBooking.providerPhone || '';
-                vehicleType = currentBooking.vehicleType || '';
-                licensePlate = currentBooking.licensePlate || '';
-                vehicleModel = currentBooking.vehicleModel || '';
-              }
-            } catch (e) {
-              console.error('Error parsing activeBookings:', e);
-            }
-          }
-
-          // Small delay to ensure navigation doesn't conflict with mounting
-          setTimeout(async () => {
-            console.log(`➡️ Navigating with bookingId: ${currentBookingId}, status: ${data.status}`);
-
-            // ===== HANDLE ALL POSSIBLE STATUSES =====
-            switch (data.status) {
-              case 'searching':
-                router.replace({
-                  pathname: '/(customer)/FindingProvider',
-                  params: { bookingId: currentBookingId }
-                });
-                break;
-
-              case 'accepted':
-                router.replace({
-                  pathname: '/(customer)/ProviderAssigned',
-                  params: {
-                    bookingId: currentBookingId,
-                    providerName: providerName,
-                    providerId: providerId,
-                    providerPhone: providerPhone
-                  }
-                });
-                break;
-
-              case 'in_progress':
-                router.replace({
-                  pathname: '/(customer)/ServiceInProgress',
-                  params: {
-                    bookingId: currentBookingId,
-                    providerName: providerName,
-                    providerId: providerId,
-                    providerPhone: providerPhone,
-                    serviceType: serviceType,
-                    pickupLocation: pickupLocation,
-                    totalAmount: totalAmount,
-                    startedAt: data.startedAt
-                  }
-                });
-                break;
-
-              // ===== UPDATED: completed_provider - Provider marked complete, waiting for customer =====
-              case 'completed_provider':
-                console.log('✅ Service completed by provider - Navigating to ServiceInProgress (waiting for customer confirmation)');
-                router.replace({
-                  pathname: '/(customer)/ServiceInProgress',
-                  params: {
-                    bookingId: currentBookingId,
-                    providerName: providerName,
-                    providerId: providerId,
-                    providerPhone: providerPhone,
-                    serviceType: serviceType,
-                    pickupLocation: pickupLocation,
-                    totalAmount: totalAmount,
-                    vehicleType: vehicleType,
-                    licensePlate: licensePlate,
-                    vehicleModel: vehicleModel,
-                    startedAt: data.startedAt,
-                    status: 'completed_provider'
-                  }
-                });
-                break;
-
-              // ===== UPDATED: completed - Navigate to ServiceCompleted =====
-              case 'completed':
-                console.log('✅ Service completed (waiting for customer confirmation) - Navigating to ServiceCompleted');
-                router.replace({
-                  pathname: '/(customer)/ServiceCompleted',
-                  params: {
-                    bookingId: currentBookingId,
-                    providerName: providerName,
-                    serviceType: serviceType,
-                    totalAmount: totalAmount,
-                    duration: duration,
-                    pickupLocation: pickupLocation,
-                    completedAt: data.completedAt,
-                    status: 'completed'
-                  }
-                });
-                break;
-
-              // ===== UPDATED: completed_confirmed - Navigate to ServiceCompleted and CLEAN UP =====
-              case 'completed_confirmed':
-                console.log('✅ Service completed_confirmed - Navigating to ServiceCompleted and cleaning up');
-
-                // Navigate to completion screen first
-                router.replace({
-                  pathname: '/(customer)/ServiceCompleted',
-                  params: {
-                    bookingId: currentBookingId,
-                    providerName: providerName,
-                    serviceType: serviceType,
-                    totalAmount: totalAmount,
-                    duration: duration,
-                    pickupLocation: pickupLocation,
-                    completedAt: data.completedAt,
-                    status: 'completed_confirmed'
-                  }
-                });
-
-                // Clean up storage after navigation
-                setTimeout(async () => {
-                  console.log('🧹 Cleaning up storage for completed_confirmed booking');
-                  await AsyncStorage.removeItem('currentBookingId');
-                  await AsyncStorage.removeItem('currentBookingStatus');
-
-                  if (activeBookingsJson) {
-                    try {
-                      const activeBookings = JSON.parse(activeBookingsJson);
-                      const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
-                      await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
-                    } catch (e) {
-                      console.error('Error updating activeBookings:', e);
-                    }
-                  }
-                }, 1000);
-                break;
-
-              case 'cancelled':
-                console.log('❌ Job was cancelled - Showing alert and cleaning up');
-
-                await AsyncStorage.removeItem('currentBookingId');
-                if (activeBookingsJson) {
-                  try {
-                    const activeBookings = JSON.parse(activeBookingsJson);
-                    const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
-                    await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
-                  } catch (e) {
-                    console.error('Error updating activeBookings:', e);
-                  }
-                }
-
-                Alert.alert(
-                  'Service Cancelled',
-                  data.cancelledBy === 'provider'
-                    ? `The provider has cancelled this service.\n\nReason: ${data.cancellationReason || 'No reason provided'}`
-                    : `This service was cancelled.\n\nReason: ${data.cancellationReason || 'No reason provided'}`,
-                  [{ text: 'OK' }]
-                );
-
-                setIsLoading(false);
-                setNavigationInProgress(false);
-                break;
-
-              case 'expired':
-                console.log('⏰ Job expired - Cleaning up');
-                await AsyncStorage.removeItem('currentBookingId');
-
-                if (activeBookingsJson) {
-                  try {
-                    const activeBookings = JSON.parse(activeBookingsJson);
-                    const updatedBookings = activeBookings.filter((b: any) => b.bookingId !== currentBookingId);
-                    await AsyncStorage.setItem('activeBookings', JSON.stringify(updatedBookings));
-                  } catch (e) {
-                    console.error('Error updating activeBookings:', e);
-                  }
-                }
-
-                setIsLoading(false);
-                setNavigationInProgress(false);
-                break;
-
-              default:
-                console.log('Unknown status:', data.status);
-                setIsLoading(false);
-                setNavigationInProgress(false);
-            }
-          }, 100);
-        } catch (error) {
-          console.error('Error fetching job status:', error);
-          setIsLoading(false);
-          setNavigationInProgress(false);
-        }
-      } else {
+      if (!token || !userDataJson) {
         setIsLoading(false);
+        return;
       }
+
+      const userData = JSON.parse(userDataJson);
+      const userId = userData.id;
+
+      console.log('🏠 HomeScreen - Checking backend for active booking...');
+
+      // ✅ Check BACKEND instead of AsyncStorage
+      const response = await fetch(`${API_BASE_URL}/customer/${userId}/current-booking`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        console.error('Failed to fetch current booking from backend');
+        setIsLoading(false);
+        return;
+      }
+
+      const result = await response.json();
+      const { currentServiceId, status, startedAt, completedAt, cancelledBy, cancellationReason } = result.data;
+
+      console.log('📊 Backend current booking:', result.data);
+
+      if (!currentServiceId) {
+        // No active booking - clear any stale local storage just in case
+        await AsyncStorage.removeItem('currentBookingId');
+        setIsLoading(false);
+        return;
+      }
+
+      // Sync local storage with backend truth
+      await AsyncStorage.setItem('currentBookingId', currentServiceId);
+
+      setNavigationInProgress(true);
+
+      // Pull extra booking details from local cache if available
+      let providerName = 'Provider';
+      let providerId = '';
+      let providerPhone = '';
+      let serviceType = '';
+      let pickupLocation = '';
+      let totalAmount = '0';
+      let duration = '';
+      let vehicleType = '';
+      let licensePlate = '';
+      let vehicleModel = '';
+
+      const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
+      if (activeBookingsJson) {
+        try {
+          const activeBookings = JSON.parse(activeBookingsJson);
+          const currentBooking = activeBookings.find((b: any) => b.bookingId === currentServiceId);
+          if (currentBooking) {
+            providerName = currentBooking.providerName || 'Provider';
+            providerId = currentBooking.providerId || '';
+            providerPhone = currentBooking.providerPhone || '';
+            serviceType = currentBooking.serviceType || '';
+            pickupLocation = currentBooking.pickupLocation || '';
+            totalAmount = currentBooking.totalAmount || '0';
+            duration = currentBooking.duration || '';
+            vehicleType = currentBooking.vehicleType || '';
+            licensePlate = currentBooking.licensePlate || '';
+            vehicleModel = currentBooking.vehicleModel || '';
+          }
+        } catch (e) {
+          console.error('Error parsing activeBookings:', e);
+        }
+      }
+
+      setTimeout(() => {
+        console.log(`➡️ Navigating - bookingId: ${currentServiceId}, status: ${status}`);
+
+        switch (status) {
+          case 'searching':
+            router.replace({
+              pathname: '/(customer)/FindingProvider',
+              params: { bookingId: currentServiceId },
+            });
+            break;
+
+          case 'accepted':
+            router.replace({
+              pathname: '/(customer)/ProviderAssigned',
+              params: { bookingId: currentServiceId, providerName, providerId, providerPhone },
+            });
+            break;
+
+          case 'in_progress':
+            router.replace({
+              pathname: '/(customer)/ServiceInProgress',
+              params: { bookingId: currentServiceId, providerName, providerId, providerPhone, serviceType, pickupLocation, totalAmount, startedAt },
+            });
+            break;
+
+          case 'completed_provider':
+            router.replace({
+              pathname: '/(customer)/ServiceInProgress',
+              params: { bookingId: currentServiceId, providerName, providerId, providerPhone, serviceType, pickupLocation, totalAmount, vehicleType, licensePlate, vehicleModel, startedAt, status: 'completed_provider' },
+            });
+            break;
+
+          case 'completed':
+            router.replace({
+              pathname: '/(customer)/ServiceCompleted',
+              params: { bookingId: currentServiceId, providerName, serviceType, totalAmount, duration, pickupLocation, completedAt, status: 'completed' },
+            });
+            break;
+
+          case 'completed_confirmed':
+            router.replace({
+              pathname: '/(customer)/ServiceCompleted',
+              params: { bookingId: currentServiceId, providerName, serviceType, totalAmount, duration, pickupLocation, completedAt, status: 'completed_confirmed' },
+            });
+            // Clean up after navigation
+            setTimeout(async () => {
+              await AsyncStorage.removeItem('currentBookingId');
+              await AsyncStorage.removeItem('currentBookingStatus');
+              if (activeBookingsJson) {
+                try {
+                  const activeBookings = JSON.parse(activeBookingsJson);
+                  const updated = activeBookings.filter((b: any) => b.bookingId !== currentServiceId);
+                  await AsyncStorage.setItem('activeBookings', JSON.stringify(updated));
+                } catch (e) { console.error(e); }
+              }
+            }, 1000);
+            break;
+
+          case 'cancelled':
+            AsyncStorage.removeItem('currentBookingId').then(() => {
+              Alert.alert(
+                'Service Cancelled',
+                cancelledBy === 'provider'
+                  ? `The provider cancelled this service.\n\nReason: ${cancellationReason || 'No reason provided'}`
+                  : `This service was cancelled.\n\nReason: ${cancellationReason || 'No reason provided'}`,
+                [{ text: 'OK' }]
+              );
+            });
+            setIsLoading(false);
+            setNavigationInProgress(false);
+            break;
+
+          case 'expired':
+            AsyncStorage.removeItem('currentBookingId');
+            setIsLoading(false);
+            setNavigationInProgress(false);
+            break;
+
+          default:
+            console.log('Unknown status:', status);
+            setIsLoading(false);
+            setNavigationInProgress(false);
+        }
+      }, 100);
+
     } catch (error) {
-      console.error('Error checking booking ID:', error);
+      console.error('Error checking booking from backend:', error);
       setIsLoading(false);
+      setNavigationInProgress(false);
     }
   };
 

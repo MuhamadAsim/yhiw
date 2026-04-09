@@ -115,13 +115,14 @@ interface HasMessageResponse {
 const ServiceInProgressScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  
+
   // State variables
   const [hasNavigatedToCompleted, setHasNavigatedToCompleted] = useState(false);
   const [chatVisible, setChatVisible] = useState(false);
   const [hasNewMessage, setHasNewMessage] = useState<boolean>(false);
   const [hasShownProviderCompleteAlert, setHasShownProviderCompleteAlert] = useState(false);
   const [isMarkingComplete, setIsMarkingComplete] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const appState = useRef(AppState.currentState);
 
   // Timer state
@@ -129,8 +130,8 @@ const ServiceInProgressScreen = () => {
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [isPaused, setIsPaused] = useState(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Data state
   const [isLoading, setIsLoading] = useState(true);
@@ -249,7 +250,7 @@ const ServiceInProgressScreen = () => {
   const loadTimerWithElapsedTime = async () => {
     try {
       const timerData = await fetchTimerData();
-      
+
       if (timerData) {
         let serverSeconds = timerData.durationSeconds || 0;
         const serverPaused = timerData.isPaused || false;
@@ -259,7 +260,7 @@ const ServiceInProgressScreen = () => {
         if (!serverPaused && lastUpdated) {
           const now = new Date();
           const elapsedSeconds = Math.floor((now.getTime() - lastUpdated.getTime()) / 1000);
-          
+
           // Only add if reasonable (less than 1 hour)
           if (elapsedSeconds > 0 && elapsedSeconds < 3600) {
             serverSeconds = serverSeconds + elapsedSeconds;
@@ -300,10 +301,10 @@ const ServiceInProgressScreen = () => {
       if (!response.ok) return;
 
       const data: HasMessageResponse = await response.json();
-      
+
       if (data.success) {
         setHasNewMessage(data.hasAnyMessage || false);
-        
+
         if (data.hasAnyMessage) {
           addDebug(`📬 There is a message available`);
         }
@@ -409,6 +410,68 @@ const ServiceInProgressScreen = () => {
     );
   };
 
+  // Handle cancel service
+  const handleCancelService = () => {
+    Alert.alert(
+      'Cancel Service',
+      'Are you sure you want to cancel this service? This action cannot be undone.',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            setIsCancelling(true);
+            addDebug(`❌ Cancelling service: ${bookingId}`);
+
+            // Stop polling and timers
+            setIsPolling(false);
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+            if (pollingTimerRef.current) {
+              clearInterval(pollingTimerRef.current);
+              pollingTimerRef.current = null;
+            }
+
+            try {
+              const token = await AsyncStorage.getItem('userToken');
+              if (token) {
+                await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    cancelledBy: 'customer',
+                    reason: 'Customer cancelled during service'
+                  })
+                });
+              }
+
+              // Clean up storage
+              await AsyncStorage.removeItem('currentBookingId');
+              await AsyncStorage.removeItem('currentBookingStatus');
+
+              addDebug('✅ Service cancelled, navigating to Home');
+
+              // Navigate to Home
+              router.replace('/(customer)/Home');
+            } catch (error) {
+              addDebug('❌ Error during cancellation:', error);
+              // Still navigate home even if API call fails
+              router.replace('/(customer)/Home');
+            } finally {
+              setIsCancelling(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   // Fetch job details on mount
   useEffect(() => {
     if (bookingId) {
@@ -456,7 +519,7 @@ const ServiceInProgressScreen = () => {
       await Promise.all([
         checkJobStatus(),
         checkForAnyMessage(),
-        loadTimerWithElapsedTime() 
+        loadTimerWithElapsedTime()
       ]);
       setPollingAttempts(prev => prev + 1);
     }, 5000);
@@ -514,14 +577,7 @@ const ServiceInProgressScreen = () => {
 
       // ===== SHOW ALERT WHEN PROVIDER COMPLETES SERVICE =====
       if (data.status === 'completed_provider' && !hasShownProviderCompleteAlert && !hasNavigatedToCompleted) {
-        // addDebug('✅✅ Provider has completed the service!');
         setHasShownProviderCompleteAlert(true);
-        
-        // Alert.alert(
-        //   'Service Completed by Provider',
-        //   'The provider has marked the service as complete. Please review and confirm completion to finish.',
-        //   [{ text: 'OK' }]
-        // );
       }
 
       // ===== HANDLE JOB COMPLETED =====
@@ -754,7 +810,6 @@ const ServiceInProgressScreen = () => {
         <View style={styles.durationCard}>
           <Text style={styles.durationLabel}>DURATION</Text>
           <Text style={styles.durationTime}>{duration}</Text>
-          {/* <Text style={styles.startedTime}>Started at {startedAtTime}</Text> */}
 
           {/* Live/Paused Indicator */}
           <View style={[styles.liveIndicator, showPaused && styles.pausedIndicator]}>
@@ -897,31 +952,6 @@ const ServiceInProgressScreen = () => {
             {description ||
               `The provider is currently working on your ${serviceType.toLowerCase()}. You'll be notified when the service is complete.`}
           </Text>
-
-          {/* Provider Completion Status Indicator */}
-          {/* {isProviderComplete && (
-            <View style={styles.providerCompleteIndicator}>
-              <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
-              <Text style={styles.providerCompleteText}>
-                Provider has completed the service. Please confirm completion.
-              </Text>
-            </View>
-          )} */}
-
-          {/* Polling status indicator */}
-          {/* <View style={styles.pollingIndicator}>
-            <Ionicons
-              name={showPaused ? "pause-circle-outline" : "sync-outline"}
-              size={14}
-              color={showPaused ? "#FFA500" : "#4CAF50"}
-            />
-            <Text style={[
-              styles.pollingIndicatorText,
-              showPaused && styles.pausedIndicatorText
-            ]}>
-              {showPaused ? 'Timer paused by provider' : 'Checking for updates every 5 seconds'}
-            </Text>
-          </View> */}
         </View>
 
         {/* Estimated Cost Card */}
@@ -965,6 +995,24 @@ const ServiceInProgressScreen = () => {
           </TouchableOpacity>
         )}
 
+        {/* Cancel Service Button */}
+        <TouchableOpacity
+          style={[styles.cancelServiceButton, isCancelling && styles.buttonDisabled]}
+          onPress={handleCancelService}
+          activeOpacity={0.7}
+          disabled={isCancelling}
+        >
+          {isCancelling ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <Ionicons name="close-circle-outline" size={20} color="#fff" />
+              <Text style={styles.cancelServiceButtonText}>Cancel Service</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Report Issue Button */}
         <TouchableOpacity
           style={styles.reportButton}
           onPress={handleReportIssue}

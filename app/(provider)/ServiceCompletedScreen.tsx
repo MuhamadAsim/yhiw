@@ -52,7 +52,7 @@ export default function ServiceCompleteScreen() {
   const [finalDurationSeconds, setFinalDurationSeconds] = useState<number>(durationSecondsParam);
 
   // Polling interval ref
-  const statusCheckInterval = useRef<NodeJS.Timeout | null>(null);
+  const statusCheckInterval =  useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMounted = useRef(true);
 
   // Debug logger

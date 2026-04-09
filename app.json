@@ -40,8 +40,10 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "95f70f6d-e9da-4a6d-a5cb-dc10e9d91005"
-      }
-    }
+        "projectId": "67f051a5-ca6d-4aca-8459-a79026dd31f2"
+      },
+      "router": {}
+    },
+    "owner": "muhammadasimayub"
   }
 }
