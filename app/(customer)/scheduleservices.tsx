@@ -1,20 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  Alert,
-  Modal,
-} from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+  Alert,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { styles } from './styles/ScheduleServicesStyles';
 
-// Type definitions
+// ─────────────────────────────────────────────
+//  Type definitions
+// ─────────────────────────────────────────────
+
 interface ServiceTimeOption {
   id: string;
   icon: any;
@@ -22,227 +24,136 @@ interface ServiceTimeOption {
   description: string;
 }
 
-interface TimeSlot {
-  id: string;
-  time: string;
-  available: boolean;
-}
+// ─────────────────────────────────────────────
+//  Component
+// ─────────────────────────────────────────────
 
 const ScheduleServiceScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const [selectedTime, setSelectedTime] = useState<string>('right_now');
-  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [selectedTimeSlot, setSelectedTimeSlot] = useState<string>('');
-  const [showTimeSlots, setShowTimeSlots] = useState<boolean>(false);
 
-  // Helper function to safely get string from params
+  // ── Picker state ────────────────────────────────────────────────────────
+  const [selectedTime, setSelectedTime]         = useState<string>('right_now');
+  const [showDatePicker, setShowDatePicker]     = useState<boolean>(false);
+  const [showTimePicker, setShowTimePicker]     = useState<boolean>(false);
+  const [selectedDate, setSelectedDate]         = useState<Date | null>(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<Date | null>(null);
+
+  // ── Param helpers ───────────────────────────────────────────────────────
   const getStringParam = (param: string | string[] | undefined): string => {
     if (!param) return '';
     return Array.isArray(param) ? param[0] : param;
   };
 
-  // Helper function to safely parse JSON from params
   const getParsedArray = (param: string | string[] | undefined): any[] => {
     const value = getStringParam(param);
     if (!value) return [];
-    try {
-      return JSON.parse(value);
-    } catch {
-      return [];
-    }
+    try { return JSON.parse(value); } catch { return []; }
   };
 
-  // Get service info
-  const serviceId = getStringParam(params.serviceId);
-  const serviceName = getStringParam(params.serviceName) || 'Quick Tow (Flatbed)';
-  const servicePrice = getStringParam(params.servicePrice) || '75 BHD';
+  // ── Service params ──────────────────────────────────────────────────────
+  const serviceId       = getStringParam(params.serviceId);
+  const serviceName     = getStringParam(params.serviceName)     || 'Quick Tow (Flatbed)';
+  const servicePrice    = getStringParam(params.servicePrice)    || '75 BHD';
   const serviceCategory = getStringParam(params.serviceCategory) || 'Towing';
-  
-  // Check if this is Car Rental
-  const isCarRental = serviceId === '11';
+  const isCarRental     = serviceId === '11';
 
-  // Get all data from previous screens
-  const pickupAddress = getStringParam(params.pickupAddress);
-  const pickupLat = getStringParam(params.pickupLat);
-  const pickupLng = getStringParam(params.pickupLng);
-  const dropoffAddress = getStringParam(params.dropoffAddress);
-  const dropoffLat = getStringParam(params.dropoffLat);
-  const dropoffLng = getStringParam(params.dropoffLng);
-  
-  // Vehicle data
-  const vehicleType = getStringParam(params.vehicleType);
-  const makeModel = getStringParam(params.makeModel);
-  const year = getStringParam(params.year);
-  const color = getStringParam(params.color);
-  const licensePlate = getStringParam(params.licensePlate);
+  // ── Location params ─────────────────────────────────────────────────────
+  const pickupAddress   = getStringParam(params.pickupAddress);
+  const pickupLat       = getStringParam(params.pickupLat);
+  const pickupLng       = getStringParam(params.pickupLng);
+  const dropoffAddress  = getStringParam(params.dropoffAddress);
+  const dropoffLat      = getStringParam(params.dropoffLat);
+  const dropoffLng      = getStringParam(params.dropoffLng);
+
+  // ── Vehicle params ──────────────────────────────────────────────────────
+  const vehicleType     = getStringParam(params.vehicleType);
+  const makeModel       = getStringParam(params.makeModel);
+  const year            = getStringParam(params.year);
+  const color           = getStringParam(params.color);
+  const licensePlate    = getStringParam(params.licensePlate);
   const selectedVehicle = getStringParam(params.selectedVehicle);
-  
-  // Contact data
-  const fullName = getStringParam(params.fullName);
-  const phoneNumber = getStringParam(params.phoneNumber);
-  const email = getStringParam(params.email);
-  const emergencyContact = getStringParam(params.emergencyContact);
-  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
-  
-  // NEW FIELDS from VehicleContactInfo
-  const licenseFront = getStringParam(params.licenseFront);
-  const licenseBack = getStringParam(params.licenseBack);
-  const fuelType = getStringParam(params.fuelType);
-  const partDescription = getStringParam(params.partDescription);
-  
-  // Additional details data
-  const urgency = getStringParam(params.urgency) || 'moderate';
-  const issues = getParsedArray(params.issues);
-  const description = getStringParam(params.description);
-  const photos = getParsedArray(params.photos);
-  const hasInsurance = getStringParam(params.hasInsurance) === 'true';
+
+  // ── Contact params ──────────────────────────────────────────────────────
+  const fullName          = getStringParam(params.fullName);
+  const phoneNumber       = getStringParam(params.phoneNumber);
+  const email             = getStringParam(params.email);
+  const emergencyContact  = getStringParam(params.emergencyContact);
+  const saveVehicle       = getStringParam(params.saveVehicle) === 'true';
+  const licenseFront      = getStringParam(params.licenseFront);
+  const licenseBack       = getStringParam(params.licenseBack);
+  const fuelType          = getStringParam(params.fuelType);
+  const partDescription   = getStringParam(params.partDescription);
+
+  // ── Additional params ───────────────────────────────────────────────────
+  const urgency           = getStringParam(params.urgency) || 'moderate';
+  const issues            = getParsedArray(params.issues);
+  const description       = getStringParam(params.description);
+  const photos            = getParsedArray(params.photos);
+  const hasInsurance      = getStringParam(params.hasInsurance)      === 'true';
   const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
-  const hasModifications = getStringParam(params.hasModifications) === 'true';
-  const needMultilingual = getStringParam(params.needMultilingual) === 'true';
-  
-  // Location skipped flag
-  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
+  const hasModifications  = getStringParam(params.hasModifications)  === 'true';
+  const needMultilingual  = getStringParam(params.needMultilingual)  === 'true';
+  const locationSkipped   = getStringParam(params.locationSkipped)   === 'true';
 
-  // Mock time slots for the next 7 days
-  const generateTimeSlots = (date: Date): TimeSlot[] => {
-    const slots = [];
-    const startHour = 9; // 9 AM
-    const endHour = 21; // 9 PM
-    
-    for (let hour = startHour; hour <= endHour; hour += 2) {
-      const timeString = `${hour.toString().padStart(2, '0')}:00`;
-      // Random availability for demo
-      const available = Math.random() > 0.3;
-      slots.push({
-        id: `${date.toDateString()}-${timeString}`,
-        time: timeString,
-        available,
-      });
-    }
-    return slots;
-  };
-
-  const [availableTimeSlots, setAvailableTimeSlots] = useState<TimeSlot[]>(
-    generateTimeSlots(new Date())
-  );
-
+  // ── Force schedule_later for Car Rental ─────────────────────────────────
   useEffect(() => {
-    // For Car Rental, force "Schedule Later" selection
-    if (isCarRental) {
-      setSelectedTime('schedule_later');
-    }
+    if (isCarRental) setSelectedTime('schedule_later');
   }, [isCarRental]);
 
-  const serviceTimeOptions: ServiceTimeOption[] = [
-    {
-      id: 'right_now',
-      icon: require('../../assets/customer/right_now.png'),
-      title: 'Right Now',
-      description: 'ASAP (15-20 min)',
-    },
-    {
-      id: 'schedule_later',
-      icon: require('../../assets/customer/sec_later.png'),
-      title: 'Schedule Later',
-      description: 'Pick date & time',
-    },
-  ];
+  // ── Display helpers ──────────────────────────────────────────────────────
 
-  const handleBack = () => {
-    router.back();
+  /**
+   * Format: Wednesday, 9 April 2025
+   */
+  const formatDate = (date: Date): string =>
+    date.toLocaleDateString('en-GB', {
+      weekday: 'long',
+      day:     'numeric',
+      month:   'long',
+      year:    'numeric',
+    });
+
+  /**
+   * Format: 02:30 PM
+   */
+  const formatTime = (date: Date): string =>
+    date.toLocaleTimeString('en-US', {
+      hour:   '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+
+  /**
+   * Combined for confirmation display: Wednesday, 9 April 2025 at 02:30 PM
+   */
+  const formatDateTime = (date: Date, time: Date): string =>
+    `${formatDate(date)} at ${formatTime(time)}`;
+
+  // ── Picker handlers ──────────────────────────────────────────────────────
+
+  const handleDateChange = (event: any, date?: Date) => {
+    setShowDatePicker(false);
+    if (date) {
+      setSelectedDate(date);
+      // Reset time whenever date changes so user always re-confirms both
+      setSelectedTimeSlot(null);
+      // Immediately open time picker after date is chosen
+      setShowTimePicker(true);
+    }
   };
-const handleContinue = () => {
-  // Validate for Car Rental
-  if (isCarRental) {
-    if (!selectedDate) {
-      Alert.alert('Required', 'Please select a date for your rental');
-      return;
-    }
-    if (!selectedTimeSlot) {
-      Alert.alert('Required', 'Please select a time slot');
-      return;
-    }
-  }
 
-  // For regular services with Schedule Later, validate date and time are selected
-  if (selectedTime === 'schedule_later' && !isCarRental) {
-    if (!selectedDate) {
-      Alert.alert('Required', 'Please select a date for your scheduled service');
-      return;
-    }
-    if (!selectedTimeSlot) {
-      Alert.alert('Required', 'Please select a time slot');
-      return;
-    }
-  }
+  const handleTimeChange = (event: any, date?: Date) => {
+    setShowTimePicker(false);
+    if (date) setSelectedTimeSlot(date);
+  };
 
-  // Navigate to price summary screen with ALL collected data
-  router.push({
-    pathname: '/(customer)/PriceSummary',
-    params: {
-      // Location data
-      pickupAddress,
-      pickupLat,
-      pickupLng,
-      dropoffAddress,
-      dropoffLat,
-      dropoffLng,
-      
-      // Service data
-      serviceId,
-      serviceName,
-      servicePrice,
-      serviceCategory,
-      
-      // Vehicle data
-      vehicleType,
-      makeModel,
-      year,
-      color,
-      licensePlate,
-      selectedVehicle,
-      
-      // Contact data
-      fullName,
-      phoneNumber,
-      email,
-      emergencyContact,
-      saveVehicle: String(saveVehicle),
-      
-      // NEW FIELDS from VehicleContactInfo
-      licenseFront,
-      licenseBack,
-      fuelType,
-      partDescription,
-      
-      // Additional details
-      urgency,
-      issues: JSON.stringify(issues),
-      description,
-      photos: JSON.stringify(photos),
-      hasInsurance: String(hasInsurance),
-      needSpecificTruck: String(needSpecificTruck),
-      hasModifications: String(hasModifications),
-      needMultilingual: String(needMultilingual),
-      
-      // Location skipped flag
-      locationSkipped: String(locationSkipped),
-      
-      // Schedule data - PASS FOR BOTH CAR RENTAL AND REGULAR SCHEDULED SERVICES
-      serviceTime: selectedTime,
-      scheduledDate: (selectedTime === 'schedule_later' && selectedDate) ? selectedDate.toISOString() : '',
-      scheduledTimeSlot: (selectedTime === 'schedule_later' && selectedTimeSlot) ? selectedTimeSlot : '',
-    }
-  });
-};
+  // ── Option select ────────────────────────────────────────────────────────
 
   const handleSelectTime = (timeId: string) => {
-    // For Car Rental, prevent selecting "Right Now"
     if (isCarRental && timeId === 'right_now') {
       Alert.alert(
-        'Not Available', 
+        'Not Available',
         'Car rental requires advance scheduling. Please select a date and time.'
       );
       return;
@@ -250,57 +161,99 @@ const handleContinue = () => {
     setSelectedTime(timeId);
     if (timeId === 'schedule_later') {
       setShowDatePicker(true);
-    }
-  };
-
-  const handleDateChange = (event: any, date?: Date) => {
-    setShowDatePicker(false);
-    if (date) {
-      setSelectedDate(date);
-      setAvailableTimeSlots(generateTimeSlots(date));
-      setShowTimeSlots(true);
-    }
-  };
-
-  const handleSelectTimeSlot = (slot: TimeSlot) => {
-    if (slot.available) {
-      setSelectedTimeSlot(slot.time);
-      setShowTimeSlots(false);
     } else {
-      Alert.alert('Not Available', 'This time slot is not available. Please select another.');
+      // Reset schedule selections when switching back to Right Now
+      setSelectedDate(null);
+      setSelectedTimeSlot(null);
     }
   };
 
-  // Format date for display
-  const formatDate = (date: Date): string => {
-    return date.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
+  // ── Navigation ───────────────────────────────────────────────────────────
+
+  const handleBack = () => router.back();
+
+  const handleContinue = () => {
+    if (selectedTime === 'schedule_later' || isCarRental) {
+      if (!selectedDate) {
+        Alert.alert('Required', 'Please select a date for your scheduled service');
+        return;
+      }
+      if (!selectedTimeSlot) {
+        Alert.alert('Required', 'Please select a time for your scheduled service');
+        return;
+      }
+    }
+
+    // Combine date + time into one ISO timestamp
+    // e.g. user picked 9 Apr 2025 as date and 14:30 as time
+    // → merge into a single Date: 2025-04-09T14:30:00
+    let scheduledAt = '';
+    if (selectedDate && selectedTimeSlot) {
+      const merged = new Date(selectedDate);
+      merged.setHours(selectedTimeSlot.getHours(), selectedTimeSlot.getMinutes(), 0, 0);
+      scheduledAt = merged.toISOString();
+    }
+
+    router.push({
+      pathname: '/(customer)/PriceSummary',
+      params: {
+        // Location
+        pickupAddress, pickupLat, pickupLng,
+        dropoffAddress, dropoffLat, dropoffLng,
+        // Service
+        serviceId, serviceName, servicePrice, serviceCategory,
+        // Vehicle
+        vehicleType, makeModel, year, color, licensePlate, selectedVehicle,
+        // Contact
+        fullName, phoneNumber, email, emergencyContact,
+        saveVehicle:       String(saveVehicle),
+        licenseFront,      licenseBack,
+        fuelType,          partDescription,
+        // Additional
+        urgency,
+        issues:            JSON.stringify(issues),
+        description,
+        photos:            JSON.stringify(photos),
+        hasInsurance:      String(hasInsurance),
+        needSpecificTruck: String(needSpecificTruck),
+        hasModifications:  String(hasModifications),
+        needMultilingual:  String(needMultilingual),
+        locationSkipped:   String(locationSkipped),
+        // Schedule  ← single merged ISO string replaces the old two-field approach
+        serviceTime:       selectedTime,
+        scheduledAt,       // "2025-04-09T14:30:00.000Z"  or "" for right_now
+      },
     });
   };
 
-  // Get step number based on service
-  const getStepNumber = () => {
-    if (isCarRental) return 5; // Location (1) → Vehicle+License (2) → Additional (3) → Schedule (4) → Price Summary (5)
-    return 4; // Normal flow: Location (1) → Vehicle (2) → Additional (3) → Schedule (4)
-  };
+  // ── Static data ──────────────────────────────────────────────────────────
 
-  // Get total steps
-  const getTotalSteps = () => {
-    return 7;
-  };
+  const serviceTimeOptions: ServiceTimeOption[] = [
+    {
+      id:          'right_now',
+      icon:        require('../../assets/customer/right_now.png'),
+      title:       'Right Now',
+      description: 'ASAP (15-20 min)',
+    },
+    {
+      id:          'schedule_later',
+      icon:        require('../../assets/customer/sec_later.png'),
+      title:       'Schedule Later',
+      description: 'Pick date & time',
+    },
+  ];
 
-  // Calculate progress percentage
-  const getProgressPercentage = () => {
-    const step = getStepNumber();
-    const total = getTotalSteps();
-    return `${(step / total) * 100}%`;
-  };
+  // ── Progress ─────────────────────────────────────────────────────────────
+
+  const stepNumber         = isCarRental ? 5 : 4;
+  const totalSteps         = 7;
+  const progressPercentage = `${(stepNumber / totalSteps) * 100}%`;
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <View style={styles.container}>
+
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
@@ -312,18 +265,18 @@ const handleContinue = () => {
         </TouchableOpacity>
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>Schedule Service</Text>
-          <Text style={styles.headerSubtitle}>Step {getStepNumber()} of {getTotalSteps()}</Text>
+          <Text style={styles.headerSubtitle}>Step {stepNumber} of {totalSteps}</Text>
         </View>
       </View>
 
       {/* Progress Bar */}
       <View style={styles.progressBarContainer}>
         <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: getProgressPercentage() as any}]} />
+          <View style={[styles.progressFill, { width: progressPercentage as any }]} />
         </View>
       </View>
 
-      {/* Service Banner for Car Rental */}
+      {/* Car Rental banner */}
       {isCarRental && (
         <View style={styles.serviceBanner}>
           <Ionicons name="car" size={20} color="#FFFFFF" />
@@ -338,121 +291,117 @@ const handleContinue = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Service Time Selection */}
+
+        {/* ── When do you need service? ─────────────────────────────────── */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>When do you need service?</Text>
 
           <View style={styles.timeOptionsContainer}>
-            {serviceTimeOptions.map((option) => (
-              <TouchableOpacity
-                key={option.id}
-                style={[
-                  styles.timeOptionCard,
-                  selectedTime === option.id && styles.timeOptionCardSelected,
-                  (isCarRental && option.id === 'right_now') && styles.timeOptionCardDisabled,
-                ]}
-                onPress={() => handleSelectTime(option.id)}
-                activeOpacity={0.7}
-                disabled={isCarRental && option.id === 'right_now'}
-              >
-                <View
+            {serviceTimeOptions.map((option) => {
+              const isDisabled = isCarRental && option.id === 'right_now';
+              return (
+                <TouchableOpacity
+                  key={option.id}
                   style={[
+                    styles.timeOptionCard,
+                    selectedTime === option.id && styles.timeOptionCardSelected,
+                    isDisabled && styles.timeOptionCardDisabled,
+                  ]}
+                  onPress={() => handleSelectTime(option.id)}
+                  activeOpacity={0.7}
+                  disabled={isDisabled}
+                >
+                  <View style={[
                     styles.timeIconContainer,
                     selectedTime === option.id && styles.timeIconContainerSelected,
-                  ]}
-                >
-                  <Image
-                    source={option.icon}
-                    style={styles.timeIcon}
-                    resizeMode="contain"
-                  />
-                </View>
-                <Text style={[
-                  styles.timeOptionTitle,
-                  (isCarRental && option.id === 'right_now') && styles.textDisabled
-                ]}>
-                  {option.title}
-                </Text>
-                <Text style={[
-                  styles.timeOptionDescription,
-                  (isCarRental && option.id === 'right_now') && styles.textDisabled
-                ]}>
-                  {option.description}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  ]}>
+                    <Image source={option.icon} style={styles.timeIcon} resizeMode="contain" />
+                  </View>
+                  <Text style={[styles.timeOptionTitle,       isDisabled && styles.textDisabled]}>
+                    {option.title}
+                  </Text>
+                  <Text style={[styles.timeOptionDescription, isDisabled && styles.textDisabled]}>
+                    {option.description}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
-        {/* Date Selection - Show when Schedule Later is selected */}
+        {/* ── Schedule Later: date + time pickers ──────────────────────── */}
         {selectedTime === 'schedule_later' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>
               {isCarRental ? 'Select Rental Date & Time' : 'Select Date & Time'}
             </Text>
 
-            {/* Selected Date Display */}
+            {/* Date selector button */}
             <TouchableOpacity
               style={styles.dateSelector}
               onPress={() => setShowDatePicker(true)}
             >
               <Ionicons name="calendar-outline" size={24} color="#68bdee" />
               <Text style={styles.dateSelectorText}>
-                {selectedDate ? formatDate(selectedDate) : 'Select a date'}
+                {selectedDate ? formatDate(selectedDate) : 'Tap to choose a date'}
               </Text>
               <Ionicons name="chevron-forward" size={20} color="#8c8c8c" />
             </TouchableOpacity>
 
-            {/* Time Slots */}
+            {/* Time selector button — only shown once a date is picked */}
             {selectedDate && (
-              <View style={styles.timeSlotsContainer}>
-                <Text style={styles.timeSlotsTitle}>Available Time Slots</Text>
-                <View style={styles.timeSlotsGrid}>
-                  {availableTimeSlots.map((slot) => (
-                    <TouchableOpacity
-                      key={slot.id}
-                      style={[
-                        styles.timeSlotButton,
-                        selectedTimeSlot === slot.time && styles.timeSlotButtonSelected,
-                        !slot.available && styles.timeSlotButtonDisabled,
-                      ]}
-                      onPress={() => handleSelectTimeSlot(slot)}
-                      disabled={!slot.available}
-                    >
-                      <Text style={[
-                        styles.timeSlotText,
-                        selectedTimeSlot === slot.time && styles.timeSlotTextSelected,
-                        !slot.available && styles.timeSlotTextDisabled,
-                      ]}>
-                        {slot.time}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
+              <TouchableOpacity
+                style={[styles.dateSelector, { marginTop: 12 }]}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Ionicons name="time-outline" size={24} color="#68bdee" />
+                <Text style={styles.dateSelectorText}>
+                  {selectedTimeSlot ? formatTime(selectedTimeSlot) : 'Tap to choose a time'}
+                </Text>
+                <Ionicons name="chevron-forward" size={20} color="#8c8c8c" />
+              </TouchableOpacity>
+            )}
+
+            {/* Confirmation pill — shown only when both are selected */}
+            {selectedDate && selectedTimeSlot && (
+              <View style={localStyles.confirmPill}>
+                <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
+                <Text style={localStyles.confirmPillText}>
+                  {formatDateTime(selectedDate, selectedTimeSlot)}
+                </Text>
               </View>
             )}
           </View>
         )}
 
-        {/* Date Picker Modal */}
+        {/* Native date picker */}
         {showDatePicker && (
           <DateTimePicker
-            value={selectedDate}
+            value={selectedDate ?? new Date()}
             mode="date"
             display="default"
-            onChange={handleDateChange}
             minimumDate={new Date()}
+            onChange={handleDateChange}
           />
         )}
 
-        {/* Estimated Arrival Time - Hide for Car Rental */}
+        {/* Native time picker */}
+        {showTimePicker && (
+          <DateTimePicker
+            value={selectedTimeSlot ?? new Date()}
+            mode="time"
+            display="default"
+            minuteInterval={1}
+            onChange={handleTimeChange}
+          />
+        )}
+
+        {/* ── Estimated arrival — hidden for Car Rental ────────────────── */}
         {!isCarRental && (
           <View style={styles.estimatedTimeBox}>
             <View style={styles.estimatedTimeHeader}>
               <Ionicons name="time-outline" size={24} color="#68bdee" />
-              <Text style={styles.estimatedTimeTitle}>
-                Estimated Arrival Time
-              </Text>
+              <Text style={styles.estimatedTimeTitle}>Estimated Arrival Time</Text>
             </View>
             <Text style={styles.estimatedTimeDescription}>
               Based on current availability and your location
@@ -466,7 +415,7 @@ const handleContinue = () => {
           </View>
         )}
 
-        {/* Service Hours */}
+        {/* ── Service Hours ─────────────────────────────────────────────── */}
         <View style={styles.serviceHoursCard}>
           <Text style={styles.serviceHoursTitle}>Service Hours</Text>
 
@@ -474,12 +423,10 @@ const handleContinue = () => {
             <Text style={styles.dayText}>Monday - Friday</Text>
             <Text style={styles.hoursText}>8:00 AM - 9:00 PM</Text>
           </View>
-
           <View style={styles.hoursRow}>
             <Text style={styles.dayText}>Saturday</Text>
             <Text style={styles.hoursText}>8:00 AM - 6:00 PM</Text>
           </View>
-
           <View style={styles.hoursRow}>
             <Text style={styles.dayText}>Sunday</Text>
             <Text style={styles.closedText}>Closed</Text>
@@ -495,36 +442,59 @@ const handleContinue = () => {
           )}
         </View>
 
-        {/* Rescheduling Policy */}
+        {/* ── Policy box ───────────────────────────────────────────────── */}
         <View style={styles.policyBox}>
           <Text style={styles.policyTitle}>
             {isCarRental ? 'Rental Cancellation Policy' : 'Rescheduling Policy'}
           </Text>
           <Text style={styles.policyText}>
-            {isCarRental 
+            {isCarRental
               ? 'You can cancel your rental up to 24 hours before the scheduled time for a full refund. Cancellations within 24 hours may incur a fee.'
-              : 'You can reschedule or cancel your appointment free of charge up to 2 hours before the scheduled time. Late cancellations may incur a fee.'
-            }
+              : 'You can reschedule or cancel your appointment free of charge up to 2 hours before the scheduled time. Late cancellations may incur a fee.'}
           </Text>
         </View>
 
         <View style={{ height: 20 }} />
       </ScrollView>
 
-      {/* Continue Button */}
+      {/* Continue button */}
       <View style={styles.bottomContainer}>
         <TouchableOpacity
           style={styles.continueButton}
           onPress={handleContinue}
           activeOpacity={0.8}
         >
-          <Text style={styles.continueButtonText}>
-            Continue to Price Summary
-          </Text>
+          <Text style={styles.continueButtonText}>Continue to Price Summary</Text>
         </TouchableOpacity>
       </View>
+
     </View>
   );
 };
+
+// ─────────────────────────────────────────────
+//  Local-only styles (additions only)
+// ─────────────────────────────────────────────
+
+const localStyles = StyleSheet.create({
+  confirmPill: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    gap:            8,
+    marginTop:      14,
+    paddingVertical:  10,
+    paddingHorizontal: 14,
+    backgroundColor: '#f0fff4',
+    borderRadius:    10,
+    borderWidth:     1,
+    borderColor:    '#4CAF50',
+  },
+  confirmPillText: {
+    color:      '#2e7d32',
+    fontSize:   14,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+});
 
 export default ScheduleServiceScreen;

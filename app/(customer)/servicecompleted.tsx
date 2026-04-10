@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import usePreventBack from '@/hooks/usePreventBack';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
@@ -57,6 +58,7 @@ interface JobDetailsResponse {
 }
 
 const ServiceCompletedScreen = () => {
+  usePreventBack(); // ✅ one line
   const router = useRouter();
   const params = useLocalSearchParams();
 

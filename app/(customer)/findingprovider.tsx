@@ -73,52 +73,52 @@ const FindingProviderScreen = () => {
   // ─── Params ──────────────────────────────────────────────────────────────────
 
   const bookingIdFromParams = getStringParam(params.bookingId);
-  const serviceId           = getStringParam(params.serviceId);
-  const serviceName         = getStringParam(params.serviceName);
-  const servicePrice        = getStringParam(params.servicePrice);
-  const serviceCategory     = getStringParam(params.serviceCategory);
+  const serviceId = getStringParam(params.serviceId);
+  const serviceName = getStringParam(params.serviceName);
+  const servicePrice = getStringParam(params.servicePrice);
+  const serviceCategory = getStringParam(params.serviceCategory);
 
-  const isCarRental   = serviceId === '11';
+  const isCarRental = serviceId === '11';
   const isFuelDelivery = serviceId === '3';
-  const isSpareParts  = serviceId === '12';
+  const isSpareParts = serviceId === '12';
 
-  const pickupAddress   = getStringParam(params.pickupAddress);
-  const dropoffAddress  = getStringParam(params.dropoffAddress);
-  const serviceTime     = getStringParam(params.serviceTime);
-  const totalAmount     = getStringParam(params.totalAmount);
-  const urgency         = getStringParam(params.urgency);
-  const description     = getStringParam(params.description);
-  const issues          = getParsedArray(params.issues);
-  const photos          = getParsedArray(params.photos);
+  const pickupAddress = getStringParam(params.pickupAddress);
+  const dropoffAddress = getStringParam(params.dropoffAddress);
+  const serviceTime = getStringParam(params.serviceTime);
+  const totalAmount = getStringParam(params.totalAmount);
+  const urgency = getStringParam(params.urgency);
+  const description = getStringParam(params.description);
+  const issues = getParsedArray(params.issues);
+  const photos = getParsedArray(params.photos);
 
-  const vehicleType  = getStringParam(params.vehicleType);
-  const makeModel    = getStringParam(params.makeModel);
-  const year         = getStringParam(params.year);
-  const color        = getStringParam(params.color);
+  const vehicleType = getStringParam(params.vehicleType);
+  const makeModel = getStringParam(params.makeModel);
+  const year = getStringParam(params.year);
+  const color = getStringParam(params.color);
   const licensePlate = getStringParam(params.licensePlate);
 
-  const fullName        = getStringParam(params.fullName);
-  const phoneNumber     = getStringParam(params.phoneNumber);
-  const email           = getStringParam(params.email);
+  const fullName = getStringParam(params.fullName);
+  const phoneNumber = getStringParam(params.phoneNumber);
+  const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
 
-  const licenseFront   = getStringParam(params.licenseFront);
-  const licenseBack    = getStringParam(params.licenseBack);
-  const fuelType       = getStringParam(params.fuelType);
+  const licenseFront = getStringParam(params.licenseFront);
+  const licenseBack = getStringParam(params.licenseBack);
+  const fuelType = getStringParam(params.fuelType);
   const partDescription = getStringParam(params.partDescription);
 
-  const scheduledDate     = getStringParam(params.scheduledDate);
-  const scheduledTimeSlot = getStringParam(params.scheduledTimeSlot);
+  const scheduledAt = getStringParam(params.scheduledAt);
 
-  const locationSkipped    = getStringParam(params.locationSkipped) === 'true';
-  const hasInsurance       = getStringParam(params.hasInsurance) === 'true';
-  const needSpecificTruck  = getStringParam(params.needSpecificTruck) === 'true';
-  const hasModifications   = getStringParam(params.hasModifications) === 'true';
-  const needMultilingual   = getStringParam(params.needMultilingual) === 'true';
-  const selectedTip        = parseFloat(getStringParam(params.selectedTip)) || 0;
 
-  const pickupLat  = getNumberParam(params.pickupLat);
-  const pickupLng  = getNumberParam(params.pickupLng);
+  const locationSkipped = getStringParam(params.locationSkipped) === 'true';
+  const hasInsurance = getStringParam(params.hasInsurance) === 'true';
+  const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
+  const hasModifications = getStringParam(params.hasModifications) === 'true';
+  const needMultilingual = getStringParam(params.needMultilingual) === 'true';
+  const selectedTip = parseFloat(getStringParam(params.selectedTip)) || 0;
+
+  const pickupLat = getNumberParam(params.pickupLat);
+  const pickupLng = getNumberParam(params.pickupLng);
   const dropoffLat = getNumberParam(params.dropoffLat);
   const dropoffLng = getNumberParam(params.dropoffLng);
 
@@ -223,7 +223,7 @@ const FindingProviderScreen = () => {
 
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
     if (!isMounted.current || isDone.current) return;
-    
+
     if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
       console.log('📱 App came to foreground - IMMEDIATELY checking status');
       if (bookingId) {
@@ -349,10 +349,17 @@ const FindingProviderScreen = () => {
         },
         schedule: {
           type: serviceTime,
-          scheduledDateTime:
-            serviceTime === 'schedule_later'
-              ? { date: scheduledDate, timeSlot: scheduledTimeSlot }
-              : null,
+          scheduledDateTime: serviceTime === 'schedule_later' && scheduledAt
+            ? {
+              date: scheduledAt.split('T')[0],
+              timeSlot: new Date(scheduledAt).toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+              }),
+              isoString: scheduledAt,
+            }
+            : null,
         },
         payment: {
           totalAmount: parseFloat(totalAmount) || 0,
@@ -411,12 +418,12 @@ const FindingProviderScreen = () => {
 
   const startPolling = (id: string, immediateCheck: boolean = false) => {
     console.log('🔄 Starting polling for booking:', id, 'immediate:', immediateCheck);
-    
+
     if (isPollingActive.current) {
       console.log('⚠️ Polling already active, stopping first');
       stopAllTimers();
     }
-    
+
     isPollingActive.current = true;
 
     const poll = async () => {
@@ -424,9 +431,9 @@ const FindingProviderScreen = () => {
         console.log('⏹️ Polling stopped - component unmounted or done');
         return;
       }
-      
+
       await checkBookingStatus(id);
-      
+
       if (isMounted.current && !isDone.current && isPollingActive.current) {
         pollingTimer.current = setTimeout(poll, 5000);
       }
@@ -449,7 +456,7 @@ const FindingProviderScreen = () => {
       if (!token) return;
 
       console.log('📡 Checking status for booking:', id);
-      
+
       const response = await fetch(`${API_BASE_URL}/api/jobs/${id}/status`, {
         method: 'GET',
         headers: { 'Authorization': `Bearer ${token}` },
@@ -467,7 +474,7 @@ const FindingProviderScreen = () => {
 
       const data: StatusResponse = await response.json();
       console.log('📊 Status received:', data.status);
-      
+
       if (lastCheckedStatus.current !== data.status) {
         console.log('🔄 Status changed from', lastCheckedStatus.current, 'to', data.status);
         lastCheckedStatus.current = data.status;
@@ -479,42 +486,42 @@ const FindingProviderScreen = () => {
           console.log('✅ Provider ACCEPTED - navigating to ProviderAssigned');
           handleProviderAccepted(id);
           break;
-          
+
         case 'in_progress':
           console.log('🚗 Service IN PROGRESS - navigating to ServiceInProgress');
           handleServiceInProgress(id);
           break;
-          
+
         case 'completed':
           console.log('✅ Service COMPLETED (by provider) - navigating to ServiceInProgress for customer confirmation');
           handleCompletedByProvider(id);
           break;
-          
+
         case 'completed_provider':
           console.log('✅ Service COMPLETED BY PROVIDER - navigating to ServiceInProgress for customer confirmation');
           handleCompletedByProvider(id);
           break;
-          
+
         case 'completed_confirmed':
           console.log('✅✅ Service COMPLETED AND CONFIRMED BY CUSTOMER - navigating to ServiceCompleted');
           handleCompletedConfirmed(id);
           break;
-          
+
         case 'expired':
           console.log('⏰ Booking EXPIRED');
           handleNoProviders('expired');
           break;
-          
+
         case 'cancelled':
           console.log('❌ Booking CANCELLED');
           handleBookingCancelled();
           break;
-          
+
         case 'searching':
           setConnectionStatus('searching');
           setPollingAttempts(prev => prev + 1);
           break;
-          
+
         default:
           console.log('ℹ️ Unknown status:', data.status);
           break;
@@ -565,7 +572,7 @@ const FindingProviderScreen = () => {
     if (isMounted.current) {
       router.replace({
         pathname: '/(customer)/ServiceInProgress',
-        params: { 
+        params: {
           bookingId: id,
           status: 'completed_provider' // Pass status so screen shows confirmation button
         },
@@ -578,14 +585,14 @@ const FindingProviderScreen = () => {
     if (!markDone()) return;
 
     console.log('✅✅ CUSTOMER CONFIRMED COMPLETION — navigating to ServiceCompleted');
-    
+
     // Get additional data from storage
     let providerName = 'Provider';
     let serviceType = '';
     let totalAmount = '0';
     let duration = '';
     let pickupLocation = '';
-    
+
     const getBookingData = async () => {
       try {
         const activeBookingsJson = await AsyncStorage.getItem('activeBookings');
@@ -603,10 +610,10 @@ const FindingProviderScreen = () => {
       } catch (e) {
         console.error('Error fetching booking data:', e);
       }
-      
+
       // Clean up storage
       await AsyncStorage.removeItem('currentBookingId').catch(console.error);
-      
+
       if (isMounted.current) {
         router.replace({
           pathname: '/(customer)/ServiceCompleted',
@@ -623,7 +630,7 @@ const FindingProviderScreen = () => {
         });
       }
     };
-    
+
     getBookingData();
   };
 
@@ -688,13 +695,13 @@ const FindingProviderScreen = () => {
 
   const renderStatusMessage = () => {
     switch (connectionStatus) {
-      case 'creating':     return 'Creating your booking...';
-      case 'searching':    return 'Searching for providers...';
-      case 'found':        return 'Provider found! Assigning now...';
+      case 'creating': return 'Creating your booking...';
+      case 'searching': return 'Searching for providers...';
+      case 'found': return 'Provider found! Assigning now...';
       case 'no_providers': return 'No providers available at this time';
-      case 'timeout':      return 'Search timed out. Please try again.';
-      case 'error':        return 'Connection error. Please try again.';
-      default:             return 'Finding a provider...';
+      case 'timeout': return 'Search timed out. Please try again.';
+      case 'error': return 'Connection error. Please try again.';
+      default: return 'Finding a provider...';
     }
   };
 
@@ -736,8 +743,8 @@ const FindingProviderScreen = () => {
             )}
             <Text style={connectionStatus === 'found' ? styles.stepTextCompleted : styles.stepTextActive}>
               {connectionStatus === 'no_providers' ? 'No providers available' :
-               connectionStatus === 'timeout'      ? 'Search timed out' :
-               'Searching for providers...'}
+                connectionStatus === 'timeout' ? 'Search timed out' :
+                  'Searching for providers...'}
             </Text>
           </View>
 
@@ -759,10 +766,10 @@ const FindingProviderScreen = () => {
               connectionStatus === 'found' && styles.stepTextActive,
               (connectionStatus === 'no_providers' || connectionStatus === 'timeout') && styles.stepTextInactive,
             ]}>
-              {connectionStatus === 'found'        ? 'Assigning provider...' :
-               connectionStatus === 'no_providers' ? 'No provider found' :
-               connectionStatus === 'timeout'      ? 'Search failed' :
-               'Assigning provider'}
+              {connectionStatus === 'found' ? 'Assigning provider...' :
+                connectionStatus === 'no_providers' ? 'No provider found' :
+                  connectionStatus === 'timeout' ? 'Search failed' :
+                    'Assigning provider'}
             </Text>
           </View>
         </View>

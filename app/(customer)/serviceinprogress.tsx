@@ -12,6 +12,8 @@ import {
   View,
   AppState
 } from 'react-native';
+import usePreventBack from '@/hooks/usePreventBack';
+
 import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/ServiceInProgressStyles';
 const { height } = Dimensions.get('window');
@@ -115,6 +117,8 @@ interface HasMessageResponse {
 const ServiceInProgressScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
+  usePreventBack(); // ✅ one line
+
 
   // State variables
   const [hasNavigatedToCompleted, setHasNavigatedToCompleted] = useState(false);

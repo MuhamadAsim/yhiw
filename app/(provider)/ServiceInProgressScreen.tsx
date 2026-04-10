@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/ServiceInProgressScreenStyles';
+import usePreventBack from '@/hooks/usePreventBack';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
@@ -258,6 +259,7 @@ interface HasMessageResponse {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 export default function ServiceInProgressScreen() {
   const router = useRouter();
+  usePreventBack(); // ✅ one line
   const params = useLocalSearchParams<{ bookingId: string }>();
   const bookingId = params.bookingId;
 

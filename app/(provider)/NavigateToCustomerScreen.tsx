@@ -20,6 +20,7 @@ import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import ChatPopup from './components/ChatPopup';
 import { styles } from './styles/NavigateToCustomerScreenStyles';
+import usePreventBack from '@/hooks/usePreventBack';
 const { height } = Dimensions.get('window');
 
 // API Base URL
@@ -56,6 +57,7 @@ interface HasMessageResponse {
 export default function NavigateToCustomerScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  usePreventBack(); // ✅ one line
   const bookingId = params.bookingId as string;
 
   console.log('🚀 NavigateToCustomerScreen mounted with bookingId:', bookingId);

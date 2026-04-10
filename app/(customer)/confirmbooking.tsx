@@ -11,7 +11,7 @@ import {
   Alert,
 } from 'react-native';
 
-import {styles} from './styles/ConfirmBookingStyles';
+import { styles } from './styles/ConfirmBookingStyles';
 
 const ConfirmBookingScreen = () => {
   const router = useRouter();
@@ -40,7 +40,7 @@ const ConfirmBookingScreen = () => {
   const serviceName = getStringParam(params.serviceName);
   const servicePrice = getStringParam(params.servicePrice);
   const serviceCategory = getStringParam(params.serviceCategory);
-  
+
   // Check service types
   const isCarRental = serviceId === '11';
   const isFuelDelivery = serviceId === '3';
@@ -55,7 +55,7 @@ const ConfirmBookingScreen = () => {
   const dropoffAddress = getStringParam(params.dropoffAddress);
   const dropoffLat = getStringParam(params.dropoffLat);
   const dropoffLng = getStringParam(params.dropoffLng);
-  
+
   // Additional details data
   const urgency = getStringParam(params.urgency);
   const issues = getParsedArray(params.issues);
@@ -65,12 +65,11 @@ const ConfirmBookingScreen = () => {
   const needSpecificTruck = getStringParam(params.needSpecificTruck) === 'true';
   const hasModifications = getStringParam(params.hasModifications) === 'true';
   const needMultilingual = getStringParam(params.needMultilingual) === 'true';
-  
+
   // Schedule data
   const serviceTime = getStringParam(params.serviceTime);
-  const scheduledDate = getStringParam(params.scheduledDate);
-  const scheduledTimeSlot = getStringParam(params.scheduledTimeSlot);
-  
+  const scheduledAt = getStringParam(params.scheduledAt);
+
   // Payment data
   const selectedTip = parseFloat(getStringParam(params.selectedTip)) || 0;
   const totalAmount = parseFloat(getStringParam(params.totalAmount)) || 0;
@@ -82,127 +81,124 @@ const ConfirmBookingScreen = () => {
   const color = getStringParam(params.color);
   const licensePlate = getStringParam(params.licensePlate);
   const selectedVehicle = getStringParam(params.selectedVehicle);
-  
+
   // Contact data from VehicleContactInfoScreen
   const fullName = getStringParam(params.fullName);
   const phoneNumber = getStringParam(params.phoneNumber);
   const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
-  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
-  
+
   // NEW FIELDS from VehicleContactInfoScreen
   const licenseFront = getStringParam(params.licenseFront);
   const licenseBack = getStringParam(params.licenseBack);
   const fuelType = getStringParam(params.fuelType);
   const partDescription = getStringParam(params.partDescription);
-  
+
   // Location skipped flag
   const locationSkipped = getStringParam(params.locationSkipped) === 'true';
 
- useEffect(() => {
-  // Log ALL received data for debugging
-  console.log('=====================================');
-  console.log('✅ ConfirmBooking - RECEIVED DATA:');
-  console.log('=====================================');
-  
-  // Service Info
-  console.log('📦 SERVICE INFO:');
-  console.log('  • serviceId:', serviceId);
-  console.log('  • serviceName:', serviceName);
-  console.log('  • servicePrice:', servicePrice);
-  console.log('  • serviceCategory:', serviceCategory);
-  
-  // Location Data - WITH COORDINATES
-  console.log('📍 LOCATION DATA:');
-  console.log('  • pickupAddress:', pickupAddress);
-  console.log('  • pickupLat:', pickupLat);
-  console.log('  • pickupLng:', pickupLng);
-  console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
-  console.log('  • dropoffLat:', dropoffLat || '(not provided)');
-  console.log('  • dropoffLng:', dropoffLng || '(not provided)');
-  
-  // Waypoints Data - Parse if available
-  const waypointsParam = getStringParam(params.waypoints);
-  const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
-  
-  if (hasWaypoints && waypointsParam) {
-    try {
-      const parsedWaypoints = JSON.parse(waypointsParam);
-      console.log('🛑 WAYPOINTS DATA:');
+  useEffect(() => {
+    // Log ALL received data for debugging
+    console.log('=====================================');
+    console.log('✅ ConfirmBooking - RECEIVED DATA:');
+    console.log('=====================================');
+
+    // Service Info
+    console.log('📦 SERVICE INFO:');
+    console.log('  • serviceId:', serviceId);
+    console.log('  • serviceName:', serviceName);
+    console.log('  • servicePrice:', servicePrice);
+    console.log('  • serviceCategory:', serviceCategory);
+
+    // Location Data - WITH COORDINATES
+    console.log('📍 LOCATION DATA:');
+    console.log('  • pickupAddress:', pickupAddress);
+    console.log('  • pickupLat:', pickupLat);
+    console.log('  • pickupLng:', pickupLng);
+    console.log('  • dropoffAddress:', dropoffAddress || '(not provided)');
+    console.log('  • dropoffLat:', dropoffLat || '(not provided)');
+    console.log('  • dropoffLng:', dropoffLng || '(not provided)');
+
+    // Waypoints Data - Parse if available
+    const waypointsParam = getStringParam(params.waypoints);
+    const hasWaypoints = getStringParam(params.hasWaypoints) === 'true';
+
+    if (hasWaypoints && waypointsParam) {
+      try {
+        const parsedWaypoints = JSON.parse(waypointsParam);
+        console.log('🛑 WAYPOINTS DATA:');
+        console.log('  • hasWaypoints:', hasWaypoints);
+        console.log('  • waypoints count:', parsedWaypoints.length);
+        parsedWaypoints.forEach((wp: any, index: number) => {
+          console.log(`    Stop ${index + 1}:`);
+          console.log(`      address: ${wp.address}`);
+          console.log(`      lat: ${wp.lat}`);
+          console.log(`      lng: ${wp.lng}`);
+          console.log(`      order: ${wp.order}`);
+        });
+      } catch (e) {
+        console.log('  • Error parsing waypoints:', e);
+      }
+    } else {
       console.log('  • hasWaypoints:', hasWaypoints);
-      console.log('  • waypoints count:', parsedWaypoints.length);
-      parsedWaypoints.forEach((wp: any, index: number) => {
-        console.log(`    Stop ${index + 1}:`);
-        console.log(`      address: ${wp.address}`);
-        console.log(`      lat: ${wp.lat}`);
-        console.log(`      lng: ${wp.lng}`);
-        console.log(`      order: ${wp.order}`);
-      });
-    } catch (e) {
-      console.log('  • Error parsing waypoints:', e);
     }
-  } else {
-    console.log('  • hasWaypoints:', hasWaypoints);
-  }
-  
-  // Vehicle Data
-  console.log('🚗 VEHICLE DATA:');
-  console.log('  • vehicleType:', vehicleType);
-  console.log('  • makeModel:', makeModel);
-  console.log('  • year:', year);
-  console.log('  • color:', color);
-  console.log('  • licensePlate:', licensePlate);
-  console.log('  • selectedVehicle:', selectedVehicle);
-  
-  // Contact Data
-  console.log('👤 CONTACT DATA:');
-  console.log('  • fullName:', fullName);
-  console.log('  • phoneNumber:', phoneNumber);
-  console.log('  • email:', email);
-  console.log('  • emergencyContact:', emergencyContact);
-  console.log('  • saveVehicle:', saveVehicle);
-  
-  // Special Fields
-  console.log('🔧 SPECIAL FIELDS:');
-  console.log('  • hasLicenseFront:', !!licenseFront);
-  console.log('  • hasLicenseBack:', !!licenseBack);
-  console.log('  • fuelType:', fuelType || '(not provided)');
-  console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
-  
-  // Additional Details
-  console.log('📝 ADDITIONAL DETAILS:');
-  console.log('  • urgency:', urgency);
-  console.log('  • issues count:', issues.length);
-  console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
-  console.log('  • photos count:', photos.length);
-  console.log('  • hasInsurance:', hasInsurance);
-  console.log('  • needSpecificTruck:', needSpecificTruck);
-  console.log('  • hasModifications:', hasModifications);
-  console.log('  • needMultilingual:', needMultilingual);
-  
-  // Schedule Data
-  console.log('📅 SCHEDULE DATA:');
-  console.log('  • serviceTime:', serviceTime);
-  console.log('  • scheduledDate:', scheduledDate || '(not provided)');
-  console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
-  
-  // Payment Data
-  console.log('💰 PAYMENT DATA:');
-  console.log('  • selectedTip:', selectedTip);
-  console.log('  • totalAmount:', totalAmount);
-  
-  // Service Types
-  console.log('⚙️ SERVICE TYPES:');
-  console.log('  • isCarRental:', isCarRental);
-  console.log('  • isFuelDelivery:', isFuelDelivery);
-  console.log('  • isSpareParts:', isSpareParts);
-  console.log('  • isTowing:', isTowing);
-  console.log('  • isCarWash:', isCarWash);
-  console.log('  • locationSkipped:', locationSkipped);
-  
-  console.log('=====================================');
-  
-}, []);
+
+    // Vehicle Data
+    console.log('🚗 VEHICLE DATA:');
+    console.log('  • vehicleType:', vehicleType);
+    console.log('  • makeModel:', makeModel);
+    console.log('  • year:', year);
+    console.log('  • color:', color);
+    console.log('  • licensePlate:', licensePlate);
+    console.log('  • selectedVehicle:', selectedVehicle);
+
+    // Contact Data
+    console.log('👤 CONTACT DATA:');
+    console.log('  • fullName:', fullName);
+    console.log('  • phoneNumber:', phoneNumber);
+    console.log('  • email:', email);
+    console.log('  • emergencyContact:', emergencyContact);
+
+    // Special Fields
+    console.log('🔧 SPECIAL FIELDS:');
+    console.log('  • hasLicenseFront:', !!licenseFront);
+    console.log('  • hasLicenseBack:', !!licenseBack);
+    console.log('  • fuelType:', fuelType || '(not provided)');
+    console.log('  • partDescription:', partDescription ? partDescription.substring(0, 50) + '...' : '(not provided)');
+
+    // Additional Details
+    console.log('📝 ADDITIONAL DETAILS:');
+    console.log('  • urgency:', urgency);
+    console.log('  • issues count:', issues.length);
+    console.log('  • description:', description ? description.substring(0, 50) + '...' : '(not provided)');
+    console.log('  • photos count:', photos.length);
+    console.log('  • hasInsurance:', hasInsurance);
+    console.log('  • needSpecificTruck:', needSpecificTruck);
+    console.log('  • hasModifications:', hasModifications);
+    console.log('  • needMultilingual:', needMultilingual);
+
+    // Schedule Data
+    console.log('📅 SCHEDULE DATA:');
+    console.log('  • serviceTime:', serviceTime);
+
+
+    // Payment Data
+    console.log('💰 PAYMENT DATA:');
+    console.log('  • selectedTip:', selectedTip);
+    console.log('  • totalAmount:', totalAmount);
+
+    // Service Types
+    console.log('⚙️ SERVICE TYPES:');
+    console.log('  • isCarRental:', isCarRental);
+    console.log('  • isFuelDelivery:', isFuelDelivery);
+    console.log('  • isSpareParts:', isSpareParts);
+    console.log('  • isTowing:', isTowing);
+    console.log('  • isCarWash:', isCarWash);
+    console.log('  • locationSkipped:', locationSkipped);
+
+    console.log('=====================================');
+
+  }, []);
 
   const handleBack = () => {
     router.back();
@@ -210,9 +206,9 @@ const ConfirmBookingScreen = () => {
 
   const handleEdit = (section: string) => {
     console.log(`Edit ${section}`);
-    
+
     // Navigate back to specific screens based on section
-    switch(section) {
+    switch (section) {
       case 'service':
         router.back();
         break;
@@ -265,9 +261,9 @@ const ConfirmBookingScreen = () => {
       );
       return;
     }
-    
+
     console.log('Booking confirmed');
-    
+
     // Navigate to tracking/confirmation screen with ALL data
     router.push({
       pathname: '/(customer)/FindingProvider',
@@ -288,21 +284,26 @@ const ConfirmBookingScreen = () => {
   const getScheduleDisplay = () => {
     if (serviceTime === 'right_now') {
       return 'Right Now (ASAP)';
-    } else if (serviceTime === 'schedule_later') {
-      if (scheduledDate && scheduledTimeSlot) {
-        try {
-          const date = new Date(scheduledDate);
-          return `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
-        } catch {
-          return `${scheduledDate} at ${scheduledTimeSlot}`;
-        }
+    } else if (serviceTime === 'schedule_later' && scheduledAt) {
+      try {
+        const date = new Date(scheduledAt);
+        return `${date.toLocaleDateString('en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })} at ${date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        })}`;
+      } catch {
+        return 'Schedule Later';
       }
-      return 'Schedule Later';
     } else {
       return 'Not specified';
     }
   };
-
   // Format vehicle display name
   const getVehicleDisplay = () => {
     if (makeModel) {
@@ -329,8 +330,8 @@ const ConfirmBookingScreen = () => {
         <View style={styles.serviceSpecificRow}>
           <Ionicons name="flame-outline" size={16} color="#FF9800" />
           <Text style={styles.serviceSpecificText}>
-            Fuel: {fuelType === 'petrol' ? 'Petrol' : 
-                  fuelType === 'diesel' ? 'Diesel' : 'Premium'}
+            Fuel: {fuelType === 'petrol' ? 'Petrol' :
+              fuelType === 'diesel' ? 'Diesel' : 'Premium'}
           </Text>
         </View>
       );
@@ -368,7 +369,7 @@ const ConfirmBookingScreen = () => {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-          <Image 
+          <Image
             source={require('../../assets/customer/back_button.png')}
             style={styles.backButtonImage}
             resizeMode="contain"
@@ -398,7 +399,7 @@ const ConfirmBookingScreen = () => {
         {/* Review Header */}
         <View style={styles.reviewHeader}>
           <View style={styles.checkIconContainer}>
-            <Image 
+            <Image
               source={require('../../assets/customer/review_booking.png')}
               style={styles.reviewIcon}
               resizeMode="contain"
@@ -414,7 +415,7 @@ const ConfirmBookingScreen = () => {
         <View style={[styles.card, styles.serviceCard]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
-              <Image 
+              <Image
                 source={require('../../assets/customer/service_details_icon.png')}
                 style={styles.cardHeaderIcon}
                 resizeMode="contain"
@@ -425,7 +426,7 @@ const ConfirmBookingScreen = () => {
               onPress={() => handleEdit('service')}
               style={styles.editButton}
             >
-              <Image 
+              <Image
                 source={require('../../assets/customer/pen.png')}
                 style={styles.penIcon}
                 resizeMode="contain"
@@ -444,10 +445,10 @@ const ConfirmBookingScreen = () => {
               <Text style={styles.serviceName}>{serviceName || 'Service'}</Text>
               <View style={styles.serviceTags}>
                 <Text style={styles.simpleTag}>
-                  {isCarRental ? 'Rental' : 
-                   isFuelDelivery ? 'Fuel Delivery' :
-                   isSpareParts ? 'Spare Parts' : 
-                   isCarWash ? 'Car Wash' : 'Service'}
+                  {isCarRental ? 'Rental' :
+                    isFuelDelivery ? 'Fuel Delivery' :
+                      isSpareParts ? 'Spare Parts' :
+                        isCarWash ? 'Car Wash' : 'Service'}
                 </Text>
                 {urgency === 'urgent' && !isCarRental && (
                   <>
@@ -469,7 +470,7 @@ const ConfirmBookingScreen = () => {
               {year && <Text style={styles.detailSubValue}>{year}</Text>}
               {color && <Text style={styles.detailSubValue}>{color}</Text>}
             </View>
-            
+
             <View style={styles.licensePlateContainer}>
               <Text style={styles.detailLabel}>License Plate</Text>
               <Text style={styles.detailValue}>{licensePlate || 'Not provided'}</Text>
@@ -489,7 +490,7 @@ const ConfirmBookingScreen = () => {
                 onPress={() => handleEdit('location')}
                 style={styles.editButton}
               >
-                <Image 
+                <Image
                   source={require('../../assets/customer/pen.png')}
                   style={styles.penIcon}
                   resizeMode="contain"
@@ -552,7 +553,7 @@ const ConfirmBookingScreen = () => {
               onPress={() => handleEdit('schedule')}
               style={styles.editButton}
             >
-              <Image 
+              <Image
                 source={require('../../assets/customer/pen.png')}
                 style={styles.penIcon}
                 resizeMode="contain"
@@ -563,7 +564,7 @@ const ConfirmBookingScreen = () => {
 
           <View style={styles.scheduleInfo}>
             <View style={styles.scheduleIconContainer}>
-              <Image 
+              <Image
                 source={require('../../assets/customer/schedule.png')}
                 style={styles.scheduleImage}
                 resizeMode="contain"
@@ -576,9 +577,9 @@ const ConfirmBookingScreen = () => {
               <Text style={styles.scheduleSubtitle} numberOfLines={2}>
                 {serviceTime === 'right_now' && !isCarRental
                   ? 'Provider will arrive in 15-20 minutes'
-                  : isCarRental && scheduledDate
-                  ? 'Rental scheduled'
-                  : 'You will select date and time later'}
+                  : isCarRental && scheduledAt          // ✅ use scheduledAt instead
+                    ? 'Rental scheduled'
+                    : 'You will select date and time later'}
               </Text>
             </View>
           </View>
@@ -595,7 +596,7 @@ const ConfirmBookingScreen = () => {
               onPress={() => handleEdit('contact')}
               style={styles.editButton}
             >
-              <Image 
+              <Image
                 source={require('../../assets/customer/pen.png')}
                 style={styles.penIcon}
                 resizeMode="contain"
@@ -635,7 +636,7 @@ const ConfirmBookingScreen = () => {
         <View style={[styles.card, styles.paymentCard, styles.paymentCardWithBlueBorder]}>
           <View style={styles.cardHeader}>
             <View style={styles.cardHeaderLeft}>
-              <Image 
+              <Image
                 source={require('../../assets/customer/dollar_icon.png')}
                 style={styles.cardHeaderIcon}
                 resizeMode="contain"
@@ -646,7 +647,7 @@ const ConfirmBookingScreen = () => {
               onPress={() => handleEdit('payment')}
               style={styles.editButton}
             >
-              <Image 
+              <Image
                 source={require('../../assets/customer/pen.png')}
                 style={styles.penIcon}
                 resizeMode="contain"
@@ -721,7 +722,7 @@ const ConfirmBookingScreen = () => {
             I agree to the{' '}
             <Text style={styles.linkText}>Terms of Service</Text> and{' '}
             <Text style={styles.linkText}>Privacy Policy</Text>. I understand that
-            {isCarRental 
+            {isCarRental
               ? ' cancellation within 24 hours of scheduled time may incur a fee.'
               : ' cancellation within 2 hours of scheduled time may incur a fee.'}
           </Text>
@@ -750,9 +751,9 @@ const ConfirmBookingScreen = () => {
               </Text>
             </View>
           </View>
-          
+
           <View style={styles.policyDividerFull} />
-          
+
           {isCarRental ? (
             <>
               <View style={styles.policyItem}>

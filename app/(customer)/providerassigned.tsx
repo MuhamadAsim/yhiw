@@ -1,3 +1,4 @@
+import usePreventBack from '@/hooks/usePreventBack';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -92,6 +93,7 @@ interface HasMessageResponse {
 const ProviderAssignedScreen = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
+  usePreventBack(); // ✅ one line
   const mapRef = useRef<MapView>(null);
   const pollingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeFetchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -142,51 +144,6 @@ const ProviderAssignedScreen = () => {
       addDebug('❌ Error during cleanup:', error);
       router.replace('/(customer)/Home');
     }
-  };
-
-  // Check if there are any messages
-  const checkForAnyMessage = async () => {
-    if (!bookingId || chatVisible) return;
-
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
-
-      const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/has-message`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) return;
-
-      const data: HasMessageResponse = await response.json();
-      
-      if (data.success) {
-        setHasNewMessage(data.hasAnyMessage || false);
-        
-        if (data.hasAnyMessage) {
-          addDebug(`📬 There is a message available`);
-        }
-      }
-    } catch (error) {
-      addDebug(`❌ Error checking messages: ${error}`);
-    }
-  };
-
-  // Handle message button press
-  const handleMessage = () => {
-    addDebug(`💬 Opening chat popup with provider`);
-    setHasNewMessage(false);
-    setChatVisible(true);
-  };
-
-  // Handle chat close
-  const handleChatClose = () => {
-    setChatVisible(false);
-    setTimeout(() => {
-      checkForAnyMessage();
-    }, 500);
   };
 
   // Decode polyline
@@ -250,12 +207,45 @@ const ProviderAssignedScreen = () => {
     return points;
   };
 
+  // Check if there are any messages
+  const checkForAnyMessage = async () => {
+    if (!bookingId || chatVisible) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      console.log('📡 [checkForAnyMessage] Requesting:', `${API_BASE_URL}/api/chat/${bookingId}/has-message`);
+      
+      const response = await fetch(`${API_BASE_URL}/api/chat/${bookingId}/has-message`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      console.log('📡 [checkForAnyMessage] Response Status:', response.status);
+      
+      const data: HasMessageResponse = await response.json();
+      console.log('📡 [checkForAnyMessage] Response Data:', JSON.stringify(data, null, 2));
+      
+      if (data.success) {
+        setHasNewMessage(data.hasAnyMessage || false);
+        
+        if (data.hasAnyMessage) {
+          console.log('✅ [checkForAnyMessage] Has message:', data.hasAnyMessage);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [checkForAnyMessage] Error:', error);
+    }
+  };
+
   // Fetch route from backend
   const fetchRouteFromBackend = async () => {
     if (isFetchingRoute || !bookingId) return;
 
     setIsFetchingRoute(true);
-    addDebug(`📍 Fetching route from backend`);
+    console.log('📍 [fetchRouteFromBackend] Requesting route for booking:', bookingId);
 
     try {
       const token = await AsyncStorage.getItem('userToken');
@@ -269,13 +259,24 @@ const ProviderAssignedScreen = () => {
         }
       });
 
+      console.log('📍 [fetchRouteFromBackend] Response Status:', response.status);
+      
       const data = await response.json();
+      console.log('📍 [fetchRouteFromBackend] FULL RESPONSE DATA:', JSON.stringify(data, null, 2));
 
       if (data.success && data.route) {
+        console.log('✅ [fetchRouteFromBackend] Route data received:');
+        console.log('   - polyline length:', data.route.polyline?.length);
+        console.log('   - distance:', data.route.distance);
+        console.log('   - eta:', data.route.eta);
+        console.log('   - distanceValue:', data.route.distanceValue);
+        console.log('   - etaValue:', data.route.etaValue);
+        
         setRouteData(data.route);
 
         if (data.route.polyline) {
           const points = decodePolyline(data.route.polyline);
+          console.log('   - Decoded points count:', points.length);
           setRouteCoordinates(points);
         }
 
@@ -292,16 +293,354 @@ const ProviderAssignedScreen = () => {
         }
 
         if (data.route.providerLocation) {
+          console.log('   - Provider location:', data.route.providerLocation);
           setProviderLocation({
             latitude: data.route.providerLocation.latitude,
             longitude: data.route.providerLocation.longitude,
           });
         }
+      } else {
+        console.log('⚠️ [fetchRouteFromBackend] No route data in response:', data);
       }
     } catch (error) {
-      addDebug(`❌ Error fetching route: ${error}`);
+      console.error('❌ [fetchRouteFromBackend] Error:', error);
     } finally {
       setIsFetchingRoute(false);
+    }
+  };
+
+  // Fetch complete job details
+  const fetchJobDetails = async () => {
+    if (!bookingId) {
+      console.log('❌ [fetchJobDetails] No bookingId provided');
+      setApiError('No booking ID provided');
+      setIsLoading(false);
+      
+      Alert.alert(
+        'Error',
+        'No booking ID provided',
+        [
+          {
+            text: 'OK',
+            onPress: () => cleanupAndNavigateHome()
+          }
+        ],
+        { cancelable: false }
+      );
+      return;
+    }
+
+    try {
+      console.log('📡 [fetchJobDetails] Requesting details for booking:', bookingId);
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) {
+        console.log('❌ [fetchJobDetails] No token found');
+        setApiError('Authentication failed');
+        setIsLoading(false);
+        
+        Alert.alert(
+          'Authentication Error',
+          'Please log in again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      console.log('📡 [fetchJobDetails] Response Status:', response.status);
+
+      if (response.status === 404) {
+        console.log('❌ [fetchJobDetails] Job not found (404)');
+        await AsyncStorage.removeItem('currentBookingId');
+        await AsyncStorage.removeItem('currentBookingStatus');
+        
+        Alert.alert(
+          'Job Not Found',
+          'This job no longer exists or has been cancelled.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                router.replace('/(customer)/Home');
+              }
+            }
+          ],
+          { cancelable: false }
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        console.log('❌ [fetchJobDetails] Authentication error:', response.status);
+        Alert.alert(
+          'Session Expired',
+          'Please log in again.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`❌ [fetchJobDetails] API Error ${response.status}:`, errorText);
+        
+        Alert.alert(
+          'Error Loading Job',
+          `Unable to load job details (${response.status}). Please try again.`,
+          [
+            {
+              text: 'Go Home',
+              onPress: () => cleanupAndNavigateHome()
+            },
+            {
+              text: 'Retry',
+              onPress: () => {
+                setIsLoading(true);
+                fetchJobDetails();
+              }
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('📡 [fetchJobDetails] FULL RESPONSE DATA:', JSON.stringify(data, null, 2));
+
+      if (!data.success || !data.job) {
+        console.log(`❌ [fetchJobDetails] API returned success=false or no job data`);
+        console.log('   - success:', data.success);
+        console.log('   - has job:', !!data.job);
+        
+        Alert.alert(
+          'Invalid Response',
+          'The server returned an invalid response.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('✅ [fetchJobDetails] Job details fetched successfully');
+      console.log('   - Status:', data.job.status);
+      console.log('   - Provider:', data.job.provider?.name || 'Not assigned');
+      console.log('   - Booking ID:', data.job.bookingId);
+      console.log('   - Service Type:', data.job.serviceType);
+      console.log('   - Vehicle Type:', data.job.vehicleType);
+      console.log('   - Pickup Address:', data.job.pickup?.address);
+      console.log('   - Pickup Coordinates:', data.job.pickup?.coordinates);
+      console.log('   - Dropoff Address:', data.job.dropoff?.address);
+      console.log('   - Dropoff Coordinates:', data.job.dropoff?.coordinates);
+      console.log('   - Payment:', data.job.payment);
+      console.log('   - Estimated Arrival:', data.job.estimatedArrival);
+      console.log('   - Distance:', data.job.distance);
+      console.log('   - Created At:', data.job.createdAt);
+      
+      if (data.job.provider) {
+        console.log('   - Provider Details:');
+        console.log('     - ID:', data.job.provider.id);
+        console.log('     - Name:', data.job.provider.name);
+        console.log('     - Phone:', data.job.provider.phone);
+        console.log('     - Rating:', data.job.provider.rating);
+        console.log('     - Years Experience:', data.job.provider.yearsOfExperience);
+        console.log('     - Completed Jobs:', data.job.provider.completedJobs);
+        console.log('     - Vehicle:', data.job.provider.vehicle);
+      }
+      
+      if (data.job.providerLocation) {
+        console.log('   - Provider Location:', data.job.providerLocation);
+      }
+
+      setJobDetails(data.job);
+      setApiError(null);
+
+      if (data.job.providerLocation) {
+        setProviderLocation({
+          latitude: data.job.providerLocation.latitude,
+          longitude: data.job.providerLocation.longitude,
+        });
+      }
+
+      setEta(data.job.estimatedArrival || '15 min');
+      const etaMinutes = parseInt(data.job.estimatedArrival || '15');
+      if (!isNaN(etaMinutes)) {
+        setTimeRemaining(etaMinutes * 60);
+      }
+
+      // Only animate map if pickup coordinates exist
+      if (mapRef.current && data.job.pickup?.coordinates?.lat && data.job.pickup?.coordinates?.lng && mapReady) {
+        mapRef.current.animateToRegion({
+          latitude: data.job.pickup.coordinates.lat,
+          longitude: data.job.pickup.coordinates.lng,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        }, 1000);
+      }
+
+      handleStatusNavigation(data.job.status);
+      
+    } catch (error) {
+      console.error('❌ [fetchJobDetails] Error:', error);
+      
+      setApiError(error instanceof Error ? error.message : 'Unknown error');
+      
+      Alert.alert(
+        'Connection Error',
+        'Failed to connect to server. Please check your internet connection.',
+        [
+          {
+            text: 'Go Home',
+            onPress: () => cleanupAndNavigateHome()
+          },
+          {
+            text: 'Retry',
+            onPress: () => {
+              setIsLoading(true);
+              fetchJobDetails();
+            }
+          }
+        ]
+      );
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Fetch provider location
+  const fetchProviderLocation = async () => {
+    if (!bookingId) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      console.log('📍 [fetchProviderLocation] Requesting location for booking:', bookingId);
+      
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/provider-location`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      console.log('📍 [fetchProviderLocation] Response Status:', response.status);
+
+      if (!response.ok) {
+        console.log('⚠️ [fetchProviderLocation] Response not OK:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('📍 [fetchProviderLocation] Response Data:', JSON.stringify(data, null, 2));
+
+      if (data.success && data.location) {
+        setPollingAttempts(prev => prev + 1);
+        console.log('✅ [fetchProviderLocation] Location received:');
+        console.log('   - Latitude:', data.location.latitude);
+        console.log('   - Longitude:', data.location.longitude);
+        console.log('   - Heading:', data.location.heading);
+        console.log('   - Updated At:', data.location.updatedAt);
+
+        const newLocation = {
+          latitude: data.location.latitude,
+          longitude: data.location.longitude,
+        };
+
+        setProviderLocation(newLocation);
+
+        if (routeFetchTimer.current) {
+          clearTimeout(routeFetchTimer.current);
+        }
+
+        routeFetchTimer.current = setTimeout(() => {
+          fetchRouteFromBackend();
+        }, 2000);
+      } else {
+        console.log('⚠️ [fetchProviderLocation] No location in response:', data);
+      }
+    } catch (error) {
+      console.error('❌ [fetchProviderLocation] Error:', error);
+    }
+  };
+
+  // Fetch job status
+  const fetchJobStatus = async () => {
+    if (!bookingId || navigationInProgress.current) return;
+
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (!token) return;
+
+      console.log('📊 [fetchJobStatus] Checking status for booking:', bookingId);
+      
+      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      console.log('📊 [fetchJobStatus] Response Status:', response.status);
+
+      if (response.status === 404) {
+        console.log('❌ [fetchJobStatus] Job not found during polling');
+        Alert.alert(
+          'Job Not Found',
+          'This job no longer exists.',
+          [
+            {
+              text: 'OK',
+              onPress: () => cleanupAndNavigateHome()
+            }
+          ]
+        );
+        return;
+      }
+
+      if (!response.ok) {
+        console.log(`⚠️ [fetchJobStatus] Status check failed: ${response.status}`);
+        return;
+      }
+
+      const data = await response.json();
+      console.log('📊 [fetchJobStatus] Response Data:', JSON.stringify(data, null, 2));
+
+      if (data.success && data.job && data.job.status) {
+        const newStatus = data.job.status;
+        console.log(`✅ [fetchJobStatus] Job status update: ${newStatus}`);
+        console.log(`   - Previous status: ${jobDetails?.status}`);
+        console.log(`   - Provider name: ${data.job.provider?.name}`);
+        console.log(`   - Provider location available: ${!!data.job.providerLocation}`);
+
+        setJobDetails(prev => prev ? { ...prev, ...data.job } : data.job);
+        handleStatusNavigation(newStatus);
+      } else {
+        console.log('⚠️ [fetchJobStatus] No valid status in response:', data);
+      }
+    } catch (error) {
+      console.error('❌ [fetchJobStatus] Error:', error);
     }
   };
 
@@ -486,283 +825,6 @@ const ProviderAssignedScreen = () => {
     }
   };
 
-  // Fetch complete job details
-  const fetchJobDetails = async () => {
-    if (!bookingId) {
-      addDebug('❌ No bookingId provided');
-      setApiError('No booking ID provided');
-      setIsLoading(false);
-      
-      Alert.alert(
-        'Error',
-        'No booking ID provided',
-        [
-          {
-            text: 'OK',
-            onPress: () => cleanupAndNavigateHome()
-          }
-        ],
-        { cancelable: false }
-      );
-      return;
-    }
-
-    try {
-      addDebug(`📡 Fetching job details for booking: ${bookingId}`);
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) {
-        addDebug('❌ No token found');
-        setApiError('Authentication failed');
-        setIsLoading(false);
-        
-        Alert.alert(
-          'Authentication Error',
-          'Please log in again.',
-          [
-            {
-              text: 'OK',
-              onPress: () => cleanupAndNavigateHome()
-            }
-          ]
-        );
-        return;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.status === 404) {
-        addDebug('❌ Job not found (404)');
-        await AsyncStorage.removeItem('currentBookingId');
-        await AsyncStorage.removeItem('currentBookingStatus');
-        
-        Alert.alert(
-          'Job Not Found',
-          'This job no longer exists or has been cancelled.',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                router.replace('/(customer)/Home');
-              }
-            }
-          ],
-          { cancelable: false }
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      if (response.status === 401 || response.status === 403) {
-        addDebug('❌ Authentication error');
-        Alert.alert(
-          'Session Expired',
-          'Please log in again.',
-          [
-            {
-              text: 'OK',
-              onPress: () => cleanupAndNavigateHome()
-            }
-          ]
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        addDebug(`❌ API Error ${response.status}: ${errorText}`);
-        
-        Alert.alert(
-          'Error Loading Job',
-          `Unable to load job details (${response.status}). Please try again.`,
-          [
-            {
-              text: 'Go Home',
-              onPress: () => cleanupAndNavigateHome()
-            },
-            {
-              text: 'Retry',
-              onPress: () => {
-                setIsLoading(true);
-                fetchJobDetails();
-              }
-            }
-          ]
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      const data = await response.json();
-
-      if (!data.success || !data.job) {
-        addDebug(`❌ API returned success=false or no job data`);
-        
-        Alert.alert(
-          'Invalid Response',
-          'The server returned an invalid response.',
-          [
-            {
-              text: 'OK',
-              onPress: () => cleanupAndNavigateHome()
-            }
-          ]
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      addDebug(`✅ Job details fetched successfully`);
-      addDebug(`   - Status: ${data.job.status}`);
-      addDebug(`   - Provider: ${data.job.provider?.name || 'Not assigned'}`);
-
-      setJobDetails(data.job);
-      setApiError(null);
-
-      if (data.job.providerLocation) {
-        setProviderLocation({
-          latitude: data.job.providerLocation.latitude,
-          longitude: data.job.providerLocation.longitude,
-        });
-      }
-
-      setEta(data.job.estimatedArrival || '15 min');
-      const etaMinutes = parseInt(data.job.estimatedArrival || '15');
-      if (!isNaN(etaMinutes)) {
-        setTimeRemaining(etaMinutes * 60);
-      }
-
-      if (mapRef.current && data.job.pickup?.coordinates && mapReady) {
-        mapRef.current.animateToRegion({
-          latitude: data.job.pickup.coordinates.lat,
-          longitude: data.job.pickup.coordinates.lng,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        }, 1000);
-      }
-
-      handleStatusNavigation(data.job.status);
-      
-    } catch (error) {
-      addDebug(`❌ Error fetching job details: ${error}`);
-      setApiError(error instanceof Error ? error.message : 'Unknown error');
-      
-      Alert.alert(
-        'Connection Error',
-        'Failed to connect to server. Please check your internet connection.',
-        [
-          {
-            text: 'Go Home',
-            onPress: () => cleanupAndNavigateHome()
-          },
-          {
-            text: 'Retry',
-            onPress: () => {
-              setIsLoading(true);
-              fetchJobDetails();
-            }
-          }
-        ]
-      );
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  // Fetch provider location
-  const fetchProviderLocation = async () => {
-    if (!bookingId) return;
-
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
-
-      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/provider-location`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) return;
-
-      const data = await response.json();
-
-      if (data.success && data.location) {
-        setPollingAttempts(prev => prev + 1);
-
-        const newLocation = {
-          latitude: data.location.latitude,
-          longitude: data.location.longitude,
-        };
-
-        setProviderLocation(newLocation);
-
-        if (routeFetchTimer.current) {
-          clearTimeout(routeFetchTimer.current);
-        }
-
-        routeFetchTimer.current = setTimeout(() => {
-          fetchRouteFromBackend();
-        }, 2000);
-      }
-    } catch (error) {
-      addDebug(`❌ Error fetching location: ${error}`);
-    }
-  };
-
-  // Fetch job status
-  const fetchJobStatus = async () => {
-    if (!bookingId || navigationInProgress.current) return;
-
-    try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (!token) return;
-
-      const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/details`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (response.status === 404) {
-        addDebug('❌ Job not found during polling - navigating home');
-        Alert.alert(
-          'Job Not Found',
-          'This job no longer exists.',
-          [
-            {
-              text: 'OK',
-              onPress: () => cleanupAndNavigateHome()
-            }
-          ]
-        );
-        return;
-      }
-
-      if (!response.ok) {
-        addDebug(`❌ Status check failed: ${response.status}`);
-        return;
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.job && data.job.status) {
-        const newStatus = data.job.status;
-        addDebug(`📊 Job status update: ${newStatus}`);
-
-        setJobDetails(prev => prev ? { ...prev, ...data.job } : data.job);
-        handleStatusNavigation(newStatus);
-      }
-    } catch (error) {
-      addDebug(`❌ Error fetching status: ${error}`);
-    }
-  };
-
   // Polling loop
   const startPolling = () => {
     addDebug('🔄 Starting polling (every 10 seconds)');
@@ -861,8 +923,21 @@ const ProviderAssignedScreen = () => {
     }
   };
 
+  const handleMessage = () => {
+    addDebug(`💬 Opening chat popup with provider`);
+    setHasNewMessage(false);
+    setChatVisible(true);
+  };
+
+  const handleChatClose = () => {
+    setChatVisible(false);
+    setTimeout(() => {
+      checkForAnyMessage();
+    }, 500);
+  };
+
   const handleOpenInMaps = () => {
-    if (providerLocation && jobDetails?.pickup?.coordinates) {
+    if (providerLocation && jobDetails?.pickup?.coordinates?.lat && jobDetails?.pickup?.coordinates?.lng) {
       addDebug(`🗺️ Opening in external maps app`);
       const url = Platform.select({
         ios: `maps://app?saddr=${providerLocation.latitude},${providerLocation.longitude}&daddr=${jobDetails.pickup.coordinates.lat},${jobDetails.pickup.coordinates.lng}`,
@@ -917,7 +992,9 @@ const ProviderAssignedScreen = () => {
             addDebug(`❌ Cancelling request: ${bookingId}`);
             try {
               const token = await AsyncStorage.getItem('userToken');
-              await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
+              console.log('📡 [handleCancelRequest] Cancelling booking:', bookingId);
+              
+              const response = await fetch(`${API_BASE_URL}/api/customer/${bookingId}/cancel`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${token}`,
@@ -925,9 +1002,14 @@ const ProviderAssignedScreen = () => {
                 },
                 body: JSON.stringify({ cancelledBy: 'customer' })
               });
+              
+              console.log('📡 [handleCancelRequest] Response Status:', response.status);
+              const data = await response.json();
+              console.log('📡 [handleCancelRequest] Response Data:', JSON.stringify(data, null, 2));
+              
               await cleanupAndNavigateHome();
             } catch (error) {
-              console.error('Cancel error:', error);
+              console.error('❌ [handleCancelRequest] Cancel error:', error);
               await cleanupAndNavigateHome();
             }
           }
@@ -1020,7 +1102,8 @@ const ProviderAssignedScreen = () => {
             </Text>
           </View>
 
-          {jobDetails?.pickup?.coordinates ? (
+          {/* Only render map if pickup coordinates exist */}
+          {jobDetails?.pickup?.coordinates?.lat && jobDetails?.pickup?.coordinates?.lng ? (
             <MapView
               ref={mapRef}
               provider={PROVIDER_GOOGLE}
@@ -1038,8 +1121,8 @@ const ProviderAssignedScreen = () => {
                 setMapReady(true);
               }}
             >
-              {/* Pickup Marker */}
-              {jobDetails.pickup?.coordinates && (
+              {/* Pickup Marker - Only if coordinates exist */}
+              {jobDetails.pickup?.coordinates?.lat && jobDetails.pickup?.coordinates?.lng && (
                 <Marker
                   coordinate={{
                     latitude: jobDetails.pickup.coordinates.lat,
@@ -1067,15 +1150,15 @@ const ProviderAssignedScreen = () => {
                 </Marker>
               )}
 
-              {/* Dropoff Marker */}
-              {jobDetails.dropoff?.coordinates && (
+              {/* Dropoff Marker - Only if dropoff coordinates exist with valid lat/lng */}
+              {jobDetails.dropoff?.coordinates?.lat && jobDetails.dropoff?.coordinates?.lng && (
                 <Marker
                   coordinate={{
                     latitude: jobDetails.dropoff.coordinates.lat,
                     longitude: jobDetails.dropoff.coordinates.lng
                   }}
                   title="Dropoff Location"
-                  description={jobDetails.dropoff.address}
+                  description={jobDetails.dropoff.address || 'Dropoff location'}
                 >
                   <View style={styles.dropoffMarkerContainer}>
                     <Ionicons name="flag" size={20} color="#10B981" />
@@ -1099,8 +1182,8 @@ const ProviderAssignedScreen = () => {
             </View>
           )}
 
-          {/* Map Controls */}
-          {jobDetails?.pickup?.coordinates && (
+          {/* Map Controls - Only show if pickup coordinates exist */}
+          {jobDetails?.pickup?.coordinates?.lat && jobDetails?.pickup?.coordinates?.lng && (
             <>
               <TouchableOpacity
                 style={styles.recenterButton}
@@ -1244,7 +1327,7 @@ const ProviderAssignedScreen = () => {
             </Text>
           </View>
 
-          {jobDetails.dropoff && (
+          {jobDetails.dropoff?.address && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Dropoff</Text>
               <Text style={styles.detailValue} numberOfLines={2}>

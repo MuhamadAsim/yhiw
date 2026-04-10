@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -10,11 +11,8 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { styles } from './styles/PriceSummaryStyles';
-
-const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
 const PriceSummaryScreen = () => {
   const router = useRouter();
@@ -88,7 +86,6 @@ const PriceSummaryScreen = () => {
   const phoneNumber = getStringParam(params.phoneNumber);
   const email = getStringParam(params.email);
   const emergencyContact = getStringParam(params.emergencyContact);
-  const saveVehicle = getStringParam(params.saveVehicle) === 'true';
 
   // Special fields from VehicleContactInfoScreen
   const licenseFront = getStringParam(params.licenseFront);
@@ -99,10 +96,40 @@ const PriceSummaryScreen = () => {
   // Location skipped flag
   const locationSkipped = getStringParam(params.locationSkipped) === 'true';
 
-  // Schedule data
-  const serviceTime = getStringParam(params.serviceTime) || 'schedule_later';
-  const scheduledDate = getStringParam(params.scheduledDate);
-  const scheduledTimeSlot = getStringParam(params.scheduledTimeSlot);
+  // Schedule data - FIXED: Use scheduledAt from ScheduleServiceScreen
+  const serviceTime = getStringParam(params.serviceTime) || 'right_now';
+  const scheduledAt = getStringParam(params.scheduledAt);
+  
+  // Parse scheduledAt if it exists
+  const getScheduledDate = (): string => {
+    if (!scheduledAt) return '';
+    try {
+      const date = new Date(scheduledAt);
+      return date.toISOString().split('T')[0];
+    } catch {
+      return '';
+    }
+  };
+  
+  const getScheduledTimeSlot = (): string => {
+    if (!scheduledAt) return '';
+    try {
+      const date = new Date(scheduledAt);
+      return date.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return '';
+    }
+  };
+  
+  const scheduledDate = getScheduledDate();
+  const scheduledTimeSlot = getScheduledTimeSlot();
+  
+  // Check if this is a scheduled booking
+  const isScheduledBooking = serviceTime === 'schedule_later' && !!scheduledAt;
 
   const tipOptions = [
     { label: 'No Tip', value: 0 },
@@ -182,7 +209,6 @@ const PriceSummaryScreen = () => {
     console.log('  • phoneNumber:', phoneNumber);
     console.log('  • email:', email);
     console.log('  • emergencyContact:', emergencyContact);
-    console.log('  • saveVehicle:', saveVehicle);
 
     // Special Fields
     console.log('🔧 SPECIAL FIELDS:');
@@ -202,11 +228,13 @@ const PriceSummaryScreen = () => {
     console.log('  • hasModifications:', hasModifications);
     console.log('  • needMultilingual:', needMultilingual);
 
-    // Schedule Data
+    // Schedule Data - UPDATED
     console.log('📅 SCHEDULE DATA:');
     console.log('  • serviceTime:', serviceTime);
+    console.log('  • scheduledAt:', scheduledAt || '(not provided)');
     console.log('  • scheduledDate:', scheduledDate || '(not provided)');
     console.log('  • scheduledTimeSlot:', scheduledTimeSlot || '(not provided)');
+    console.log('  • isScheduledBooking:', isScheduledBooking);
 
     // Service Types
     console.log('⚙️ SERVICE TYPES:');
@@ -234,116 +262,152 @@ const PriceSummaryScreen = () => {
     router.back();
   };
 
-  // Real API call for scheduled booking
-  const submitScheduledBooking = async (bookingData: any): Promise<any> => {
-    // Get auth token and user data from AsyncStorage
-    const token = await AsyncStorage.getItem('userToken');
-    const userDataJson = await AsyncStorage.getItem('userData');
-    
-    if (!token) {
-      throw new Error('Authentication required. Please log in again.');
+
+
+
+  // API request function for scheduled bookings
+  const submitScheduledBooking = async (): Promise<boolean> => {
+    // Parse waypoints if they exist
+    let parsedWaypoints: any[] = [];
+    if (hasWaypoints && waypointsParam) {
+      try {
+        parsedWaypoints = JSON.parse(waypointsParam);
+      } catch (e) {
+        console.error('Error parsing waypoints:', e);
+      }
     }
-    
-    if (!userDataJson) {
-      throw new Error('User data not found. Please log in again.');
-    }
-    
-    const userData = JSON.parse(userDataJson);
-    const userId = userData.id;
-    
-    console.log('📤 Submitting scheduled booking to backend...');
-    console.log('  • userId:', userId);
-    console.log('  • serviceId:', bookingData.serviceId);
-    console.log('  • scheduledDate:', bookingData.scheduledDate);
-    console.log('  • scheduledTimeSlot:', bookingData.scheduledTimeSlot);
-    
-    // Prepare the request body according to your backend API format
-    const requestBody = {
-      userId: userId,
-      serviceId: parseInt(bookingData.serviceId),
-      serviceName: bookingData.serviceName,
-      serviceCategory: bookingData.serviceCategory,
-      basePrice: bookingData.basePrice,
-      totalAmount: bookingData.totalAmount,
-      tip: bookingData.tip,
+
+    // Generate a unique booking ID
+    const newBookingId = `YHIW-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    // Prepare booking data matching FindingProvider format
+    const bookingData = {
+      bookingId: newBookingId,
       
-      // Location data
-      pickupAddress: bookingData.pickupAddress,
-      pickupLat: bookingData.pickupLat ? parseFloat(bookingData.pickupLat) : null,
-      pickupLng: bookingData.pickupLng ? parseFloat(bookingData.pickupLng) : null,
-      dropoffAddress: bookingData.dropoffAddress,
-      dropoffLat: bookingData.dropoffLat ? parseFloat(bookingData.dropoffLat) : null,
-      dropoffLng: bookingData.dropoffLng ? parseFloat(bookingData.dropoffLng) : null,
-      waypoints: bookingData.waypoints,
-      locationSkipped: bookingData.locationSkipped,
+      pickup: {
+        address: pickupAddress,
+        coordinates: pickupLat && pickupLng ? { 
+          lat: parseFloat(pickupLat), 
+          lng: parseFloat(pickupLng) 
+        } : null,
+      },
       
-      // Schedule data
-      serviceTime: bookingData.serviceTime,
-      scheduledDate: bookingData.scheduledDate,
-      scheduledTimeSlot: bookingData.scheduledTimeSlot,
+      dropoff: dropoffAddress ? {
+        address: dropoffAddress,
+        coordinates: dropoffLat && dropoffLng ? { 
+          lat: parseFloat(dropoffLat), 
+          lng: parseFloat(dropoffLng) 
+        } : null,
+      } : null,
       
-      // Vehicle data
-      vehicleType: bookingData.vehicleType,
-      makeModel: bookingData.makeModel,
-      year: bookingData.year,
-      color: bookingData.color,
-      licensePlate: bookingData.licensePlate,
+      waypoints: hasWaypoints && parsedWaypoints.length > 0 ? parsedWaypoints : null,
+      hasWaypoints: hasWaypoints,
       
-      // Contact data
-      fullName: bookingData.fullName,
-      phoneNumber: bookingData.phoneNumber,
-      email: bookingData.email,
-      emergencyContact: bookingData.emergencyContact,
+      serviceId,
+      serviceName,
+      servicePrice: parsePrice(servicePrice),
+      serviceCategory,
+      isCarRental,
+      isFuelDelivery,
+      isSpareParts,
       
-      // Special fields
-      licenseFront: bookingData.licenseFront,
-      licenseBack: bookingData.licenseBack,
-      fuelType: bookingData.fuelType,
-      partDescription: bookingData.partDescription,
+      vehicle: {
+        type: vehicleType,
+        makeModel,
+        year,
+        color,
+        licensePlate,
+      },
       
-      // Additional details
-      urgency: bookingData.urgency,
-      issues: bookingData.issues,
-      description: bookingData.description,
-      hasInsurance: bookingData.hasInsurance,
-      needSpecificTruck: bookingData.needSpecificTruck,
-      hasModifications: bookingData.hasModifications,
-      needMultilingual: bookingData.needMultilingual,
+      customer: {
+        name: fullName,
+        phone: phoneNumber,
+        email: email,
+        emergencyContact,
+      },
       
-      // Metadata
-      createdAt: new Date().toISOString(),
-      bookingType: 'scheduled',
-      status: 'pending',
-      paymentStatus: 'pending',
-      paymentMethod: 'cash',
+      carRental: isCarRental ? {
+        licenseFront,
+        licenseBack,
+        hasInsurance,
+      } : null,
+      
+      fuelDelivery: isFuelDelivery ? {
+        fuelType,
+      } : null,
+      
+      spareParts: isSpareParts ? {
+        partDescription,
+      } : null,
+      
+      additionalDetails: {
+        urgency,
+        issues: issues.length > 0 ? issues : null,
+        description,
+        photos: photos.length > 0 ? photos : null,
+        needSpecificTruck,
+        hasModifications,
+        needMultilingual,
+      },
+      
+      schedule: {
+        type: serviceTime,
+        scheduledDateTime: isScheduledBooking && scheduledAt ? {
+          date: scheduledDate,
+          timeSlot: scheduledTimeSlot,
+          isoString: scheduledAt,
+        } : null,
+      },
+      
+      payment: {
+        totalAmount: totalAmount,
+        selectedTip,
+        baseServiceFee: parsePrice(servicePrice),
+        paymentMethod: 'cash',
+      },
+      
+      locationSkipped,
+      timestamp: new Date().toISOString(),
+      platform: 'mobile',
+      version: '1.1',
     };
-    
-    console.log('📤 Request body:', JSON.stringify(requestBody, null, 2));
-    
-    // Make the API call
-    const response = await fetch(`${API_BASE_URL}/schedule`, {
+
+    console.log('Submitting scheduled booking:', JSON.stringify(bookingData, null, 2));
+
+    // Get auth token
+    const token = await AsyncStorage.getItem('userToken');
+    if (!token) {
+      throw new Error('Authentication token not found. Please sign in again.');
+    }
+
+    // Make real API call
+    const response = await fetch('https://yhiw-backend.onrender.com/api/jobs/create-notification', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(bookingData),
     });
-    
-    console.log('📥 Response status:', response.status);
-    
+
+    const responseData = await response.json();
+
     if (!response.ok) {
-      const errorData = await response.json();
-      console.error('❌ API Error response:', errorData);
-      throw new Error(errorData.message || 'Failed to schedule service');
+      throw new Error(responseData.message || responseData.error || `Server error: ${response.status}`);
     }
-    
-    const data = await response.json();
-    console.log('✅ API Success response:', data);
-    
-    return data;
+
+    if (responseData.success) {
+      // Store booking ID
+      await AsyncStorage.setItem('currentBookingId', responseData.bookingId);
+      return true;
+    } else {
+      throw new Error('Failed to create booking');
+    }
   };
 
+
+
+  
   const handleContinue = async () => {
     // Validate required fields
     if (!fullName || !phoneNumber) {
@@ -351,192 +415,75 @@ const PriceSummaryScreen = () => {
       return;
     }
 
+    // For RIGHT NOW service - just navigate to next page (Finding Provider)
+    if (!isScheduledBooking) {
+      console.log('Right now service - navigating to Finding Provider');
+      
+      // Pass all data to FindingProvider screen
+      router.push({
+        pathname: '/(customer)/FindingProvider',
+        params: {
+          // Location
+          pickupAddress, pickupLat, pickupLng,
+          dropoffAddress, dropoffLat, dropoffLng,
+          // Service
+          serviceId, serviceName, servicePrice, serviceCategory,
+          // Vehicle
+          vehicleType, makeModel, year, color, licensePlate, selectedVehicle,
+          // Contact
+          fullName, phoneNumber, email, emergencyContact,
+          saveVehicle: getStringParam(params.saveVehicle),
+          licenseFront, licenseBack,
+          fuelType, partDescription,
+          // Additional
+          urgency,
+          issues: JSON.stringify(issues),
+          description,
+          photos: JSON.stringify(photos),
+          hasInsurance: String(hasInsurance),
+          needSpecificTruck: String(needSpecificTruck),
+          hasModifications: String(hasModifications),
+          needMultilingual: String(needMultilingual),
+          locationSkipped: String(locationSkipped),
+          // Schedule
+          serviceTime,
+          scheduledAt,
+
+          // Payment info
+          totalAmount: totalAmount.toFixed(2),
+          selectedTip: String(selectedTip),
+        },
+      });
+      return;
+    }
+
+    // For SCHEDULED service - submit API request
     setIsSubmitting(true);
-
+    
     try {
-      // Prepare booking data for API
-      const bookingData = {
-        // Service info
-        serviceId,
-        serviceName,
-        serviceCategory,
-        basePrice: baseServiceFee,
-
-        // Location data
-        pickupAddress,
-        pickupLat,
-        pickupLng,
-        dropoffAddress,
-        dropoffLat,
-        dropoffLng,
-        waypoints: hasWaypoints ? JSON.parse(waypointsParam) : [],
-
-        // Schedule data
-        serviceTime,
-        scheduledDate,
-        scheduledTimeSlot,
-
-        // Vehicle data
-        vehicleType,
-        makeModel,
-        year,
-        color,
-        licensePlate,
-
-        // Contact data
-        fullName,
-        phoneNumber,
-        email,
-        emergencyContact,
-
-        // Special fields
-        licenseFront,
-        licenseBack,
-        fuelType,
-        partDescription,
-
-        // Additional details
-        urgency,
-        issues,
-        description,
-        hasInsurance,
-        needSpecificTruck,
-        hasModifications,
-        needMultilingual,
-
-        // Payment data
-        tip: selectedTip,
-        totalAmount: totalAmount,
-
-        // Metadata
-        locationSkipped,
-        createdAt: new Date().toISOString(),
-      };
-
-      console.log('Submitting booking:', bookingData);
-
-      // Check if this is a scheduled booking (serviceTime is 'schedule_later' AND we have date/time)
-      const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
-
-      if (isScheduledBooking) {
-        // Make REAL API call for scheduled booking
-        const response = await submitScheduledBooking(bookingData);
-        
-        // Format the date for display in success message
-        let formattedDate = '';
-        try {
-          const date = new Date(scheduledDate);
-          formattedDate = `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
-        } catch {
-          formattedDate = `${scheduledDate} at ${scheduledTimeSlot}`;
-        }
-        
+      const success = await submitScheduledBooking();
+      
+      if (success) {
         Alert.alert(
-          'Booking Confirmed! 🎉',
-          `Your ${serviceName} has been scheduled successfully for ${formattedDate}.\n\nBooking ID: ${response.bookingId || response.data?.bookingId || 'N/A'}\n\nYou will receive a confirmation SMS/Email shortly.`,
+          'Booking Confirmed!',
+          'Your scheduled service has been booked successfully.',
           [
             {
               text: 'OK',
               onPress: () => {
-                // Navigate to home screen
-                router.replace('/(customer)/Home');
+                router.push('/(customer)/Home');
               }
             }
           ]
         );
       } else {
-        // For immediate bookings (Right Now), proceed to Confirm Booking screen
-        router.push({
-          pathname: '/(customer)/ConfirmBooking',
-          params: {
-            // Location data
-            pickupAddress,
-            pickupLat,
-            pickupLng,
-            dropoffAddress,
-            dropoffLat,
-            dropoffLng,
-
-            // Waypoints
-            waypoints: waypointsParam,
-            hasWaypoints: String(hasWaypoints),
-
-            // Service data
-            serviceId,
-            serviceName,
-            servicePrice,
-            serviceCategory,
-
-            // Additional details
-            urgency,
-            issues: JSON.stringify(issues),
-            description,
-            photos: JSON.stringify(photos),
-            hasInsurance: String(hasInsurance),
-            needSpecificTruck: String(needSpecificTruck),
-            hasModifications: String(hasModifications),
-            needMultilingual: String(needMultilingual),
-
-            // Vehicle data
-            vehicleType,
-            makeModel,
-            year,
-            color,
-            licensePlate,
-            selectedVehicle,
-
-            // Contact data
-            fullName,
-            phoneNumber,
-            email,
-            emergencyContact,
-            saveVehicle: String(saveVehicle),
-
-            // Special fields
-            licenseFront,
-            licenseBack,
-            fuelType,
-            partDescription,
-
-            // Location skipped flag
-            locationSkipped: String(locationSkipped),
-
-            // Schedule data
-            serviceTime,
-            scheduledDate,
-            scheduledTimeSlot,
-
-            // Payment data
-            selectedTip: String(selectedTip),
-            totalAmount: String(totalAmount),
-          }
-        });
+        throw new Error('Failed to create booking');
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error('Booking error:', error);
-      
-      // Handle specific error cases
-      let errorMessage = 'An unexpected error occurred. Please try again.';
-      let errorTitle = 'Booking Failed';
-      
-      if (error.message === 'Authentication required. Please log in again.') {
-        errorMessage = 'Please log in again to continue with your booking.';
-        errorTitle = 'Session Expired';
-        // Optionally redirect to login screen
-        // router.replace('/(auth)/Login');
-      } else if (error.message.includes('network') || error.message.includes('Network')) {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
-      } else if (error.message.includes('timeout')) {
-        errorMessage = 'Request timed out. Please try again.';
-      } else if (error.message.includes('500')) {
-        errorMessage = 'Server error. Please try again later.';
-      } else {
-        errorMessage = error.message || 'Failed to schedule service. Please try again.';
-      }
-      
       Alert.alert(
-        errorTitle,
-        errorMessage,
+        'Error',
+        error instanceof Error ? error.message : 'An unexpected error occurred. Please try again.',
         [{ text: 'OK' }]
       );
     } finally {
@@ -556,9 +503,7 @@ const PriceSummaryScreen = () => {
 
   // Calculate fees based on service type
   const baseServiceFee = parsePrice(servicePrice);
-
-  // Different fee structure for Car Rental
-  const distanceFee = isCarRental ? 0 : 15; // No distance fee for car rental
+  const distanceFee = isCarRental ? 0 : 15;
   const platformServiceFee = 5;
   const taxRate = 0.05;
 
@@ -566,31 +511,37 @@ const PriceSummaryScreen = () => {
   const tax = Math.round(subtotal * taxRate);
   const totalAmount = subtotal + tax + (selectedTip || 0);
 
-  // Format schedule display text
+  // Format schedule display text - UPDATED
   const getScheduleDisplay = () => {
     if (serviceTime === 'right_now') {
       return 'ASAP (15-20 min)';
-    } else if (scheduledDate && scheduledTimeSlot) {
+    } else if (isScheduledBooking && scheduledAt) {
       try {
-        const date = new Date(scheduledDate);
-        return `${date.toLocaleDateString()} at ${scheduledTimeSlot}`;
+        const date = new Date(scheduledAt);
+        return `${date.toLocaleDateString('en-GB', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })} at ${date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true,
+        })}`;
       } catch {
-        return `${scheduledDate} at ${scheduledTimeSlot}`;
+        return 'Schedule later';
       }
     } else {
       return 'Schedule later';
     }
   };
 
-  // Check if this is a scheduled booking (serviceTime is 'schedule_later' AND we have date/time)
-  const isScheduledBooking = serviceTime === 'schedule_later' && scheduledDate && scheduledTimeSlot;
-
   // Get button text based on booking type
   const getButtonText = () => {
     if (isScheduledBooking) {
       return 'Confirm Booking';
     } else {
-      return 'Continue to Confirm';
+      return 'Continue to Find Provider';
     }
   };
 

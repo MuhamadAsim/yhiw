@@ -14,6 +14,7 @@ import {
   View
 } from 'react-native';
 import { styles } from './styles/ServiceCompletedScreenStyles';
+import usePreventBack from '@/hooks/usePreventBack';
 
 const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 
@@ -22,6 +23,8 @@ const API_BASE_URL = 'https://yhiw-backend.onrender.com/api';
 export default function ServiceCompleteScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+  usePreventBack(); // ✅ one line
+
 
   // Get data passed from ServiceInProgressScreen
   const bookingId = params.bookingId as string;
